@@ -214,6 +214,55 @@ def select_for_reflection(
     return struggling[:limit]
 
 
+def rediscovery(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """How much work a session spent re-deriving things it could have looked up.
+
+    Pass rate cannot see this. A 33-case suite read flat straight through a real regression, and the
+    failure that motivated the relation-pair path lookup was a model calling benthic_discover five
+    or six times and never calling benthic_query at all, which is a 0/1 on a case either way.
+
+    The number to watch is discovery calls made before the first query: a session that has found its
+    relation and is still discovering is re-deriving. Repeated (tool, source) pairs are the same
+    symptom when a session re-reads the same schema with slightly different arguments.
+    """
+    per_case: dict[str, Any] = {}
+    for record in records:
+        events = record.get("events", [])
+        names = [event.get("name", "") for event in events]
+        before_query = len(names)
+        for index, name in enumerate(names):
+            if name in {"benthic_query", "benthic_join", "benthic_rpc"}:
+                before_query = index
+                break
+        targets = [
+            (
+                event.get("name", ""),
+                (event.get("arguments") or {}).get("source") or (event.get("arguments") or {}).get("left_source") or "",
+            )
+            for event in events
+        ]
+        repeated = sum(count - 1 for count in Counter(targets).values() if count > 1)
+        per_case[record["id"]] = {
+            "calls": len(events),
+            "discovers": names.count("benthic_discover"),
+            "discovers_before_first_use": names[:before_query].count("benthic_discover"),
+            "repeated_targets": repeated,
+            "answered": bool(record.get("final_text", "").strip()),
+        }
+    answered = [entry for entry in per_case.values() if entry["answered"]]
+    return {
+        "per_case": per_case,
+        "mean_calls": round(sum(e["calls"] for e in per_case.values()) / max(1, len(per_case)), 2),
+        "mean_discovers_before_first_use": round(
+            sum(e["discovers_before_first_use"] for e in per_case.values()) / max(1, len(per_case)), 2
+        ),
+        "mean_repeated_targets": round(
+            sum(e["repeated_targets"] for e in per_case.values()) / max(1, len(per_case)), 2
+        ),
+        "mean_calls_when_answered": (round(sum(e["calls"] for e in answered) / len(answered), 2) if answered else None),
+    }
+
+
 def rep_flip_rate(records: list[dict[str, Any]]) -> dict[str, Any]:
     """Per-case agreement across repetitions.
 
@@ -474,6 +523,7 @@ async def rounds_async(args: argparse.Namespace) -> int:
                 "tuning_pass_rate": round(tuning_passes / max(1, len(tuning)), 4),
                 "holdout_cases": sorted(holdout_ids),
                 "rep_agreement": flip,
+                "rediscovery": rediscovery(records),
                 "per_case": {usage.case_id: usage.passed for usage in usages},
                 "tool_calls": dict(Counter(tool for usage in usages for tool in usage.tools)),
                 "struggles": dict(Counter(sig["kind"] for usage in usages for sig in usage.signatures)),

@@ -21,13 +21,15 @@ from typing import Literal
 
 from pydantic import Field
 
-from benthic_mcp.catalog import Catalog, RelationHint, qualified_relation_name
+from benthic_mcp.catalog import _DEFAULT_MAX_HOPS, Catalog, JoinEdge, RelationHint, qualified_relation_name
 from benthic_mcp.models import (
     PlaybookDatasetGuide,
     PlaybookJoinRecipe,
     PlaybookKeyColumn,
     PlaybookLessonInfo,
+    PlaybookPathResult,
     PlaybookResult,
+    PlaybookRoute,
     PlaybookRpcRecipe,
     StrictModel,
 )
@@ -488,6 +490,61 @@ def render_instructions(core: str, catalog: Catalog) -> str:
     )
 
 
+def _hop(relation: str, edge: JoinEdge) -> PlaybookJoinRecipe:
+    return PlaybookJoinRecipe(
+        left_source=relation,
+        left_column=edge.left_column,
+        right_source=edge.right,
+        right_column=edge.right_column,
+        join_type=edge.join_type,
+        reliability=edge.reliability,
+        notes=edge.notes,
+    )
+
+
+def build_path(
+    catalog: Catalog,
+    from_relation: str,
+    to_relation: str,
+    max_hops: int = _DEFAULT_MAX_HOPS,
+) -> PlaybookPathResult:
+    """The signed route between two relations, or a bounded negative that names the alternatives.
+
+    A caller asking to move between two datasets previously had to phrase a natural-language query
+    and read the route out of a search result. A search can be rephrased, so a model that asked for
+    a route which does not exist got no confirmation and asked again; five or six discovery calls
+    with no query is what that looked like. Two exact relation names cannot be rephrased.
+    """
+    routes = []
+    for path in catalog.join_paths(from_relation, to_relation, max_hops):
+        # Each edge leaves the node the previous one arrived at, so the nodes are the route's
+        # starting points, not its endpoints.
+        nodes = [from_relation, *[edge.right for edge in path[:-1]]]
+        routes.append(PlaybookRoute(hops=[_hop(node, edge) for node, edge in zip(nodes, path, strict=True)]))
+    nearest = [_hop(from_relation, edge) for edge in catalog.nearest_joins(from_relation) if edge.right != to_relation]
+    if routes:
+        note = None
+    elif from_relation == to_relation:
+        note = "Both relations are the same, so there is no route to plan."
+    elif not catalog.nearest_joins(from_relation):
+        note = f"No signed join touches {from_relation}, so it cannot reach anything."
+    elif not nearest:
+        note = f"{from_relation} is signed only to {to_relation}, which is not a route between them."
+    else:
+        note = (
+            f"No signed route from {from_relation} to {to_relation} within {max_hops} hop(s). "
+            f"{from_relation} is signed to: " + ", ".join(sorted({hop.right_source for hop in nearest})) + "."
+        )
+    return PlaybookPathResult(
+        from_relation=from_relation,
+        to_relation=to_relation,
+        max_hops=max_hops,
+        routes=routes,
+        nearest_from_source=nearest,
+        note=note,
+    )
+
+
 def build_result(
     playbook: Playbook | None,
     catalog: Catalog,
@@ -541,6 +598,30 @@ def build_result(
         datasets=guides,
         collection_notes=catalog.collection_notes(),
         warnings=warnings,
+    )
+
+
+def build_path_result(
+    catalog: Catalog,
+    status: str,
+    from_relation: str,
+    to_relation: str,
+    max_hops: int = _DEFAULT_MAX_HOPS,
+    warnings: list[str] | None = None,
+) -> PlaybookResult:
+    """A PlaybookResult carrying only the route, so the answer stays small.
+
+    The full playbook lists every signed edge and leaves the caller to spot the route through them,
+    which is the derivation a model was failing at. Asking for two relations returns the hops.
+    """
+    return PlaybookResult(
+        collection=next(iter(catalog.collection_definitions), ""),
+        status=status,
+        catalog_fingerprint=catalog.fingerprint(),
+        datasets=[],
+        collection_notes=[],
+        warnings=list(warnings or []),
+        path=build_path(catalog, from_relation, to_relation, max_hops),
     )
 
 

@@ -23,6 +23,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import Receive, Scope, Send
 
+from benthic_mcp.catalog import JoinEdge
 from benthic_mcp.config import Settings
 from benthic_mcp.errors import BenthicMCPError
 from benthic_mcp.models import (
@@ -248,17 +249,32 @@ async def discover(
 
 
 @mcp.tool(name="benthic_playbook", annotations=READ_ONLY)
-async def playbook(dataset: str | None = None) -> PlaybookResult:
+async def playbook(
+    dataset: str | None = None,
+    from_relation: str | None = None,
+    to_relation: str | None = None,
+    max_hops: Annotated[int, Field(ge=1, le=3)] = 2,
+) -> PlaybookResult:
     """Dataset-specific access conventions built from signed metadata and prior sessions.
 
     Call once per dataset before answering a question that depends on domain conventions: which
     source to use, which columns are authoritative, which mistakes to avoid, and which signed join
     paths and RPC operations exist. Join recipes come from the signed catalog and are never
     invented here. Omit dataset for a routing index of every dataset.
+
+    To move data between two relations, pass from_relation and to_relation as 'dataset.relation'
+    instead of a dataset. That returns the signed route hop by hop, shortest first, with the exact
+    arguments for each benthic_join call, and nothing else. Do this rather than searching
+    benthic_discover for a join path: a search can be rephrased, so a request for a path that does
+    not exist comes back looking like a request that was worded wrongly.
     """
     try:
         service = await get_service()
         runtime = await service.playbook()
+        if (from_relation is None) != (to_relation is None):
+            raise ToolError("Pass both from_relation and to_relation, or neither")
+        if from_relation is not None and to_relation is not None:
+            return runtime.path_result(from_relation, to_relation, max_hops)
         return runtime.result(dataset)
     except KeyError as exc:
         raise ToolError(f"Unknown dataset {exc.args[0]}; call benthic_playbook() for the list") from exc
@@ -306,27 +322,63 @@ async def query(
         raise ToolError(str(exc)) from exc
 
 
+def _unresolved_join_message(left: str, right: str, candidates: list[JoinEdge]) -> str:
+    """Why no path was chosen, and what the signed options are.
+
+    Silence here is what produced the retry loop: a caller that asked for a path which does not
+    exist, or asked ambiguously, got nothing actionable and asked again.
+    """
+    if not candidates:
+        return (
+            f"No signed BDP join connects {left} to {right}. Call "
+            f"benthic_playbook(from_relation='{left}', to_relation='{right}') to see what is signed, "
+            "or benthic_discover to find a relation that is."
+        )
+    listed = "; ".join(
+        f"{edge.left_column} = {edge.right_column} [{edge.join_type}/{edge.reliability}]" for edge in candidates
+    )
+    return (
+        f"Refusing to choose between signed paths from {left} to {right}: {listed}. "
+        "Pass left_column and right_column explicitly, and pass context_conditions for a partial join."
+    )
+
+
 @mcp.tool(name="benthic_join", annotations=READ_ONLY)
 @_traced
 async def join(
     question: str,
     left_source: str,
     right_source: str,
-    left_column: str,
-    right_column: str,
+    left_column: str | None = None,
+    right_column: str | None = None,
     left_where: list[str] | None = None,
     right_where: list[str] | None = None,
     context_conditions: list[str] | None = None,
     mode: str = "inner",
     limit: Annotated[int, Field(ge=1, le=1000)] = 100,
 ) -> QueryResult:
-    """Run one signed identifier or heuristic join using qualified sources.
+    """Run one signed join using qualified sources.
 
-    Use only after benthic_discover returns the exact path. The adapter follows signed reliability
-    metadata and returns warnings. Partial joins require context_conditions. The left key filter is
-    propagated to the right source; do not invent columns or unsigned relationships.
+    Omit left_column and right_column when exactly one reliable identifier path connects the two
+    sources, and the signed path is resolved for you. That is the common case and it saves having to
+    look the path up first. Columns are still required whenever the path is ambiguous, absent, or
+    anything other than a reliable identifier join, so a heuristic or partial join is never chosen
+    for you; the error lists the candidates instead.
+
+    The adapter follows signed reliability metadata and returns warnings. Partial joins require
+    context_conditions. The left key filter is propagated to the right source; do not invent columns
+    or unsigned relationships.
     """
     try:
+        if (left_column is None) != (right_column is None):
+            raise ToolError("Pass both left_column and right_column, or neither")
+        if left_column is None and right_column is None:
+            service = await get_service()
+            edge, candidates = (await service.playbook()).catalog.resolve_join(left_source, right_source)
+            if edge is None:
+                raise ToolError(_unresolved_join_message(left_source, right_source, candidates))
+            left_column, right_column = edge.left_column, edge.right_column
+        assert left_column is not None and right_column is not None
         request = build_single_join(
             question=question,
             left_source=left_source,

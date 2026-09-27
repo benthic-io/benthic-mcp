@@ -31,6 +31,7 @@ class FakeService:
     """
 
     def __init__(self, catalog: Catalog, settings: Settings) -> None:
+        self.last_request: QueryRequest | None = None
         self._real = BenthicService(replace(settings, cache_dir=settings.cache_dir))
         self._real._playbook = PlaybookRuntime(
             playbook=None, catalog=catalog, status="disabled", report=VerifyReport(), warnings=[], token_budget=600
@@ -68,6 +69,9 @@ class FakeService:
         )
 
     async def query(self, request: QueryRequest) -> QueryResult:
+        # Recorded so a test can assert which join columns the server actually chose, which is the
+        # part of auto-resolution that cannot be seen in an empty result.
+        self.last_request = request
         return QueryResult(
             columns=[],
             rows=[],
@@ -91,6 +95,15 @@ class FakeService:
                 request_url="https://benthic.io/ngopen/up_cdmaps/rpc/rpc_find_district",
             ),
         )
+
+
+def text_of(result: Any) -> str:
+    """The text of a tool result. A union of content types, so this narrows once instead of five times."""
+    for block in result.content:
+        text = getattr(block, "text", None)
+        if text:
+            return str(text)
+    return ""
 
 
 @pytest.mark.asyncio
@@ -159,7 +172,12 @@ async def test_lists_expected_tools(catalog: Catalog, settings: Settings) -> Non
         "districts_in_bbox",
         "nonprofits_nearby",
     ]
-    assert set(playbook_tool.input_schema["properties"]) == {"dataset"}
+    assert set(playbook_tool.input_schema["properties"]) == {
+        "dataset",
+        "from_relation",
+        "to_relation",
+        "max_hops",
+    }
     assert "$defs" not in query_tool.input_schema
     assert "$defs" not in join_tool.input_schema
     assert "$defs" not in rpc_tool.input_schema
@@ -357,3 +375,123 @@ async def test_http_app_requires_token_and_allows_exact_origin(settings: Any) ->
     assert preflight.headers["access-control-allow-origin"] == "http://192.168.10.222:8081"
     assert denied_origin.status_code == 200
     assert "access-control-allow-origin" not in denied_origin.headers
+
+
+@pytest.mark.asyncio
+async def test_join_resolves_its_own_path_when_the_columns_are_omitted(catalog: Catalog, settings: Settings) -> None:
+    """The common case: one reliable identifier path, so the caller should not have to look it up."""
+    service = FakeService(catalog, settings)
+    server_module._service = service
+    try:
+        async with Client(server_module.mcp, raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "benthic_join",
+                {
+                    "question": "match on uei",
+                    "left_source": "usaspending.all_entities",
+                    "right_source": "samer.sam_registrations",
+                },
+            )
+    finally:
+        server_module._service = None
+
+    assert not result.is_error
+    assert service.last_request is not None
+    left, right = service.last_request.sources
+    assert "uei" in left.select
+    assert "uei" in right.select
+
+
+@pytest.mark.asyncio
+async def test_join_refuses_to_choose_a_heuristic_path(catalog: Catalog, settings: Settings) -> None:
+    server_module._service = FakeService(catalog, settings)
+    try:
+        async with Client(server_module.mcp, raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "benthic_join",
+                {
+                    "question": "match on duns",
+                    "left_source": "samer.sam_registrations",
+                    "right_source": "irs_ng.bmf_organizations",
+                },
+            )
+    finally:
+        server_module._service = None
+
+    assert result.is_error
+    assert "Refusing to choose" in text_of(result)
+    assert "duns = ein" in text_of(result)
+
+
+@pytest.mark.asyncio
+async def test_join_on_an_unsigned_pair_points_at_the_path_lookup(catalog: Catalog, settings: Settings) -> None:
+    server_module._service = FakeService(catalog, settings)
+    try:
+        async with Client(server_module.mcp, raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "benthic_join",
+                {
+                    "question": "x",
+                    "left_source": "usaspending.agency_lookup",
+                    "right_source": "usaspending.all_entities",
+                },
+            )
+    finally:
+        server_module._service = None
+
+    assert result.is_error
+    assert "No signed BDP join" in text_of(result)
+    assert "benthic_playbook(from_relation=" in text_of(result)
+
+
+@pytest.mark.asyncio
+async def test_join_rejects_half_specified_columns(catalog: Catalog, settings: Settings) -> None:
+    server_module._service = FakeService(catalog, settings)
+    try:
+        async with Client(server_module.mcp, raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "benthic_join",
+                {
+                    "question": "x",
+                    "left_source": "usaspending.all_entities",
+                    "right_source": "samer.sam_registrations",
+                    "left_column": "uei",
+                },
+            )
+    finally:
+        server_module._service = None
+
+    assert result.is_error
+    assert "both left_column and right_column" in text_of(result)
+
+
+@pytest.mark.asyncio
+async def test_the_path_lookup_returns_only_the_route(catalog: Catalog, settings: Settings) -> None:
+    server_module._service = FakeService(catalog, settings)
+    try:
+        async with Client(server_module.mcp, raise_exceptions=True) as client:
+            result = await client.call_tool(
+                "benthic_playbook",
+                {"from_relation": "usaspending.all_entities", "to_relation": "irs_ng.bmf_organizations"},
+            )
+    finally:
+        server_module._service = None
+
+    assert not result.is_error
+    payload = result.structured_content
+    assert payload["datasets"] == []
+    hops = [hop for route in payload["path"]["routes"] for hop in route["hops"]]
+    assert [hop["right_source"] for hop in hops] == ["samer.sam_registrations", "irs_ng.bmf_organizations"]
+
+
+@pytest.mark.asyncio
+async def test_the_path_lookup_rejects_half_specified_relations(catalog: Catalog, settings: Settings) -> None:
+    server_module._service = FakeService(catalog, settings)
+    try:
+        async with Client(server_module.mcp, raise_exceptions=True) as client:
+            result = await client.call_tool("benthic_playbook", {"from_relation": "usaspending.all_entities"})
+    finally:
+        server_module._service = None
+
+    assert result.is_error
+    assert "both from_relation and to_relation" in text_of(result)

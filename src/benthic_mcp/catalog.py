@@ -114,6 +114,27 @@ class JoinDefinition:
 
 
 @dataclass(frozen=True, slots=True)
+class JoinEdge:
+    """One signed join, oriented so `left` is the relation the caller is standing on."""
+
+    left: str
+    left_column: str
+    right: str
+    right_column: str
+    join_type: str
+    reliability: Reliability
+    notes: str | None = None
+
+    def as_pair(self) -> tuple[str, str, str, str]:
+        return (self.left, self.left_column, self.right, self.right_column)
+
+
+# The one real chain in the signed catalog is two hops. Beyond that a longer route is a sign the
+# caller should hop explicitly rather than chain, and the answer stays bounded either way.
+_DEFAULT_MAX_HOPS = 2
+
+
+@dataclass(frozen=True, slots=True)
 class CollectionDefinition:
     name: str
     title: str | None
@@ -505,6 +526,98 @@ class Catalog:
         """Content identity of the signed catalog; changes when any manifest is republished."""
         hashes = sorted(definition.manifest_hash for definition in self.datasets.values())
         return hashlib.sha256("\n".join(hashes).encode("utf-8")).hexdigest()
+
+    def join_graph(self) -> dict[str, list[JoinEdge]]:
+        """Adjacency over the signed join edges, undirected, keyed by qualified relation name."""
+        graph: dict[str, list[JoinEdge]] = {}
+        for join in self.joins:
+            left = f"{join.from_dataset}.{join.from_relation}"
+            right = f"{join.to_dataset}.{join.to_relation}"
+            graph.setdefault(left, []).append(
+                JoinEdge(
+                    left=left,
+                    left_column=join.from_column,
+                    right=right,
+                    right_column=join.to_column,
+                    join_type=join.join_type,
+                    reliability=join.reliability,
+                    notes=join.notes,
+                )
+            )
+            graph.setdefault(right, []).append(
+                JoinEdge(
+                    left=right,
+                    left_column=join.to_column,
+                    right=left,
+                    right_column=join.from_column,
+                    join_type=join.join_type,
+                    reliability=join.reliability,
+                    notes=join.notes,
+                )
+            )
+        return graph
+
+    def join_paths(
+        self, from_relation: str, to_relation: str, max_hops: int = _DEFAULT_MAX_HOPS
+    ) -> list[list[JoinEdge]]:
+        """Every signed route from one relation to another, shortest first.
+
+        Joining was previously only reachable by phrasing a natural-language query and reading the
+        answer back out of a search result, which is a re-phraseable operation: a model that asked
+        for a path that does not exist got no confirmation and simply asked again. Two exact relation
+        names cannot be rephrased, so this turns an unbounded search into a bounded lookup.
+
+        The graph is small and signed, so the answer is a pure function of the two names. There is
+        nothing here to memoise; the problem was never memory.
+        """
+        if from_relation == to_relation:
+            return []
+        graph = self.join_graph()
+        if from_relation not in graph or to_relation not in graph:
+            return []
+        routes: list[list[JoinEdge]] = []
+        frontier: list[tuple[str, list[JoinEdge]]] = [(from_relation, [])]
+        seen = {from_relation}
+        while frontier:
+            following: list[tuple[str, list[JoinEdge]]] = []
+            for node, path in frontier:
+                if len(path) >= max_hops:
+                    continue
+                for edge in graph.get(node, []):
+                    if edge.right in seen:
+                        continue
+                    extended = [*path, edge]
+                    if edge.right == to_relation:
+                        routes.append(extended)
+                        continue
+                    seen.add(edge.right)
+                    following.append((edge.right, extended))
+            frontier = following
+        return routes
+
+    def resolve_join(self, left_relation: str, right_relation: str) -> tuple[JoinEdge | None, list[JoinEdge]]:
+        """The one signed edge to use between two relations, or the candidates and no choice.
+
+        Returning a resolved edge is limited to a single reliable identifier join. A heuristic,
+        partial or spatial edge is never selected on the caller's behalf even when it is the only
+        one, because the standing rule is that a partial join needs context_conditions and must be
+        reported as provisional, and a caller who did not ask for a fuzzy match should not get one.
+        """
+        candidates = [edge for edge in self.join_graph().get(left_relation, []) if edge.right == right_relation]
+        if len(candidates) != 1:
+            return None, candidates
+        edge = candidates[0]
+        if edge.join_type == "identifier" and edge.reliability == "reliable":
+            return edge, candidates
+        return None, candidates
+
+    def nearest_joins(self, relation: str) -> list[JoinEdge]:
+        """The signed edges touching one relation, for when no route exists.
+
+        Answering "there is no path" with nothing leaves the model where it started. Naming what
+        *is* connected is what turns a dead end into a next step.
+        """
+        return self.join_graph().get(relation, [])
 
     def signed_join_pairs(self) -> set[tuple[str, str, str, str]]:
         return {

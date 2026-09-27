@@ -19,6 +19,7 @@ from benthic_mcp.playbook import (
     LessonRecord,
     Playbook,
     VerifyReport,
+    build_path_result,
     build_result,
     lesson_id,
     lesson_is_grounded,
@@ -59,6 +60,9 @@ class PlaybookRuntime:
 
     def result(self, dataset: str | None):
         return build_result(self.playbook, self.catalog, self.status, dataset, list(self.warnings))
+
+    def path_result(self, from_relation: str, to_relation: str, max_hops: int = 2):
+        return build_path_result(self.catalog, self.status, from_relation, to_relation, max_hops, list(self.warnings))
 
     def instructions(self) -> str:
         return render_instructions(self.core, self.catalog)

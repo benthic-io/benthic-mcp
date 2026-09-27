@@ -241,6 +241,39 @@ class PlaybookDatasetGuide(StrictModel):
     lessons: list[PlaybookLessonInfo] = Field(default_factory=list)
 
 
+class PlaybookRoute(StrictModel):
+    """One hop, carrying exactly the arguments benthic_join takes so it can be copied verbatim."""
+
+    hops: list[PlaybookJoinRecipe]
+
+    def as_arguments(self) -> list[dict[str, str]]:
+        return [
+            {
+                "left_source": hop.left_source,
+                "left_column": hop.left_column,
+                "right_source": hop.right_source,
+                "right_column": hop.right_column,
+            }
+            for hop in self.hops
+        ]
+
+
+class PlaybookPathResult(StrictModel):
+    """The answer to "how do I get from relation A to relation B", and nothing else.
+
+    Returned instead of the full playbook when from_relation and to_relation are given, so a
+    two-dataset join costs a couple of hundred bytes rather than the whole edge list.
+    """
+
+    from_relation: str
+    to_relation: str
+    max_hops: int
+    routes: list[PlaybookRoute] = Field(default_factory=list)
+    nearest_from_source: list[PlaybookJoinRecipe] = Field(default_factory=list)
+    # A bounded negative with alternatives, never silence.
+    note: str | None = None
+
+
 class PlaybookResult(StrictModel):
     collection: str
     status: str
@@ -251,6 +284,8 @@ class PlaybookResult(StrictModel):
     datasets: list[PlaybookDatasetGuide] = Field(default_factory=list)
     collection_notes: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    # Present only when the caller asked for a route between two relations.
+    path: PlaybookPathResult | None = None
 
 
 class ReportResult(StrictModel):
