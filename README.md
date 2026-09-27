@@ -232,6 +232,7 @@ systemctl --user restart benthic-mcp.service
 | Per-response answer nudge on complete results | **Reverted.** Worse than the seed on every case measured: 2/5 and 2/5 and 0/5, against 5/5 and 2/5 for the seed |
 | Loop-breaking rule in the always-on core | **Reverted.** 0/6 to 0/8 on the two cases it was written for, both still returning no answer |
 | More turn budget instead of a rule | **No effect worth having.** 4/15 to 5/15 passing when max-turns went from 5 to 9, empty answers 10 to 7 |
+| Dropping read-nothing schema metadata from responses | **Reverted.** A 31% cut to discovery responses moved the whole run's prompt tokens 0.6%, and tuning accuracy fell 23/25 to 18/25 |
 | Twelve accumulated lessons over the answer rule | **No difference.** Both scored 9/10 on the same two cases |
 
 Every failure in the suite is a failure to deliver an answer, not a wrong answer, a bad column, an
@@ -243,13 +244,35 @@ respected as a standing constraint; the same instruction delivered again on ever
 competes with the task and produces premature answers, which is worse than saying nothing. Delivery
 frequency mattered more than delivery reliability.
 
-What remains is characterised rather than fixed. Two tuning cases, `multi_step_0_1` and
-`relation_trap_0_1`, return no answer at all in every repetition. They are not starved of turns, they
-ignore more budget, they ignore an explicit loop-breaking rule, and they call `benthic_playbook`
-before fetching anything. Whatever keeps them looping is not reachable by prose in the tool
-description, and the honest next step is to instrument what those sessions do rather than add more
-guidance. Guidance that does not measure is how the always-on slice filled with restated advice in
-the first place.
+The metadata trim is the informative failure about performance. The reasoning was sound: every byte
+a tool returns is re-sent on each remaining turn, so response size is multiplied by conversation
+length, and prompt tokens run 10:1 over completion. The measurement was wrong. Response bytes are
+dominated by data rows, not schema: a hundred-row query is about 7KB against a 3.4KB discovery
+response, so trimming schema metadata bought 0.6% and cost five cases. The fields may well be
+carrying weight the model uses when choosing a type or a spatial predicate. Cost per column is now a
+test, so a large future addition is caught, but no field is removed on the argument that nothing
+reads it.
+
+### The column dead end, and the two cases that are not about it
+
+Discovery lists at most 12 columns per relation, 21 of the 119 signed relations have more than 40
+and one has 374, and an unknown-column error used to name only the rejected column. A model that
+guessed wrong therefore had one move: guess again. `benthic_query` now returns ranked near-miss
+candidates drawn only from the signed manifest, so a suggestion can never name a column that does not
+exist, and `benthic_discover` takes `detail='full'` to list every column of one named relation. The
+model adopted the new parameter 25 times in eight runs.
+
+It did not fix `multi_step_0_1` or `relation_trap_0_1`, which still return no answer in 8 of 8
+repetitions, and the traces say why. Both call `benthic_discover` five or six times and never call
+`benthic_query` at all. They are not missing information: asked for the signed path from
+`usaspending.all_entities` to `samer.sam_registrations`, discovery returns
+`all_entities.uei = sam_registrations.uei`, reliable, with a note. The model is told the right thing
+repeatedly and does not act on it, in runs that burn 8,773 completion tokens reasoning and end on
+`finish_reason: length`.
+
+So these two are not addressable from the server. They need an agent-side rule, a different model, or
+a non-reasoning mode, and the honest thing is to say so rather than keep adding guidance that does not
+measure. Three separate attempts to move them by guidance have now failed.
 
 The core slice admits three playbook items and the cap is applied twice, in `verify()` by screened
 sentence and again in `render_core()`. The second cap is the binding one, so a seed rule longer

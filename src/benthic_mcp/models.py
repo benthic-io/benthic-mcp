@@ -153,14 +153,19 @@ class QueryRequest(StrictModel):
 
 
 class ColumnInfo(StrictModel):
-    # native_type, srid and unit were served here and read by nothing. Discovery responses are the
-    # largest thing the model receives and every field is re-sent on each remaining turn, so
-    # per-column metadata is multiplied by the length of the conversation. The manifest keeps all
-    # three in the catalog's ColumnDefinition.
+    # native_type, srid and unit were measured as removable: nothing in this codebase reads them,
+    # and dropping them plus the per-source manifest_hash cut discovery responses by 31% and the
+    # whole run's prompt tokens by 0.6%, while tuning accuracy fell from 23/25 to 18/25 with empty
+    # answers nearly doubling. Restored on the evidence. The 0.6% is the reason: response bytes are
+    # dominated by data rows, so trimming schema metadata buys nothing measurable and the fields
+    # may be carrying weight the model uses when choosing a type or a spatial predicate.
     name: str
     type: str
+    native_type: str | None = None
     nullable: bool = True
     description: str | None = None
+    srid: int | None = None
+    unit: str | None = None
 
 
 class RelationInfo(StrictModel):
@@ -283,11 +288,12 @@ class DiscoverResult(StrictModel):
 
 
 class SourceMetadata(StrictModel):
-    # manifest_hash was served per source in every query and join result and read by nothing. The
-    # signature is verified when the manifest is loaded, and the hash itself is what
-    # Catalog.fingerprint() uses to detect catalog drift, so neither needs it in the response.
+    # manifest_hash is never read by this codebase, and removing it alongside the column metadata
+    # was part of a change measured at -0.6% prompt tokens and 23/25 to 18/25 tuning accuracy, so it
+    # is restored with them. See ColumnInfo.
     alias: str
     source: str
+    manifest_hash: str
     row_count: int
     complete: bool
 

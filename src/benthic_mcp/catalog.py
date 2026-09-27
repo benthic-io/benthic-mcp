@@ -343,8 +343,11 @@ class Catalog:
                         ColumnInfo(
                             name=column.name,
                             type=column.type,
+                            native_type=column.native_type,
                             nullable=column.nullable,
                             description=column.description,
+                            srid=column.srid,
+                            unit=column.unit,
                         )
                         for column in columns
                     ],
