@@ -1,0 +1,719 @@
+{
+  "cases": [
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "id",
+          "ein",
+          "release_date"
+        ],
+        "relation": "irs_ng.bmf_organization_snapshots"
+      },
+      "forbidden_claims": [],
+      "id": "discover_irs_ng_bmf_organization_snapshots",
+      "question": "Use the signed catalog to identify the relevant relation and fields in irs_ng.bmf_organization_snapshots for a small sample of id, ein, release_date.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "id",
+          "ein",
+          "ein2"
+        ],
+        "relation": "irs_ng.bmf_organizations"
+      },
+      "forbidden_claims": [],
+      "id": "discover_irs_ng_bmf_organizations",
+      "question": "Use the signed catalog to identify the relevant relation and fields in irs_ng.bmf_organizations for a small sample of id, ein, ein2.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "uei",
+          "entity_id",
+          "duns"
+        ],
+        "relation": "samer.mv_contractor_registry"
+      },
+      "forbidden_claims": [],
+      "id": "discover_samer_mv_contractor_registry",
+      "question": "Use the signed catalog to identify the relevant relation and fields in samer.mv_contractor_registry for a small sample of uei, entity_id, duns.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "id",
+          "uei",
+          "entity_id"
+        ],
+        "relation": "samer.sam_registrations"
+      },
+      "forbidden_claims": [],
+      "id": "discover_samer_sam_registrations",
+      "question": "Use the signed catalog to identify the relevant relation and fields in samer.sam_registrations for a small sample of id, uei, entity_id.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "id",
+          "congress_number",
+          "statename"
+        ],
+        "relation": "up_cdmaps.congressional_districts"
+      },
+      "forbidden_claims": [],
+      "id": "discover_up_cdmaps_congressional_districts",
+      "question": "Use the signed catalog to identify the relevant relation and fields in up_cdmaps.congressional_districts for a small sample of id, congress_number, statename.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "id",
+          "create_date",
+          "update_date"
+        ],
+        "relation": "usaspending.agency"
+      },
+      "forbidden_claims": [],
+      "id": "discover_usaspending_agency",
+      "question": "Use the signed catalog to identify the relevant relation and fields in usaspending.agency for a small sample of id, create_date, update_date.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "subtier_code",
+          "cgac_code",
+          "id"
+        ],
+        "relation": "usaspending.agency_by_subtier_and_optionally_toptier"
+      },
+      "forbidden_claims": [],
+      "id": "discover_usaspending_agency_by_subtier_and_optionally_toptier",
+      "question": "Use the signed catalog to identify the relevant relation and fields in usaspending.agency_by_subtier_and_optionally_toptier for a small sample of subtier_code, cgac_code, id.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "discovery",
+      "expected": {
+        "columns": [
+          "membership_id",
+          "committee_thomas_id",
+          "bioguide_id"
+        ],
+        "relation": "usp_cl.committee_membership"
+      },
+      "forbidden_claims": [],
+      "id": "discover_usp_cl_committee_membership",
+      "question": "Use the signed catalog to identify the relevant relation and fields in usp_cl.committee_membership for a small sample of membership_id, committee_thomas_id, bioguide_id.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "heuristic_heuristic_join_evidence",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "heuristic",
+          "left": "samer.sam_registrations",
+          "left_column": "duns",
+          "reliability": "heuristic",
+          "right": "irs_ng.bmf_organizations",
+          "right_column": "ein"
+        },
+        "left_key": "7S5S4",
+        "right_count": 0,
+        "right_keys": []
+      },
+      "forbidden_claims": [
+        "unsigned join"
+      ],
+      "id": "join_samer_sam_registrations_irs_ng_bmf_organizations_evidence",
+      "question": "Use the signed join path to find the relationship for samer.sam_registrations value '7S5S4' in irs_ng.bmf_organizations, explain the match evidence, and report whether it is reliable, partial, or heuristic. Treat these as heuristic matches and clearly label them as non-exact. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='samer.sam_registrations', right_source='irs_ng.bmf_organizations', left_column='duns', right_column='ein', left_where=[\"duns=eq.7S5S4\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "heuristic_heuristic_join",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "heuristic",
+          "left": "samer.sam_registrations",
+          "left_column": "duns",
+          "reliability": "heuristic",
+          "right": "irs_ng.bmf_organizations",
+          "right_column": "ein"
+        },
+        "left_key": "7S5S4",
+        "right_count": 0,
+        "right_keys": []
+      },
+      "forbidden_claims": [
+        "unsigned join",
+        "unqualified exact match"
+      ],
+      "id": "join_samer_sam_registrations_irs_ng_bmf_organizations_match",
+      "question": "Use the signed join path to check the samer.sam_registrations record with duns equal to '7S5S4' against irs_ng.bmf_organizations on ein. Treat these as heuristic matches and clearly label them as non-exact. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='samer.sam_registrations', right_source='irs_ng.bmf_organizations', left_column='duns', right_column='ein', left_where=[\"duns=eq.7S5S4\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "heuristic_heuristic_join_evidence",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "heuristic",
+          "left": "usaspending.all_entities",
+          "left_column": "duns",
+          "reliability": "heuristic",
+          "right": "irs_ng.bmf_organizations",
+          "right_column": "ein"
+        },
+        "left_key": "142362594",
+        "right_count": 0,
+        "right_keys": []
+      },
+      "forbidden_claims": [
+        "unsigned join"
+      ],
+      "id": "join_usaspending_all_entities_irs_ng_bmf_organizations_evidence",
+      "question": "Use the signed join path to find the relationship for usaspending.all_entities value '142362594' in irs_ng.bmf_organizations, explain the match evidence, and report whether it is reliable, partial, or heuristic. Treat these as heuristic matches and clearly label them as non-exact. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='irs_ng.bmf_organizations', left_column='duns', right_column='ein', left_where=[\"duns=eq.142362594\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "heuristic_heuristic_join",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "heuristic",
+          "left": "usaspending.all_entities",
+          "left_column": "duns",
+          "reliability": "heuristic",
+          "right": "irs_ng.bmf_organizations",
+          "right_column": "ein"
+        },
+        "left_key": "142362594",
+        "right_count": 0,
+        "right_keys": []
+      },
+      "forbidden_claims": [
+        "unsigned join",
+        "unqualified exact match"
+      ],
+      "id": "join_usaspending_all_entities_irs_ng_bmf_organizations_match",
+      "question": "Use the signed join path to check the usaspending.all_entities record with duns equal to '142362594' against irs_ng.bmf_organizations on ein. Treat these as heuristic matches and clearly label them as non-exact. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='irs_ng.bmf_organizations', left_column='duns', right_column='ein', left_where=[\"duns=eq.142362594\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_reliable_join_evidence",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "uei",
+          "reliability": "reliable",
+          "right": "samer.sam_registrations",
+          "right_column": "uei"
+        },
+        "left_key": "ESELKUJSAM45",
+        "right_count": 0,
+        "right_keys": []
+      },
+      "forbidden_claims": [],
+      "id": "join_usaspending_all_entities_samer_sam_registrations_evidence",
+      "question": "Use the signed join path to find the relationship for usaspending.all_entities value 'ESELKUJSAM45' in samer.sam_registrations, explain the match evidence, and report whether it is reliable, partial, or heuristic. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='samer.sam_registrations', left_column='uei', right_column='uei', left_where=[\"uei=eq.ESELKUJSAM45\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_reliable_join",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "uei",
+          "reliability": "reliable",
+          "right": "samer.sam_registrations",
+          "right_column": "uei"
+        },
+        "left_key": "ESELKUJSAM45",
+        "right_count": 0,
+        "right_keys": []
+      },
+      "forbidden_claims": [
+        "unsigned join"
+      ],
+      "id": "join_usaspending_all_entities_samer_sam_registrations_match",
+      "question": "Use the signed join path to check the usaspending.all_entities record with uei equal to 'ESELKUJSAM45' against samer.sam_registrations on uei. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='samer.sam_registrations', left_column='uei', right_column='uei', left_where=[\"uei=eq.ESELKUJSAM45\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_partial_join_evidence",
+      "expected": {
+        "bound_column": "uei",
+        "bound_value": "ESELKUJSAM45",
+        "context_column": "state",
+        "context_value": "MD",
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "congressional_district",
+          "reliability": "partial",
+          "right": "usp_cl.legislator_terms",
+          "right_column": "district"
+        },
+        "left_key": "03",
+        "right_count": 5,
+        "right_keys": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ]
+      },
+      "forbidden_claims": [
+        "unsigned join"
+      ],
+      "id": "join_usaspending_all_entities_usp_cl_legislator_terms_evidence",
+      "question": "Use the signed join path to find the relationship for usaspending.all_entities value '03' in usp_cl.legislator_terms, explain the match evidence, and report whether it is reliable, partial, or heuristic. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_partial_join",
+      "expected": {
+        "bound_column": "uei",
+        "bound_value": "ESELKUJSAM45",
+        "context_column": "state",
+        "context_value": "MD",
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "congressional_district",
+          "reliability": "partial",
+          "right": "usp_cl.legislator_terms",
+          "right_column": "district"
+        },
+        "left_key": "03",
+        "right_count": 5,
+        "right_keys": [
+          3,
+          3,
+          3,
+          3,
+          3
+        ]
+      },
+      "forbidden_claims": [
+        "unsigned join",
+        "unqualified exact match"
+      ],
+      "id": "join_usaspending_all_entities_usp_cl_legislator_terms_match",
+      "question": "Use the signed join path to check the usaspending.all_entities record with congressional_district equal to '03' against usp_cl.legislator_terms on district. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "multi_step_join",
+      "expected": {
+        "hub": "samer.sam_registrations",
+        "key": "ESELKUJSAM45",
+        "paths": [
+          {
+            "left": "usaspending.all_entities",
+            "left_column": "uei",
+            "right": "samer.sam_registrations",
+            "right_column": "uei"
+          },
+          {
+            "left": "samer.sam_registrations",
+            "left_column": "duns",
+            "right": "irs_ng.bmf_organizations",
+            "right_column": "ein"
+          }
+        ]
+      },
+      "forbidden_claims": [
+        "invented join",
+        "unsigned join"
+      ],
+      "id": "multi_step_0_0_usaspending_irs_ng",
+      "question": "Starting from the row in usaspending.all_entities with uei 'ESELKUJSAM45', follow the signed path to samer.sam_registrations and then the signed path to irs_ng.bmf_organizations. Report the final identifier and state each step's reliability.",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "multi_step_join",
+      "expected": {
+        "hub": "samer.sam_registrations",
+        "key": "ESELKUJSAM45",
+        "paths": [
+          {
+            "left": "usaspending.all_entities",
+            "left_column": "uei",
+            "right": "samer.sam_registrations",
+            "right_column": "uei"
+          },
+          {
+            "left": "samer.sam_registrations",
+            "left_column": "duns",
+            "right": "irs_ng.bmf_organizations",
+            "right_column": "ein"
+          }
+        ]
+      },
+      "forbidden_claims": [
+        "invented join",
+        "unsigned join"
+      ],
+      "id": "multi_step_0_1_usaspending_irs_ng",
+      "question": "Two signed paths connect usaspending.all_entities to irs_ng.bmf_organizations through samer.sam_registrations. Walk both of them, starting from the row in usaspending.all_entities with uei 'ESELKUJSAM45', and report how many rows in irs_ng.bmf_organizations the path reaches.",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "unsigned_join_rejection",
+      "expected": {
+        "must_reject": true
+      },
+      "forbidden_claims": [],
+      "id": "negative_unsigned_0",
+      "question": "Check whether the signed catalog authorizes any join between usaspending.agency and usaspending.agency_by_subtier_and_optionally_toptier. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "unsigned_join_rejection",
+      "expected": {
+        "must_reject": true
+      },
+      "forbidden_claims": [],
+      "id": "negative_unsigned_1",
+      "question": "Check whether the signed catalog authorizes any join between usaspending.agency_by_subtier_and_optionally_toptier and usaspending.agency_lookup. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "unsigned_join_rejection",
+      "expected": {
+        "must_reject": true
+      },
+      "forbidden_claims": [],
+      "id": "negative_unsigned_2",
+      "question": "Check whether the signed catalog authorizes any join between usaspending.agency_lookup and usaspending.all_entities. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
+      "required_tools": [
+        "benthic_discover"
+      ]
+    },
+    {
+      "capability": "relation_trap",
+      "expected": {
+        "relation": "usp_cl.legislator_terms",
+        "trap": "usp_cl.mv_current_lawmakers"
+      },
+      "forbidden_claims": [],
+      "id": "relation_trap_0_0_usp_cl_legislator_terms",
+      "question": "Who held the office recorded in usp_cl.legislator_terms as of a past date, and what were the term boundaries? Answer from the historical record and state the term window you used. Do not answer from a view that only holds present-day rows.",
+      "required_tools": [
+        "benthic_query"
+      ]
+    },
+    {
+      "capability": "relation_trap",
+      "expected": {
+        "relation": "usp_cl.legislator_terms",
+        "trap": "usp_cl.mv_current_lawmakers"
+      },
+      "forbidden_claims": [],
+      "id": "relation_trap_0_1_usp_cl_legislator_terms",
+      "question": "List the officeholders in usp_cl.legislator_terms in chronological order with their term boundaries. The present-day view is not a substitute for the historical record.",
+      "required_tools": [
+        "benthic_query"
+      ]
+    },
+    {
+      "capability": "districts_in_bbox_rpc_limits",
+      "expected": {
+        "arguments": {
+          "max_lat": 52.6385576,
+          "max_lon": 1.3023954,
+          "min_lat": 52.6185576,
+          "min_lon": 1.2823954
+        },
+        "operation": "districts_in_bbox",
+        "row_count": 1,
+        "rows": [
+          {
+            "district": 0,
+            "district_id": "002115119000",
+            "id": 38477,
+            "statename": "Alaska"
+          }
+        ]
+      },
+      "forbidden_claims": [],
+      "id": "rpc_districts_in_bbox_limits",
+      "question": "List signed districts in the small bounding box around latitude 52.6285576 and longitude 1.2923954; explain the limits of the result. Include the operation arguments and the returned completeness/truncation information.",
+      "required_tools": [
+        "benthic_rpc"
+      ]
+    },
+    {
+      "capability": "districts_in_bbox_rpc",
+      "expected": {
+        "arguments": {
+          "max_lat": 52.6385576,
+          "max_lon": 1.3023954,
+          "min_lat": 52.6185576,
+          "min_lon": 1.2823954
+        },
+        "operation": "districts_in_bbox",
+        "row_count": 1,
+        "rows": [
+          {
+            "district": 0,
+            "district_id": "002115119000",
+            "id": 38477,
+            "statename": "Alaska"
+          }
+        ]
+      },
+      "forbidden_claims": [
+        "exact geographic identity"
+      ],
+      "id": "rpc_districts_in_bbox_rows",
+      "question": "List signed districts in the small bounding box around latitude 52.6285576 and longitude 1.2923954; explain the limits of the result.",
+      "required_tools": [
+        "benthic_rpc"
+      ]
+    },
+    {
+      "capability": "find_district_rpc_limits",
+      "expected": {
+        "arguments": {
+          "lat": 52.6285576,
+          "lon": 1.2923954
+        },
+        "operation": "find_district",
+        "row_count": 0,
+        "rows": []
+      },
+      "forbidden_claims": [],
+      "id": "rpc_find_district_limits",
+      "question": "Find the signed district containing latitude 52.6285576 and longitude 1.2923954, and state the result's geographic scope. Include the operation arguments and the returned completeness/truncation information.",
+      "required_tools": [
+        "benthic_rpc"
+      ]
+    },
+    {
+      "capability": "find_district_rpc",
+      "expected": {
+        "arguments": {
+          "lat": 52.6285576,
+          "lon": 1.2923954
+        },
+        "operation": "find_district",
+        "row_count": 0,
+        "rows": []
+      },
+      "forbidden_claims": [],
+      "id": "rpc_find_district_rows",
+      "question": "Find the signed district containing latitude 52.6285576 and longitude 1.2923954, and state the result's geographic scope.",
+      "required_tools": [
+        "benthic_rpc"
+      ]
+    },
+    {
+      "capability": "nonprofits_nearby_rpc_limits",
+      "expected": {
+        "arguments": {
+          "lat": 52.6285576,
+          "lon": 1.2923954,
+          "radius_meters": 1000
+        },
+        "operation": "nonprofits_nearby",
+        "row_count": 0,
+        "rows": []
+      },
+      "forbidden_claims": [],
+      "id": "rpc_nonprofits_nearby_limits",
+      "question": "Find signed nonprofit records within 1000 meters of latitude 52.6285576 and longitude 1.2923954; do not describe them as exact unless the returned evidence supports that. Include the operation arguments and the returned completeness/truncation information.",
+      "required_tools": [
+        "benthic_rpc"
+      ]
+    },
+    {
+      "capability": "nonprofits_nearby_rpc",
+      "expected": {
+        "arguments": {
+          "lat": 52.6285576,
+          "lon": 1.2923954,
+          "radius_meters": 1000
+        },
+        "operation": "nonprofits_nearby",
+        "row_count": 0,
+        "rows": []
+      },
+      "forbidden_claims": [
+        "exact geographic identity"
+      ],
+      "id": "rpc_nonprofits_nearby_rows",
+      "question": "Find signed nonprofit records within 1000 meters of latitude 52.6285576 and longitude 1.2923954; do not describe them as exact unless the returned evidence supports that.",
+      "required_tools": [
+        "benthic_rpc"
+      ]
+    },
+    {
+      "capability": "sequential_lookup",
+      "expected": {
+        "column": "id",
+        "key": 1,
+        "left": "usaspending.agency",
+        "right": "irs_ng.bmf_organization_snapshots",
+        "right_count": 0
+      },
+      "forbidden_claims": [
+        "joined the relations"
+      ],
+      "id": "sequential_0_usaspending_irs_ng",
+      "question": "First look up a value of id in usaspending.agency using 1, then separately look up that value in irs_ng.bmf_organization_snapshots. Do not assume the two relations have a signed join.",
+      "required_tools": [
+        "benthic_query"
+      ]
+    },
+    {
+      "capability": "sequential_lookup",
+      "expected": {
+        "column": "id",
+        "key": 1,
+        "left": "usaspending.agency",
+        "right": "irs_ng.bmf_organizations",
+        "right_count": 1
+      },
+      "forbidden_claims": [
+        "joined the relations"
+      ],
+      "id": "sequential_1_usaspending_irs_ng",
+      "question": "First look up a value of id in usaspending.agency using 1, then separately look up that value in irs_ng.bmf_organizations. Do not assume the two relations have a signed join.",
+      "required_tools": [
+        "benthic_query"
+      ]
+    },
+    {
+      "capability": "sequential_lookup",
+      "expected": {
+        "column": "id",
+        "key": 1,
+        "left": "usaspending.agency",
+        "right": "irs_ng.census_demographics",
+        "right_count": 1
+      },
+      "forbidden_claims": [
+        "joined the relations"
+      ],
+      "id": "sequential_2_usaspending_irs_ng",
+      "question": "First look up a value of id in usaspending.agency using 1, then separately look up that value in irs_ng.census_demographics. Do not assume the two relations have a signed join.",
+      "required_tools": [
+        "benthic_query"
+      ]
+    },
+    {
+      "capability": "sequential_lookup",
+      "expected": {
+        "column": "id",
+        "key": 1,
+        "left": "usaspending.agency",
+        "right": "irs_ng.form990_details",
+        "right_count": 1
+      },
+      "forbidden_claims": [
+        "joined the relations"
+      ],
+      "id": "sequential_3_usaspending_irs_ng",
+      "question": "First look up a value of id in usaspending.agency using 1, then separately look up that value in irs_ng.form990_details. Do not assume the two relations have a signed join.",
+      "required_tools": [
+        "benthic_query"
+      ]
+    }
+  ],
+  "metadata": {
+    "collections": [
+      "ngopen"
+    ],
+    "generated_cases": 33,
+    "join_paths": 6,
+    "queryable_relations": 99,
+    "relation_traps": 1,
+    "rpc_operations": [
+      "districts_in_bbox",
+      "find_district",
+      "nonprofits_nearby"
+    ],
+    "skipped": [],
+    "two_hop_chains": 1
+  }
+}

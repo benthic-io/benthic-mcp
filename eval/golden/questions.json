@@ -1,0 +1,72 @@
+{
+  "metadata": {
+    "purpose": "Harness self-check. These cases are hand-verified against the signed catalog and live data, are never regenerated, and must pass with the seed playbook alone. A failure here is a bug in the harness, the scorer, or the tool surface, and must never be reported as a playbook result.",
+    "verified_against": {
+      "catalog_facts": "loaded from the signed collection ngopen via BenthicService",
+      "rpc_find_district": "benthic_rpc operation=find_district lat=52.6285576 lon=1.2923954 returned row_count=0",
+      "signed_uei_join": "benthic_join usaspending.all_entities.uei = samer.sam_registrations.uei with left_where uei=eq.ESELKUJSAM45 returned left row_count=1, right row_count=0, reliability=reliable",
+      "unsigned_pair": "usaspending.agency_lookup appears in none of the 6 signed join pairs"
+    },
+    "regeneration": "eval/generate_cases.py must not write into this directory",
+    "contract": "Every case here must pass with the seed playbook alone. A case that fails for capability reasons does not belong here, because a permanently red suite stops being read. The relation_trap capability is deliberately absent for that reason: it queried the correct historical relation on every attempt and then returned no answer at all, which is a model behaviour finding rather than a harness defect, and it is already covered by the relation_trap family in eval/generated/questions.json."
+  },
+  "cases": [
+    {
+      "id": "golden_discover_committee_membership",
+      "capability": "discovery",
+      "question": "Use the signed catalog to identify the relevant relation and fields in usp_cl.committee_membership for a small sample of membership_id, committee_thomas_id, bioguide_id.",
+      "required_tools": ["benthic_discover"],
+      "forbidden_claims": [],
+      "expected": {
+        "relation": "usp_cl.committee_membership",
+        "columns": ["membership_id", "committee_thomas_id", "bioguide_id"]
+      }
+    },
+    {
+      "id": "golden_unsigned_agency_lookup",
+      "capability": "unsigned_join_rejection",
+      "question": "Check whether the signed catalog authorizes any join between usaspending.agency_lookup and usaspending.all_entities. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
+      "required_tools": ["benthic_discover"],
+      "forbidden_claims": [],
+      "expected": {
+        "must_reject": true
+      }
+    },
+    {
+      "id": "golden_signed_uei_join_empty_right",
+      "capability": "identifier_reliable_join",
+      "question": "Use the signed join path to check the usaspending.all_entities record with uei equal to 'ESELKUJSAM45' against samer.sam_registrations on uei. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='samer.sam_registrations', left_column='uei', right_column='uei', left_where=[\"uei=eq.ESELKUJSAM45\"].",
+      "required_tools": ["benthic_join"],
+      "forbidden_claims": ["unsigned join"],
+      "expected": {
+        "left_key": "ESELKUJSAM45",
+        "right_count": 0,
+        "right_keys": [],
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "uei",
+          "reliability": "reliable",
+          "right": "samer.sam_registrations",
+          "right_column": "uei"
+        }
+      }
+    },
+    {
+      "id": "golden_find_district_empty",
+      "capability": "find_district_rpc",
+      "question": "Find the signed district containing latitude 52.6285576 and longitude 1.2923954, and state the result's geographic scope.",
+      "required_tools": ["benthic_rpc"],
+      "forbidden_claims": [],
+      "expected": {
+        "operation": "find_district",
+        "arguments": {
+          "lat": 52.6285576,
+          "lon": 1.2923954
+        },
+        "row_count": 0,
+        "rows": []
+      }
+    }
+  ]
+}

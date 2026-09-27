@@ -1,0 +1,57 @@
+[project]
+name = "benthic-mcp"
+version = "0.1.0"
+description = "Read-only MCP access to signed Benthic Data Provenance datasets"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cryptography>=45,<47",
+    "httpx>=0.28,<1",
+    "jsonschema>=4.25,<5",
+    "mcp[cli]==2.2.0",
+    "pydantic>=2.12,<3",
+    "rfc8785>=0.1,<1",
+    "uvicorn>=0.35,<1",
+]
+
+[project.scripts]
+benthic-mcp = "benthic_mcp.server:main"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4,<9",
+    "pytest-asyncio>=1.1,<2",
+    "pyright>=1.1.400,<2",
+    "ruff>=0.12,<1",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+asyncio_mode = "auto"
+pythonpath = ["src", "eval"]
+testpaths = ["tests", "eval"]
+markers = [
+    "live: requires network access to benthic.io or a running llama-server",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["C4", "E", "F", "I", "PERF", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"eval/*.py" = ["E501", "PERF401"]
+
+[tool.pyright]
+include = ["src", "tests"]
+extraPaths = ["eval"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
