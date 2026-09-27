@@ -156,7 +156,11 @@ class BenthicService:
             symptom=symptom.strip()[:500],
             lesson=lesson.strip()[:500],
             confidence=confidence,
-            question_ref=hashlib.sha256(question_summary.encode("utf-8")).hexdigest()[:16],
+            # A voluntary report need not carry a question, and hashing the empty string would
+            # produce a plausible-looking reference that resolves to nothing. Absence stays visible.
+            question_ref=(
+                hashlib.sha256(question_summary.encode("utf-8")).hexdigest()[:16] if question_summary else ""
+            ),
             question_summary=question_summary.strip()[:300] if self.settings.trace_include_text else None,
             catalog_fingerprint=runtime.catalog.fingerprint(),
             evidence=self.trace_store.recent_summary(12),
@@ -186,6 +190,7 @@ class BenthicService:
         dataset: str | None = None,
         relation: str | None = None,
         limit: int = 6,
+        detail: str = "summary",
     ) -> DiscoverResult:
         runtime = await self.playbook()
         snapshot = await self.repository.load()
@@ -193,6 +198,7 @@ class BenthicService:
             query=query,
             dataset=dataset,
             relation=relation,
+            detail=detail,
             limit=min(limit, self.settings.max_rows),
         )
 

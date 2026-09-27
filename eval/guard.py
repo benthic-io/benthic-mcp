@@ -187,6 +187,20 @@ def lessons_since(known_good: Playbook, candidate: Playbook) -> list[str]:
     return [record.lesson_id for record in candidate.lessons if record.lesson_id not in before]
 
 
+def outcome_for(*, detected: bool, saturated: bool, dry_run: bool) -> str:
+    """The headline label for a verdict, kept separate from the rollback it accompanies.
+
+    Detection and action are different facts. A dry run that detects a regression has still detected
+    one, and reporting HELD because it declined to act is the same failure as a guard that no-ops
+    quietly, so the two states get distinct labels.
+    """
+    if detected:
+        return "REGRESSION DETECTED (dry run, no action taken)" if dry_run else "ROLLED BACK"
+    if saturated:
+        return "INCONCLUSIVE (holdout saturated)"
+    return "HELD"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sandbox", default=str(ROOT / "eval" / "harness"))
@@ -251,12 +265,8 @@ def main() -> None:
 
     if rolled_back:
         outcome = "ROLLED BACK"
-    elif detected:
-        outcome = "REGRESSION DETECTED (dry run, no action taken)"
-    elif saturated:
-        outcome = "INCONCLUSIVE (holdout saturated)"
     else:
-        outcome = "HELD"
+        outcome = outcome_for(detected=detected, saturated=saturated, dry_run=args.dry_run)
 
     verdict = {
         "decided_at": datetime.now(UTC).isoformat(),

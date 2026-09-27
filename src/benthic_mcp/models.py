@@ -153,13 +153,14 @@ class QueryRequest(StrictModel):
 
 
 class ColumnInfo(StrictModel):
+    # native_type, srid and unit were served here and read by nothing. Discovery responses are the
+    # largest thing the model receives and every field is re-sent on each remaining turn, so
+    # per-column metadata is multiplied by the length of the conversation. The manifest keeps all
+    # three in the catalog's ColumnDefinition.
     name: str
     type: str
-    native_type: str | None = None
     nullable: bool = True
     description: str | None = None
-    srid: int | None = None
-    unit: str | None = None
 
 
 class RelationInfo(StrictModel):
@@ -282,9 +283,11 @@ class DiscoverResult(StrictModel):
 
 
 class SourceMetadata(StrictModel):
+    # manifest_hash was served per source in every query and join result and read by nothing. The
+    # signature is verified when the manifest is loaded, and the hash itself is what
+    # Catalog.fingerprint() uses to detect catalog drift, so neither needs it in the response.
     alias: str
     source: str
-    manifest_hash: str
     row_count: int
     complete: bool
 

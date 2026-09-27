@@ -228,15 +228,21 @@ async def discover(
     dataset: str | None = None,
     relation: str | None = None,
     limit: Annotated[int, Field(ge=1, le=8)] = 6,
+    detail: Literal["summary", "full"] = "summary",
 ) -> DiscoverResult:
     """Find the smallest relevant signed source, columns, and join paths for a question.
 
     Use the returned source field verbatim in benthic_query. If join_paths is empty, make separate
     benthic_query calls; never invent a join.
+
+    A summary lists up to 12 columns per relation, so a wide relation is only partly shown and
+    columns_truncated says so. To list every column of one relation, pass relation='dataset.relation'
+    with detail='full'. Prefer guessing the column over calling this: benthic_query reports near-miss
+    signed column names when a guess is wrong.
     """
     try:
         service = await get_service()
-        return await service.discover(query=query, dataset=dataset, relation=relation, limit=limit)
+        return await service.discover(query=query, dataset=dataset, relation=relation, limit=limit, detail=detail)
     except (BenthicMCPError, ValueError) as exc:
         raise ToolError(str(exc)) from exc
 

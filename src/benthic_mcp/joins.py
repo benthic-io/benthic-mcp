@@ -148,7 +148,6 @@ def build_source_metadata(fetched: list[FetchedSource]) -> list[SourceMetadata]:
         SourceMetadata(
             alias=item.source.alias,
             source=f"{item.definition.dataset}.{item.definition.name}",
-            manifest_hash=item.definition.manifest_hash,
             row_count=len(item.rows),
             complete=not item.truncated,
         )

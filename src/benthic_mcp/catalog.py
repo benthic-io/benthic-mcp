@@ -123,6 +123,16 @@ class CollectionDefinition:
     protocol_version: str | None
 
 
+# How many columns discovery lists inline. The full set is one explicit call away, because 21 of the
+# 119 signed relations have more columns than any inline list should carry, and one has 374.
+_INLINE_COLUMN_LIMIT = 12
+
+
+def _token_overlap(left: str, right: str) -> int:
+    """Shared underscore-separated tokens, so total_obligation and obligation_date score 1."""
+    return len({part for part in left.split("_") if part} & {part for part in right.split("_") if part})
+
+
 class Catalog:
     def __init__(
         self,
@@ -243,6 +253,7 @@ class Catalog:
         dataset: str | None = None,
         relation: str | None = None,
         limit: int = 20,
+        detail: str = "summary",
     ) -> DiscoverResult:
         tokens = [token for token in re.split(r"[^A-Za-z0-9_]+", query.lower()) if token and token not in _STOP_WORDS]
         if dataset and "." in dataset and relation is None:
@@ -253,6 +264,13 @@ class Catalog:
             relation = None
         if dataset and not any(name == dataset for name, _ in self.relations):
             dataset = None
+        if detail == "full":
+            # detail="full" answers "what columns does this one relation have". Without a relation it
+            # would dump every column of every match, which is the response size this parameter
+            # exists to avoid.
+            if relation is None:
+                raise QueryValidationError("detail='full' needs relation='dataset.relation' to name one relation")
+            limit = 1
         matches: list[tuple[int, RelationDefinition, list[str], list[ColumnDefinition]]] = []
 
         for (dataset_name, relation_name), definition in self.relations.items():
@@ -303,8 +321,13 @@ class Catalog:
             preferred_set = set(preferred)
             column_names = preferred + [column.name for column in matching_columns if column.name not in preferred_set]
             if not column_names:
-                column_names = list(definition.columns)[:12]
-            column_names = column_names[:12]
+                column_names = list(definition.columns)[:_INLINE_COLUMN_LIMIT]
+            column_names = column_names[:_INLINE_COLUMN_LIMIT]
+            if detail == "full":
+                # The explicit escape hatch for a relation whose column list does not fit inline.
+                # One relation at a time, so this stays a bounded response rather than a second copy
+                # of the whole schema.
+                column_names = list(definition.columns)
             columns = [definition.columns[name] for name in column_names]
             relations.append(
                 RelationInfo(
@@ -320,11 +343,8 @@ class Catalog:
                         ColumnInfo(
                             name=column.name,
                             type=column.type,
-                            native_type=column.native_type,
                             nullable=column.nullable,
                             description=column.description,
-                            srid=column.srid,
-                            unit=column.unit,
                         )
                         for column in columns
                     ],
@@ -375,12 +395,61 @@ class Catalog:
             raise QueryValidationError(f"Relation {dataset}.{relation} has no anonymous PostgREST endpoint")
         return definition
 
+    def column_candidates(self, definition: RelationDefinition, column: str) -> list[str]:
+        """Signed column names close to a guess, best first.
+
+        Without this the unknown-column error was a dead end: discover shows at most 12 columns and
+        21 of the 119 relations have more than 40, so a model that guesses wrong has no way to learn
+        the real name except guessing again. That is the loop the eval traces show burning the turn
+        budget, and prose telling the model to check its columns cannot break it.
+
+        Candidates are only ever names that exist in the signed manifest, so a suggestion can never
+        invent a column. An empty list means the model has to look the schema up instead.
+        """
+        guess = column.strip().lower().replace("-", "_")
+        if not guess:
+            return []
+        variants = {guess, guess.rstrip("s"), guess + "s", guess.replace("_", "")}
+        scored: list[tuple[int, str]] = []
+        for name in definition.columns:
+            lowered = name.lower()
+            if lowered in variants:
+                scored.append((0, name))
+                continue
+            shared = _token_overlap(guess, lowered)
+            if shared >= 2 or (shared >= 1 and (guess in lowered or lowered in guess)):
+                scored.append((1 - shared, name))
+        scored.sort()
+        return [name for _, name in scored]
+
     def validate_columns(self, definition: RelationDefinition, columns: list[str]) -> None:
         unknown = sorted({column for column in columns if column not in definition.columns})
-        if unknown:
-            raise QueryValidationError(
-                f"Unknown columns for {definition.dataset}.{definition.name}: {', '.join(unknown)}"
+        if not unknown:
+            return
+        hints = []
+        for column in unknown:
+            candidates = self.column_candidates(definition, column)
+            if not candidates:
+                continue
+            shown = ", ".join(candidates[:3])
+            if len(candidates) == 1:
+                hints.append(f"{column} -> {shown}")
+            else:
+                hints.append(f"{column} -> one of {shown}")
+        suffix = ""
+        if hints:
+            suffix = f". Did you mean {'; '.join(hints)}?"
+        elif len(definition.columns) > _INLINE_COLUMN_LIMIT:
+            suffix = (
+                f". This relation has {len(definition.columns)} columns and discovery lists only"
+                f" {_INLINE_COLUMN_LIMIT}; call benthic_discover with relation="
+                f"'{qualified_relation_name(definition)}' and detail='full' to see them all"
             )
+        else:
+            suffix = ". Call benthic_discover to list the signed columns"
+        raise QueryValidationError(
+            f"Unknown columns for {definition.dataset}.{definition.name}: {', '.join(unknown)}{suffix}"
+        )
 
     def find_join(
         self,
