@@ -230,12 +230,26 @@ systemctl --user restart benthic-mcp.service
 | --- | --- |
 | Answer-delivery rule in the always-on core | **Kept.** 2/5 to 5/5 on the case that failed by turn exhaustion, 5/5 to 4/5 on a case that already passed, net 7/10 to 9/10 over the pair |
 | Per-response answer nudge on complete results | **Reverted.** Worse than the seed on every case measured: 2/5 and 2/5 and 0/5, against 5/5 and 2/5 for the seed |
+| Loop-breaking rule in the always-on core | **Reverted.** 0/6 to 0/8 on the two cases it was written for, both still returning no answer |
+| More turn budget instead of a rule | **No effect worth having.** 4/15 to 5/15 passing when max-turns went from 5 to 9, empty answers 10 to 7 |
 | Twelve accumulated lessons over the answer rule | **No difference.** Both scored 9/10 on the same two cases |
+
+Every failure in the suite is a failure to deliver an answer, not a wrong answer, a bad column, an
+invented join or a missed relation. That is what the kept rule targets, and it moved the worst case
+from 2/5 to 5/5.
 
 The nudge is the informative failure. The same instruction delivered once in the always-on core is
 respected as a standing constraint; the same instruction delivered again on every completed result
 competes with the task and produces premature answers, which is worse than saying nothing. Delivery
 frequency mattered more than delivery reliability.
+
+What remains is characterised rather than fixed. Two tuning cases, `multi_step_0_1` and
+`relation_trap_0_1`, return no answer at all in every repetition. They are not starved of turns, they
+ignore more budget, they ignore an explicit loop-breaking rule, and they call `benthic_playbook`
+before fetching anything. Whatever keeps them looping is not reachable by prose in the tool
+description, and the honest next step is to instrument what those sessions do rather than add more
+guidance. Guidance that does not measure is how the always-on slice filled with restated advice in
+the first place.
 
 The core slice admits three playbook items and the cap is applied twice, in `verify()` by screened
 sentence and again in `render_core()`. The second cap is the binding one, so a seed rule longer
