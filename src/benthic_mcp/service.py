@@ -139,6 +139,7 @@ class BenthicService:
         dataset: str | None = None,
         relation: str | None = None,
         confidence: Literal["high", "medium", "low"] = "medium",
+        source_ref: str = "",
     ) -> ReportResult:
         """Store one author-reported lesson. Shared by the benthic_report tool and the harness
         reflector, so both go through identical validation, grounding, and merge behaviour."""
@@ -165,6 +166,7 @@ class BenthicService:
             question_ref=(
                 hashlib.sha256(question_summary.encode("utf-8")).hexdigest()[:16] if question_summary else ""
             ),
+            source_ref=source_ref.strip()[:120],
             question_summary=question_summary.strip()[:300] if self.settings.trace_include_text else None,
             catalog_fingerprint=runtime.catalog.fingerprint(),
             evidence=self.trace_store.recent_summary(12),

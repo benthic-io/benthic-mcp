@@ -142,6 +142,25 @@ def dedupe(lessons: list[LessonRecord], threshold: float = 0.4) -> list[LessonRe
     return kept
 
 
+def carry_forward(baseline_lessons: list[LessonRecord], store: Any) -> tuple[list[LessonRecord], list[str]]:
+    """Split the current document's lessons into those with evidence and those to re-measure.
+
+    A lesson promoted under the old rules - where eligibility meant grounded and not stale, which
+    says nothing about usefulness - has to be demoted to pending here rather than inherited by the
+    next document, or the document is self-perpetuating: everything in it was placed there by a round
+    that no longer applies, and no measurement can ever reach it.
+    """
+    carried: list[LessonRecord] = []
+    demoted: list[str] = []
+    for record in baseline_lessons:
+        if record.attribution == "fixes":
+            carried.append(record)
+            continue
+        demoted.append(record.lesson_id)
+        store.set_status(record.lesson_id, "pending")
+    return carried, demoted
+
+
 def diff_markdown(baseline: Playbook, candidate: Playbook) -> str:
     lines = ["# Playbook candidate", ""]
     for label, before, after in (
@@ -189,11 +208,18 @@ async def consolidate(args: argparse.Namespace) -> int:
 
     lessons = LessonStore(paths["lessons"])
     traces = TraceStore(settings.cache_dir / "traces", enabled=True)
+
+    # Carry forward only what still has evidence behind it. A lesson promoted under the old rules -
+    # where eligibility meant grounded and not stale, which says nothing about usefulness - is
+    # demoted to pending here rather than inherited by the new document, so the gate gets to measure
+    # it. Without this the document is self-perpetuating: everything in it was put there by a round
+    # that no longer applies.
+    carried, demoted = carry_forward(baseline.lessons, lessons)
     promoted = [
         record.model_copy(update={"status": "active", "catalog_fingerprint": catalog.fingerprint()})
         for record in lessons.candidate_lessons(catalog.fingerprint())
     ]
-    merged = dedupe([*baseline.lessons, *promoted])
+    merged = dedupe([*carried, *promoted])
     candidate = baseline.model_copy(
         update={
             "catalog_fingerprint": catalog.fingerprint(),
@@ -202,6 +228,8 @@ async def consolidate(args: argparse.Namespace) -> int:
             "lessons": merged,
             "stats": {
                 "pending_promoted": len(promoted),
+                "lessons_carried_with_evidence": len(carried),
+                "lessons_demoted_for_measurement": len(demoted),
                 "lessons_total": len(merged),
                 "quarantined": len(lessons.by_status("quarantined")),
             },

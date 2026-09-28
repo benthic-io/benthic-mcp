@@ -26,6 +26,7 @@ def args() -> argparse.Namespace:
         top_p=0.95,
         top_k=20,
         request_timeout=180.0,
+        no_thinking=False,
     )
 
 

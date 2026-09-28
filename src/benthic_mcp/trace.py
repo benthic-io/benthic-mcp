@@ -333,6 +333,9 @@ class TraceStore:
 # Calibrated against the first observed round: identical paraphrases scored 0.37 and 0.71 by
 # containment, unrelated pairs 0.16 to 0.25. 0.35 sits in the gap.
 MERGE_THRESHOLD = 0.35
+# Inheriting a measured verdict is a stronger claim than merging two records that agree, so it
+# needs a stronger resemblance than the merge threshold.
+INHERIT_THRESHOLD = 0.6
 # Two lessons with identical text but different dataset scopes need a higher bar to merge.
 CROSS_DATASET_MERGE_THRESHOLD = 0.45
 
@@ -464,13 +467,70 @@ class LessonStore:
         return [record for record in self.all() if record.status == "active"]
 
     def candidate_lessons(self, catalog_fingerprint: str) -> list[LessonRecord]:
-        """Lessons eligible for accumulation.
+        """Lessons eligible for accumulation: the pending ones that were measured to help.
 
-        Under the cumulative model every pending lesson is eligible once reported. Safety comes
-        from catalog verification in `playbook.verify`, which strips any lesson naming an unknown
-        relation, column, or join, rather than from requiring the mistake to repeat.
+        Eligibility used to be "pending and not stale", which is a correctness check. Grounding a
+        true statement is not the same as it changing behaviour, and the difference is the whole
+        point: a store of grounded advice that demonstrably does nothing is a store of noise that
+        costs prompt tokens on every turn and makes the always-on slice worse.
+
+        A lesson therefore has to be attributed against the case it came from before it can be
+        served. `eval/attribute_pending.py` does the measuring; this only decides eligibility.
         """
-        return list(self.by_status("pending"))
+        return [record for record in self.by_status("pending") if record.attribution == "fixes"]
+
+    def untested(self) -> list[LessonRecord]:
+        """Lessons that have never been measured against a case, whatever their status.
+
+        Deliberately not scoped to pending. A lesson promoted under the old rules - where
+        eligibility meant only "grounded and not stale" - is active with no evidence behind it, and
+        scoping this to pending would let those through untouched forever.
+        """
+        return [record for record in self.all() if record.attribution == "untested"]
+
+    def set_attribution(
+        self,
+        lesson_id: str,
+        verdict: str,
+        *,
+        case_id: str | None = None,
+        reps: int = 0,
+        inherited_from: str | None = None,
+    ) -> LessonRecord | None:
+        """Record what measuring the lesson did, so promotion can require evidence."""
+        record = self.get(lesson_id)
+        if record is None:
+            return None
+        updated = record.model_copy(
+            update={
+                "attribution": verdict,
+                "attribution_case": case_id,
+                "attribution_reps": reps,
+                "attribution_inherited_from": inherited_from,
+                "attributed_at": datetime.now(UTC),
+            }
+        )
+        self.save(updated)
+        return updated
+
+    def inheritable(self, record: LessonRecord, threshold: float = INHERIT_THRESHOLD) -> LessonRecord | None:
+        """A measured lesson that already answers the question this one raises.
+
+        The reflector paraphrases, so the same advice arrives as a new record each round. Measuring
+        each copy would burn an A/B per round per lesson forever. A near-duplicate of something
+        already measured inherits its verdict, and the inheritance is recorded so the evidence is
+        traceable to the lesson that actually gathered it.
+
+        The bar is higher than the merge threshold on purpose. Merging two records that say the same
+        thing is safe; handing one lesson a "fixes" verdict gathered by another is a stronger claim,
+        and containment similarity will happily match two rules that share a function word.
+        """
+        for other in self.all():
+            if other.lesson_id == record.lesson_id or other.attribution == "untested":
+                continue
+            if max(similar(record.lesson, other.lesson), similar(record.symptom, other.symptom)) >= threshold:
+                return other
+        return None
 
     def enforce_cap(self, cap: int) -> list[str]:
         """Trim the active set to `cap`, evicting the least reinforced first. Returns evicted ids."""

@@ -209,6 +209,19 @@ class LessonRecord(StrictModel):
     author_model: str | None = None
     occurrences: int = 1
     status: Literal["pending", "active", "quarantined", "evicted"] = "pending"
+    # Whether this lesson was ever shown to change behaviour, and on what evidence. Accumulation
+    # used to promote on the catalog fingerprint alone, which is a staleness check and says nothing
+    # about usefulness: twelve grounded lessons were measured as worth no more than one hand-written
+    # rule, because grounding a true statement does not make it change what a model does.
+    attribution: Literal["untested", "fixes", "no_effect", "inconclusive", "regresses"] = "untested"
+    attribution_case: str | None = None
+    attribution_reps: int = 0
+    attribution_inherited_from: str | None = None
+    attributed_at: datetime | None = None
+    # Opaque identifier for whatever the reporter knows the lesson came from, e.g. a suite case id.
+    # The server never interprets it, and a voluntary benthic_report has none, which is why a lesson
+    # without it cannot be attributed and so cannot be served.
+    source_ref: str = ""
     catalog_fingerprint: str = ""
     evidence: list[str] = Field(default_factory=list)
     question_ref: str = ""

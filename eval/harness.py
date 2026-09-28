@@ -175,6 +175,8 @@ def run_usage_batch(args: argparse.Namespace, sandbox: Path, playbook: str) -> t
         "--playbook",
         playbook,
     ]
+    if args.no_thinking:
+        command += ["--no-thinking"]
     if args.model:
         command += ["--model", args.model]
     if args.case_filter:
@@ -413,6 +415,9 @@ async def reflect_round(
             dataset=proposal.get("dataset"),
             relation=proposal.get("relation"),
             confidence=proposal.get("confidence", "medium"),
+            # The gate measures a lesson against the case it came from, so the case has to travel
+            # with it. Without this a lesson is unmeasurable and therefore never served.
+            source_ref=usage.case_id,
         )
         await service.close()
         lessons.append(
@@ -428,6 +433,45 @@ async def reflect_round(
             }
         )
     return lessons
+
+
+def run_attribution_gate(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
+    """Measure this round's new lessons before any of them can be served.
+
+    Runs out of process because it drives eval/attrib.py, which itself drives the eval runner. It is
+    the step that makes the loop honest: without it a lesson is promoted on the strength of being
+    grounded and non-stale, and a store of true statements that change nothing is still a store of
+    noise that costs prompt tokens on every turn.
+    """
+    command = [
+        sys.executable,
+        str(ROOT / "eval" / "attribute_pending.py"),
+        "--sandbox",
+        str(sandbox),
+        "--playbook",
+        str(sandbox / "cache" / "playbook.json"),
+        "--attribution-dir",
+        str(sandbox / "attribution"),
+        "--reps",
+        str(args.attribution_reps),
+        "--max-turns",
+        str(args.max_turns),
+        "--llm-url",
+        args.llm_url,
+    ]
+    if args.no_thinking:
+        command += ["--no-thinking"]
+    if args.model:
+        command += ["--model", args.model]
+    completed = subprocess.run(command, cwd=str(ROOT), capture_output=True, text=True, env={**os.environ, **args.env})
+    if completed.returncode != 0:
+        print(completed.stdout[-2000:], file=sys.stderr)
+        print(completed.stderr[-2000:], file=sys.stderr)
+        return {"measured": [], "inherited": [], "error": f"gate exited {completed.returncode}"}
+    try:
+        return json.loads(completed.stdout[completed.stdout.index("{") :])
+    except (ValueError, json.JSONDecodeError):
+        return {"measured": [], "inherited": [], "error": "gate produced no verdict"}
 
 
 def run_guard(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
@@ -501,6 +545,20 @@ async def rounds_async(args: argparse.Namespace) -> int:
                     flush=True,
                 )
             lessons = await reflect_round(args, settings, model, usages, catalog, holdout_ids)
+            gate = (
+                {"measured": [], "inherited": [], "skipped": True}
+                if args.no_gate
+                else run_attribution_gate(args, sandbox)
+            )
+            if gate.get("measured") or gate.get("inherited"):
+                print(
+                    f"  attribution gate: {len(gate['measured'])} measured,"
+                    f" {len(gate['inherited'])} inherited from a measured twin,"
+                    f" {len(gate.get('eligible_after_gate', []))} eligible,"
+                    f" {len(gate.get('rejected', []))} rejected",
+                    flush=True,
+                )
+            served_after_gate, _ = promote_candidate(sandbox)
             consolidation = consolidate_into_sandbox(args, sandbox)
             served_active, served_total = promote_candidate(sandbox)
             guard = {"ran": False, "reason": "core rules unchanged"}
@@ -524,6 +582,7 @@ async def rounds_async(args: argparse.Namespace) -> int:
                 "holdout_cases": sorted(holdout_ids),
                 "rep_agreement": flip,
                 "rediscovery": rediscovery(records),
+                "attribution_gate": gate,
                 "per_case": {usage.case_id: usage.passed for usage in usages},
                 "tool_calls": dict(Counter(tool for usage in usages for tool in usage.tools)),
                 "struggles": dict(Counter(sig["kind"] for usage in usages for sig in usage.signatures)),
@@ -575,6 +634,22 @@ def main() -> None:
     parser.add_argument("--reps", type=int, default=1)
     parser.add_argument("--max-turns", type=int, default=5)
     parser.add_argument("--max-reflections", type=int, default=6)
+    parser.add_argument(
+        "--attribution-reps",
+        type=int,
+        default=3,
+        help="repetitions per arm when measuring a lesson; below 3 an A/B cannot beat noise",
+    )
+    parser.add_argument(
+        "--no-gate",
+        action="store_true",
+        help="skip the attribution gate, which lets unmeasured lessons into the served playbook",
+    )
+    parser.add_argument(
+        "--no-thinking",
+        action="store_true",
+        help="drive the agent with enable_thinking=false, which is how the suite is measured",
+    )
     parser.add_argument("--request-timeout", type=float, default=300.0)
     parser.add_argument("--no-llm", action="store_true", help="skip the consolidator LLM pass")
     parser.add_argument("--case-filter")

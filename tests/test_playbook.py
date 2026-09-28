@@ -276,12 +276,34 @@ def test_lesson_store_keeps_different_datasets_apart(tmp_path) -> None:
     assert len(store.all()) == 2
 
 
-def test_candidate_lessons_include_every_reported_lesson_under_the_cumulative_model(tmp_path) -> None:
-    store = LessonStore(tmp_path / "lessons")
-    store.add(LessonRecord(lesson_id="once", symptom="a", lesson="b", confidence="medium"))
-    store.add(LessonRecord(lesson_id="sure", symptom="c", lesson="d", confidence="high"))
+def test_only_a_lesson_measured_to_help_is_eligible_for_accumulation(tmp_path) -> None:
+    """Grounding is not usefulness, and the difference is the whole gate.
 
-    assert {record.lesson_id for record in store.candidate_lessons("fp")} == {"once", "sure"}
+    Twelve grounded lessons were measured as worth no more than one hand-written rule, because
+    catalog verification says a statement is true and says nothing about whether it changes
+    behaviour. Nothing reaches the served playbook without a measured effect.
+    """
+    store = LessonStore(tmp_path / "lessons")
+    for lesson_id, verdict in (
+        ("fixed", "fixes"),
+        ("unproven", "no_effect"),
+        ("unread", "untested"),
+        ("unclear", "inconclusive"),
+        ("harmful", "regresses"),
+    ):
+        store.add(LessonRecord(lesson_id=lesson_id, symptom=f"sym {lesson_id}", lesson=f"fix {lesson_id}"))
+        store.set_attribution(lesson_id, verdict, case_id="c1", reps=5)
+
+    eligible = {record.lesson_id for record in store.candidate_lessons("fp")}
+
+    assert eligible == {"fixed"}
+
+
+def test_confidence_does_not_substitute_for_evidence(tmp_path) -> None:
+    store = LessonStore(tmp_path / "lessons")
+    store.add(LessonRecord(lesson_id="sure", symptom="a", lesson="b", confidence="high"))
+
+    assert store.candidate_lessons("fp") == []
 
 
 def test_enforce_cap_evicts_the_least_reinforced_active_lessons(tmp_path) -> None:

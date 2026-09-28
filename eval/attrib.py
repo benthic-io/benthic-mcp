@@ -200,6 +200,8 @@ def run_once(args: argparse.Namespace, case_id: str, playbook: Path, outdir: Pat
         args.llm_url,
         "--max-turns",
         str(args.max_turns),
+        "--no-thinking",
+        *(["--no-thinking"] if args.no_thinking else []),
         "--max-tokens",
         str(args.max_tokens),
         "--temperature",
@@ -424,6 +426,11 @@ def main() -> None:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--max-tokens", type=int, default=4000)
     parser.add_argument("--max-turns", type=int, default=6)
+    parser.add_argument(
+        "--no-thinking",
+        action="store_true",
+        help="measure under the same agent the suite runs with; a lesson can behave differently",
+    )
     parser.add_argument("--request-timeout", type=float, default=180.0)
     parser.add_argument("--workdir", default=str(ROOT / "eval" / "attrib"))
     parser.add_argument("--output", default=str(ROOT / "eval" / "attrib" / "report.json"))
