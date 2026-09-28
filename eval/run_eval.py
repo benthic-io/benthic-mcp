@@ -324,6 +324,8 @@ async def run_case(
                 "max_tokens": settings["max_tokens"],
                 "stream": False,
             }
+            if settings.get("no_thinking"):
+                payload["chat_template_kwargs"] = {"enable_thinking": False}
             response = await llm.post(
                 f"{settings['llm_url']}/v1/chat/completions", json=payload, timeout=settings["request_timeout"]
             )
@@ -498,6 +500,7 @@ async def run_async(args: argparse.Namespace) -> None:
         "max_turns": args.max_turns,
         "request_timeout": args.request_timeout,
         "strict": args.strict,
+        "no_thinking": args.no_thinking,
     }
 
     token = None if args.in_process else read_token()
@@ -550,6 +553,7 @@ async def run_async(args: argparse.Namespace) -> None:
                 "playbook": args.playbook or ("http" if not args.in_process else "seed"),
                 "max_turns": args.max_turns,
                 "temperature": args.temperature,
+                "no_thinking": args.no_thinking,
                 "model": model,
             },
             indent=2,
@@ -583,6 +587,15 @@ def main() -> None:
         "--strict",
         action="store_true",
         help="require a real final answer and check the expected relation was actually retrieved",
+    )
+    parser.add_argument(
+        "--no-thinking",
+        action="store_true",
+        help=(
+            "send chat_template_kwargs.enable_thinking=false. The model deliberates before every "
+            "action, which is what the turn budget is spent on; a system prompt asking it not to "
+            "deliberate is ignored, but this is honoured."
+        ),
     )
     parser.add_argument("--reps", type=int, default=1, help="repeat each case N times to expose per-case noise")
     parser.add_argument("--playbook", help="playbook path, or 'seed' / 'none'; requires --in-process")
