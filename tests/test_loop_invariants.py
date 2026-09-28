@@ -19,6 +19,8 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from benthic_mcp.playbook import LessonRecord, Playbook, verify
 from benthic_mcp.seed import seed_playbook
 from benthic_mcp.trace import LessonStore
@@ -514,3 +516,109 @@ def test_a_rule_that_gains_two_cases_is_kept() -> None:
     better = {"per_case": {**base["per_case"], "c0": True, "c1": True}, "median_ms": 20_000}
 
     assert judge(base, better, 2) == "fixes"
+
+
+# --- what may enter the always-on core once no lesson survived --------------------------------
+
+
+def test_only_a_measured_rule_may_join_the_always_on_core() -> None:
+    """A core line is re-sent on every turn, so it has to earn its tokens on every turn.
+
+    Per-case attribution cannot make this call for a general rule: the answer-delivery rule measured
+    0/3 -> 0/3 on the case it was pointed at and is worth two cases across the suite. So the only
+    other admissible source is a suite-level measurement, and a `fixes` verdict.
+    """
+    import core_evidence
+    from consolidate import measured_core
+
+    class FakeCatalog:
+        collections = {"ngopen": {}}
+
+    seed_only = measured_core(FakeCatalog(), Path("/nonexistent/core-evidence.json"))
+    path = Path(tempfile.mkdtemp()) / "core-evidence.json"
+    core_evidence.save(
+        path,
+        [
+            core_evidence.CoreEvidence(text="Measured rule", verdict="fixes", delta=3, reps=1),
+            core_evidence.CoreEvidence(text="Measured harm", verdict="regresses", delta=-3, reps=1),
+            core_evidence.CoreEvidence(text="Measured nothing", verdict="no_effect", delta=0, reps=1),
+        ],
+    )
+
+    rebuilt = measured_core(FakeCatalog(), path)
+
+    assert rebuilt == [*seed_only, "Measured rule"]
+
+
+def test_a_rule_is_never_recorded_twice(tmp_path: Path) -> None:
+    """One entry per rule, not per run.
+
+    A rule that later measures as useless must not survive on the strength of an earlier pass, so a
+    new measurement replaces the old one rather than accumulating beside it.
+    """
+    import core_evidence
+
+    path = tmp_path / "core-evidence.json"
+    report = {
+        "rule": "A rule",
+        "verdict": "fixes",
+        "reps": 1,
+        "delta": 2,
+        "baseline": {"passed": 22, "cases": 25},
+        "candidate": {"passed": 24, "cases": 25, "playbook": "with.json"},
+    }
+    core_evidence.save(path, [core_evidence.from_report(report)])
+    (tmp_path / "first.json").write_text(json.dumps(report), encoding="utf-8")
+    (tmp_path / "second.json").write_text(json.dumps({**report, "verdict": "regresses", "delta": -2}), encoding="utf-8")
+
+    core_evidence.record(path, tmp_path / "first.json")
+    core_evidence.record(path, tmp_path / "second.json")
+
+    assert len(core_evidence.load(path)) == 1
+    assert core_evidence.servable_lines(core_evidence.load(path)) == []
+
+
+def test_a_negative_verdict_is_kept_so_the_rule_is_not_proposed_again() -> None:
+    import core_evidence
+
+    report = {
+        "rule": "Tried this",
+        "verdict": "no_effect",
+        "reps": 1,
+        "delta": 0,
+        "baseline": {"passed": 24, "cases": 25},
+        "candidate": {"passed": 24, "cases": 25, "playbook": "with.json"},
+    }
+
+    entry = core_evidence.from_report(report)
+
+    assert entry.verdict == "no_effect"
+    assert not entry.servable
+
+
+def test_a_corrupt_evidence_file_is_not_read_as_an_empty_one(tmp_path: Path) -> None:
+    """Empty means "nothing has been measured", and that would drop every rule it protects."""
+    import core_evidence
+
+    path = tmp_path / "core-evidence.json"
+    path.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(SystemExit):
+        core_evidence.load(path)
+
+
+def test_a_verdict_about_a_wedged_server_is_never_treated_as_a_fix(tmp_path: Path) -> None:
+    import core_evidence
+
+    path = tmp_path / "core-evidence.json"
+    core_evidence.save(
+        path,
+        [
+            core_evidence.CoreEvidence(text="A", verdict="fixes", delta=9, reps=1),
+            core_evidence.CoreEvidence(
+                text="B", verdict="unreadable: one arm ran more than twice as slowly", delta=9, reps=1
+            ),
+        ],
+    )
+
+    assert core_evidence.servable_lines(core_evidence.load(path)) == ["A"]

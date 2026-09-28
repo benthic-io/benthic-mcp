@@ -19,7 +19,6 @@ decides that a rule should exist.
 """
 
 import json
-from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -49,7 +48,7 @@ class CoreEvidence(BaseModel):
         return self.verdict == SERVABLE
 
     def as_json(self) -> dict[str, Any]:
-        return asdict(self)
+        return self.model_dump()
 
 
 def load(path: Path) -> list[CoreEvidence]:

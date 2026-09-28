@@ -71,7 +71,7 @@ it with `config/llama-mcp.example.json`, which carries a placeholder token and h
 `start-llama-server.sh` is one tuned `llama-server` configuration (the one the numbers below were
 measured under), and `benthic-mcp.service` is a user-level systemd unit.
 
-**Disable thinking on the calling model.** This is the single largest measured effect in the project:
+**Disable thinking on the calling model.** This is the largest effect measured in the project:
 `enable_thinking=false` on the chat completion is worth about two cases in thirty-three, and
 `docs/findings.md` records that asking the model in a system prompt not to deliberate does not work.
 
@@ -99,12 +99,14 @@ is small and noisy: it moves by one or two cases between identical runs.
 
 | configuration | result |
 | --- | --- |
-| baseline, thinking enabled | 28/33 |
-| baseline, `enable_thinking=false` | **30/33** |
-| `enable_thinking=false`, answer-delivery rule removed | 27/33 |
+| seed, thinking enabled | 28/33 |
+| seed, `enable_thinking=false` | **30/33** |
+| answer-delivery rule removed, `enable_thinking=false` | 28/33 |
 | accumulated lessons, served | 0 of 12 earned a place; 1 measured as harmful |
 
-Held-out cases are excluded from reflection, so the headline is not a training number.
+Held-out cases are excluded from reflection, so the headline is not a training number. Every row is
+one repetition, and the suite moves by one or two cases between identical runs, so treat the gaps as
+the size of the effect and not as a precise figure.
 
 Two things are worth stating plainly rather than burying:
 
@@ -113,8 +115,8 @@ Two things are worth stating plainly rather than burying:
   reasoning mode.
 - **The self-improvement loop does not currently learn anything.** It can now measure whether a lesson
   helps, refuse to serve one that does not, and quarantine one that harms, and it does all three
-  correctly. What it cannot yet do is *discover* a rule worth keeping. The one general rule that
-  measurably works is hand-written.
+  correctly. What it cannot yet do is *discover* a rule worth keeping, and the one general rule that
+  might be worth keeping has itself been measured only once.
 
 ## Evaluation
 

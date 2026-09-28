@@ -23,6 +23,9 @@ from typing import Any
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import core_evidence  # noqa: E402
 
 from benthic_mcp.bdp import BdpRepository  # noqa: E402
 from benthic_mcp.catalog import Catalog  # noqa: E402
@@ -142,6 +145,25 @@ def dedupe(lessons: list[LessonRecord], threshold: float = 0.4) -> list[LessonRe
     return kept
 
 
+def measured_core(catalog: Any, evidence_path: Path) -> list[str]:
+    """The always-on core when no lesson survived: the seed rules, plus measured additions.
+
+    Two sources, and only two. The seed rules are hand-written and reviewed. The additions are rules
+    that `eval/attribute_suite.py` measured across the whole tuning split, because a general rule is
+    invisible to per-case attribution: the answer-delivery rule scored 0/3 -> 0/3 on the case it was
+    pointed at and is worth two cases overall.
+
+    Anything else is excluded, including a rule that measured as unhelpful. A core line is re-sent on
+    every turn, so it has to earn its tokens on every turn rather than be nearly right.
+    """
+    collections = getattr(catalog, "collections", None) or {}
+    core = list(seed_playbook(next(iter(collections), "ngopen")).core)
+    for line in core_evidence.servable_lines(core_evidence.load(evidence_path)):
+        if line not in core:
+            core.append(line)
+    return core
+
+
 def carry_forward(baseline_lessons: list[LessonRecord], store: Any) -> tuple[list[LessonRecord], list[str]]:
     """Split the current document's lessons into those with evidence and those to re-measure.
 
@@ -245,16 +267,17 @@ async def consolidate(args: argparse.Namespace) -> int:
             core_changed = core != before
             candidate = candidate.model_copy(update={"core": core, "datasets": datasets})
     else:
-        # Nothing survived the gate, so the core is rebuilt from the seed rules alone.
+        # Nothing survived the gate, so the core is rebuilt from the seed rules plus whatever has a
+        # suite-level measurement behind it.
         #
-        # Carrying it forward was the last way unevidenced advice reached the model: those lines
-        # were distilled from lessons that have just been measured as having no effect, or as
-        # actively harmful, and they are re-sent on every turn. With no eligible lesson to
-        # distil from, the previous document's rules have no source left.
-        seed_core = list(seed_playbook(catalog.collections and next(iter(catalog.collections)) or "ngopen").core)
-        core_changed = list(candidate.core) != seed_core
-        candidate = candidate.model_copy(update={"core": seed_core, "datasets": {}})
-        note = "no lesson survived the gate; core rebuilt from the seed"
+        # Carrying it forward was the last way unevidenced advice reached the model: those lines were
+        # distilled from lessons that have just been measured as having no effect, or as actively
+        # harmful, and they are re-sent on every turn. With no eligible lesson to distil from, the
+        # previous document's rules have no source left.
+        core = measured_core(catalog, args.core_evidence)
+        core_changed = list(candidate.core) != core
+        candidate = candidate.model_copy(update={"core": core, "datasets": {}})
+        note = "no lesson survived the gate; core rebuilt from the seed and suite-measured rules"
 
     verified, report = verify(candidate, catalog)
     verified = verified.model_copy(update={"generator": f"{candidate.generator}; llm={note}"})
@@ -393,6 +416,12 @@ def main() -> None:
     parser.add_argument("--llm-url", default="http://localhost:8081")
     parser.add_argument("--request-timeout", type=float, default=180.0)
     parser.add_argument("--no-llm", action="store_true")
+    parser.add_argument(
+        "--core-evidence",
+        type=Path,
+        default=Path("eval/core-evidence.json"),
+        help="suite-level measurements of candidate always-on rules; only fixes verdicts are served",
+    )
     parser.add_argument("--lesson-cap", type=int, default=40, help="max active lessons; 0 disables")
     args = parser.parse_args()
     settings = Settings.from_env()

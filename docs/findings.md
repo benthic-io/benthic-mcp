@@ -305,24 +305,24 @@ The suite-level comparison is the one that settles it:
 | absent entirely | 28/33 | 22/25 | 6/8 | 3 | 3 |
 | on-demand lesson | 27/33 | 22/25 | 5/8 | 6 | 6 |
 
-The core is worth two cases, and both are runs that previously exhausted their turns now answering. The
-lesson placement is not worth reading as a result: 27 against 28 is inside the spread this suite shows
-between identical runs, all four of its regressions are `maximum turns reached` in the capabilities
-already measured as unstable, and three of the four never called `benthic_playbook` at all, so the
-content was not what misled them. It is fair to say the on-demand store has shown no benefit, and not
-fair to say it has been shown to hurt.
+Neither row is a result on its own, and the honest reading is weaker than the table invites. The core
+row is one repetition of the whole suite, and this suite moves by one or two cases between identical
+runs. The lesson row is weaker still: 27 against 28 is inside that same spread, all four of its
+regressions are `maximum turns reached` in capabilities already measured as unstable, and three of the
+four never called `benthic_playbook` at all, so the content was not what misled them.
+
+A second suite-level run, against a reworded version of the same advice, measured 22/25 with the rule
+and 22/25 without it. It does not refute the row above, because the wording differed, and it does show
+the effect is fragile to phrasing, which is a reason for more caution rather than less. Treat "the
+answer rule is worth two cases" as a hypothesis that has been measured once, not as a finding.
 
 `eval/attribute_suite.py` is the instrument this calls for. It puts a rule in the always-on core, runs
 the tuning split with and without it, and calls it on the aggregate, which is the only measurement
 that can see a distributed effect. It never touches the holdout, refuses a questions file with an empty
 split, and reports the comparison as unreadable if one arm ran more than twice as slowly, because a
 wedged `llama-server` shows up as minutes-long runs rather than as cases that flip. One case cannot
-carry a verdict at this suite size, so `--min-delta` defaults to 2.
-
-It is not cheap, being two full runs of the tuning split, so it belongs to a rule that has already
-survived per-case scrutiny and looks general, not to the ordinary accumulation path. Nothing in the
-loop claims the ability to discover a general rule on its own, and the one general rule that measurably
-works is hand-written.
+carry a verdict at this suite size, so `--min-delta` defaults to 2, and `--record` is what lets a
+passing verdict reach the core through `eval/core-evidence.json`.
 
 ## What the numbers can and cannot say
 

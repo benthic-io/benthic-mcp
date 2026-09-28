@@ -42,6 +42,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "eval"))
 sys.path.insert(0, str(ROOT / "src"))
 
+import core_evidence  # noqa: E402
+
 from benthic_mcp.playbook import load_playbook  # noqa: E402
 from benthic_mcp.seed import seed_playbook  # noqa: E402
 
@@ -187,6 +189,12 @@ def main() -> int:
     parser.add_argument("--no-thinking", action="store_true")
     parser.add_argument("--workdir", default=str(ROOT / "eval" / "attrib-suite"))
     parser.add_argument("--output", default=str(ROOT / "eval" / "attrib-suite" / "report.json"))
+    parser.add_argument(
+        "--record",
+        nargs="?",
+        const=str(ROOT / "eval" / "core-evidence.json"),
+        help="record the verdict in this file, which is what lets a passing rule reach the core",
+    )
     args = parser.parse_args()
     if not args.rule and not args.lesson_id:
         parser.error("pass --rule or --lesson-id")
@@ -212,6 +220,11 @@ def main() -> int:
     report["verdict"] = judge(baseline, candidate, args.min_delta)
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
+    if args.record:
+        # Recording is what lets the verdict change anything. Without it the report is a file nobody
+        # reads and the rule cannot join the always-on core, however well it measured.
+        entry = core_evidence.record(Path(args.record), Path(args.output))
+        print(f"recorded in {args.record} as {entry.verdict} ({entry.baseline} -> {entry.candidate})")
     print(json.dumps({k: v for k, v in report.items() if k not in ("baseline", "candidate")}, indent=2))
     print(f"\n  without: {baseline['passed']}/{baseline['cases']}  with: {candidate['passed']}/{candidate['cases']}")
     return 0 if report["verdict"] == "fixes" else 1
