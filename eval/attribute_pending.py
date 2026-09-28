@@ -33,7 +33,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "eval"))
 sys.path.insert(0, str(ROOT / "src"))
 
-from attrib import without_lesson  # noqa: E402
 from harness import promote_candidate  # noqa: E402
 
 from benthic_mcp.playbook import load_playbook  # noqa: E402
@@ -109,6 +108,65 @@ def import_measured(store: LessonStore, lesson_id: str, verdict: dict[str, Any],
 
 
 def run_gate(args: argparse.Namespace, sandbox: Path, store: LessonStore) -> GateResult:
+    args.attribution_dir = Path(args.attribution_dir)
+    if args.apply_existing:
+        return apply_existing(args, store)
+    return measure_and_apply(args, sandbox, store)
+
+
+def apply_existing(args: argparse.Namespace, store: LessonStore) -> GateResult:
+    """Fold in reports that already exist, without measuring anything again.
+
+    A measurement costs two arms per repetition, so discarding one because the gate mishandled it is
+    expensive. The report is the source of truth; the exit code only says whether one was produced.
+    """
+    result = GateResult([], [], [], [], [], [])
+    for record in list(store.untested()):
+        donor = store.inheritable(record)
+        if donor is not None:
+            apply_inherited(store, record)
+            result.inherited.append(record.lesson_id)
+            continue
+        report = args.attribution_dir / f"{record.lesson_id}.json"
+        if not report.is_file():
+            result.unmeasurable.append(record.lesson_id)
+            continue
+        import_measured(store, record.lesson_id, json.loads(report.read_text(encoding="utf-8")), args.min_reps)
+        result.measured.append(record.lesson_id)
+    return classify(store, result)
+
+
+def classify(store: LessonStore, result: GateResult) -> GateResult:
+    """Split the measured lessons into the ones that may be served and the ones that may not.
+
+    Deliberately status-agnostic, for the same reason untested() is: the lessons that need
+    classifying are mostly *active* ones promoted under the old rules, and scoping this to pending
+    left them exactly where they were.
+    """
+    for record in store.all():
+        if record.status in ("quarantined", "evicted"):
+            continue
+        if record.attribution == "untested":
+            # Never measured, so it is not served and it is not a rejection either. Calling it
+            # active was misleading: active is supposed to mean "has evidence and is served".
+            if record.status == "active":
+                store.set_status(record.lesson_id, "pending")
+            continue
+        if record.attribution == "fixes":
+            result.promoted.append(record.lesson_id)
+            continue
+        result.rejected.append((record.lesson_id, record.attribution))
+        if record.attribution == "regresses":
+            store.set_status(record.lesson_id, "quarantined")
+            result.quarantined.append(record.lesson_id)
+        else:
+            # Measured and not helpful, so it is out of the served document and will not be
+            # re-measured every round.
+            store.set_status(record.lesson_id, "pending")
+    return result
+
+
+def measure_and_apply(args: argparse.Namespace, sandbox: Path, store: LessonStore) -> GateResult:
     result = GateResult([], [], [], [], [], [])
     document, status = load_playbook(Path(args.playbook))
     if document is None:
@@ -128,47 +186,48 @@ def run_gate(args: argparse.Namespace, sandbox: Path, store: LessonStore) -> Gat
             continue
         print(f"  attributing {record.lesson_id} on {case_id}: {record.lesson[:70]}", flush=True)
         report = args.attribution_dir / f"{record.lesson_id}.json"
-        completed = _run_attribution(args, record.lesson_id, case_id, report)
+        completed = _run_attribution(args, store, record, case_id, report)
         if completed is None:
             result.unmeasurable.append(record.lesson_id)
             continue
         import_measured(store, record.lesson_id, json.loads(report.read_text(encoding="utf-8")), args.min_reps)
         result.measured.append(record.lesson_id)
 
-    for lesson_id, verdict in (
-        (r.lesson_id, r.attribution) for r in store.by_status("pending") if r.attribution != "untested"
-    ):
-        if verdict == "fixes":
-            result.promoted.append(lesson_id)
-        else:
-            result.rejected.append((lesson_id, verdict))
-            if verdict == "regresses":
-                store.set_status(lesson_id, "quarantined")
-                result.quarantined.append(lesson_id)
-    return result
+    return classify(store, result)
 
 
-def _run_attribution(args: argparse.Namespace, lesson_id: str, case_id: str, report: Path) -> Path | None:
-    """Drive eval/attrib.py as a subprocess, the same way the harness drives the usage batch."""
+def _run_attribution(
+    args: argparse.Namespace, store: LessonStore, record: Any, case_id: str, report: Path
+) -> Path | None:
+    """Drive eval/attrib.py as a subprocess, the same way the harness drives the usage batch.
+
+    The arm under test has to be the served document *with* the lesson added, because under the gate
+    a lesson is deliberately absent from the document until it has been measured. Passing the
+    document as-is would measure a lesson that is not being served, and the "without" arm would be
+    built by removing something that was never there.
+    """
     import subprocess
 
     document, _ = load_playbook(Path(args.playbook))
     if document is None:
         return None
-    stripped, _, _ = without_lesson(document, lesson_id)
-    workdir = args.attribution_dir / lesson_id
+    served = record.model_copy(update={"status": "active"})
+    with_lesson = document.model_copy(update={"lessons": [*document.lessons, served]})
+
+    workdir = args.attribution_dir / record.lesson_id
     workdir.mkdir(parents=True, exist_ok=True)
-    (workdir / "playbook-without.json").write_text(stripped.to_json(), encoding="utf-8")
+    with_path = workdir / "playbook-with.json"
+    with_path.write_text(with_lesson.to_json(), encoding="utf-8")
 
     command = [
         sys.executable,
         str(ROOT / "eval" / "attrib.py"),
         "--lesson-id",
-        lesson_id,
+        record.lesson_id,
         "--case",
         case_id,
         "--playbook",
-        str(workdir / "playbook-without.json"),
+        str(with_path),
         "--questions",
         args.questions,
         "--reps",
@@ -187,9 +246,10 @@ def _run_attribution(args: argparse.Namespace, lesson_id: str, case_id: str, rep
     if args.model:
         command += ["--model", args.model]
     completed = subprocess.run(command, cwd=str(ROOT), capture_output=True, text=True)
-    if completed.returncode == 2:  # inconclusive: a real result, not a failure
-        pass
-    elif completed.returncode != 0:
+    # attrib's exit code is a verdict, not a status: 0 fixes or no effect, 1 regresses, 2
+    # inconclusive. Treating anything but 2 as a crash discarded exactly the lessons that did the
+    # most harm, and marked them unmeasurable rather than quarantined.
+    if completed.returncode not in (0, 1, 2):
         print(completed.stdout[-1500:], file=sys.stderr)
         print(completed.stderr[-1500:], file=sys.stderr)
         return None
@@ -208,6 +268,11 @@ def main() -> None:
     parser.add_argument("--llm-url", default="http://192.168.10.222:8081")
     parser.add_argument("--model")
     parser.add_argument("--no-thinking", action="store_true", help="match the agent the suite runs with")
+    parser.add_argument(
+        "--apply-existing",
+        action="store_true",
+        help="fold in reports already on disk instead of measuring, so a gate fix costs no LLM time",
+    )
     args = parser.parse_args()
 
     store = LessonStore(Path(args.sandbox) / "cache" / "lessons")

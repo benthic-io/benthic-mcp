@@ -239,10 +239,22 @@ async def consolidate(args: argparse.Namespace) -> int:
     failures = read_eval_failures(args.runs_dir, args.failure_runs)
     note = "skipped"
     core_changed = False
-    if not args.no_llm and (merged or failures):
-        note, core, datasets, before = await llm_pass(args, catalog, merged, failures, candidate)
-        core_changed = core != before
-        candidate = candidate.model_copy(update={"core": core, "datasets": datasets})
+    if merged:
+        if not args.no_llm and (merged or failures):
+            note, core, datasets, before = await llm_pass(args, catalog, merged, failures, candidate)
+            core_changed = core != before
+            candidate = candidate.model_copy(update={"core": core, "datasets": datasets})
+    else:
+        # Nothing survived the gate, so the core is rebuilt from the seed rules alone.
+        #
+        # Carrying it forward was the last way unevidenced advice reached the model: those lines
+        # were distilled from lessons that have just been measured as having no effect, or as
+        # actively harmful, and they are re-sent on every turn. With no eligible lesson to
+        # distil from, the previous document's rules have no source left.
+        seed_core = list(seed_playbook(catalog.collections and next(iter(catalog.collections)) or "ngopen").core)
+        core_changed = list(candidate.core) != seed_core
+        candidate = candidate.model_copy(update={"core": seed_core, "datasets": {}})
+        note = "no lesson survived the gate; core rebuilt from the seed"
 
     verified, report = verify(candidate, catalog)
     verified = verified.model_copy(update={"generator": f"{candidate.generator}; llm={note}"})

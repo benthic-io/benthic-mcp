@@ -342,6 +342,10 @@ def promote_candidate(sandbox: Path) -> tuple[int, int]:
 
     The consolidator marks lessons active inside the document; without this the store still says
     pending, so the next round would try to re-promote them and the active count would read zero.
+
+    Only a lesson the gate found evidence for is marked active. Syncing unconditionally used to
+    resurrect every quarantined and rejected lesson the moment the document was promoted, which
+    silently undid the gate: one lesson measured as actively harmful went back to being served.
     """
     candidate = sandbox / "cache" / "playbook-candidate.json"
     served = sandbox / "cache" / "playbook.json"
@@ -350,6 +354,8 @@ def promote_candidate(sandbox: Path) -> tuple[int, int]:
     store = LessonStore(sandbox / "cache" / "lessons")
     active = 0
     for record in document.lessons:
+        if record.attribution != "fixes":
+            continue
         if store.set_status(record.lesson_id, "active") is not None:
             active += 1
     return active, len(document.lessons)
