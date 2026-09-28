@@ -228,12 +228,41 @@ systemctl --user restart benthic-mcp.service
 
 | change | result |
 | --- | --- |
+| **Disabling the model's reasoning** (`chat_template_kwargs.enable_thinking=false`) | **Kept, and the largest single effect measured.** `relation_trap_0_1` 0/4 to 3/4, the case that had failed in every run of this project. Suite 28/33 to 30/33 with zero regressions, completion tokens -68%, prompt tokens -19% |
 | Answer-delivery rule in the always-on core | **Kept.** 2/5 to 5/5 on the case that failed by turn exhaustion, 5/5 to 4/5 on a case that already passed, net 7/10 to 9/10 over the pair |
+| Unknown-column candidates plus `detail='full'` | **Kept.** Adopted 25 times in eight runs; the error message demonstrably recovered a session that had guessed five wrong columns |
+| Path lookup on `benthic_playbook`, `benthic_join` self-resolving | **Kept.** Discovery before first use 5.0 to 3.0 on one stuck case; the common join is one call instead of search-then-join |
+| Capping `max_tokens` instead | **No effect.** 0/4, 0/3 and 0/3 at 4096, 2048 and 1024, and `finish_reason: length` got *more* common as the budget fell |
+| A system prompt telling the model to answer immediately | **Ignored outright.** Reasoning came back at 1,225 characters against 1,163 for no system prompt at all |
 | Per-response answer nudge on complete results | **Reverted.** Worse than the seed on every case measured: 2/5 and 2/5 and 0/5, against 5/5 and 2/5 for the seed |
 | Loop-breaking rule in the always-on core | **Reverted.** 0/6 to 0/8 on the two cases it was written for, both still returning no answer |
 | More turn budget instead of a rule | **No effect worth having.** 4/15 to 5/15 passing when max-turns went from 5 to 9, empty answers 10 to 7 |
 | Dropping read-nothing schema metadata from responses | **Reverted.** A 31% cut to discovery responses moved the whole run's prompt tokens 0.6%, and tuning accuracy fell 23/25 to 18/25 |
 | Twelve accumulated lessons over the answer rule | **No difference.** Both scored 9/10 on the same two cases |
+
+### The two hard cases were the model, not the server
+
+Five server-side interventions had failed to move `multi_step_0_1` and `relation_trap_0_1`, so the
+only thing left to vary was the model. It paid immediately.
+
+| | thinking on | thinking off |
+| --- | --- | --- |
+| `relation_trap_0_1` | 0/4 | **3/4** |
+| `multi_step_0_1` discovery before first use | 3.0 | **1.5** |
+| `multi_step_0_1` completion tokens | 5,953 | **1,190** |
+| golden suite, regression check | 24/24 | **12/12** |
+
+Capping `max_tokens` does not work, and its failure is the clue: `finish_reason: length` became
+*more* common as the budget fell, because the model was not near the end of a long answer - it was
+looping through calls and being truncated earlier. A system prompt is ignored outright. Only the
+chat-template switch works, and it works completely, taking reasoning to zero characters.
+
+Across the full suite that is 30/33 against a 28/33 baseline, two cases gained and none lost,
+completion tokens down from 63,737 to 20,461, prompt tokens down 19%, empty answers 5 to 3, and
+discovery before first use roughly halved.
+
+It is a **client-side** option, so this is a deployment instruction for whatever calls the MCP, not
+a server fix. `llama-server` cannot set it for its callers.
 
 Every failure in the suite is a failure to deliver an answer, not a wrong answer, a bad column, an
 invented join or a missed relation. That is what the kept rule targets, and it moved the worst case
@@ -312,9 +341,10 @@ repetitions, and the traces say why. Both call `benthic_discover` five or six ti
 repeatedly and does not act on it, in runs that burn 8,773 completion tokens reasoning and end on
 `finish_reason: length`.
 
-So these two are not addressable from the server alone. They need an agent-side rule, a different
-model, or a non-reasoning mode, and the honest thing is to say so rather than keep adding guidance
-that does not measure. Four separate interventions have now failed to move them.
+So these two were not addressable from the server. Four server-side interventions failed to move
+them, and the fix turned out to be the model's reasoning mode: with `enable_thinking=false` one of
+them goes 0/4 to 3/4. What was needed was not better advice but a model that answers instead of
+deliberating.
 
 The core slice admits three playbook items and the cap is applied twice, in `verify()` by screened
 sentence and again in `render_core()`. The second cap is the binding one, so a seed rule longer
