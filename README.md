@@ -401,6 +401,78 @@ regression is called only when the aggregate drops and at least two cases lose g
 collapses outright. On the first run the whole verdict rested on two single-rep flips, which is the
 noise level this check exists not to over-read.
 
+### Requiring evidence before a lesson can be served
+
+Promotion used to require only that a lesson was `pending` and its catalog fingerprint matched. That is
+a correctness check: it says the statement names things that exist, not that it changes what a model
+does. Nothing in the loop ever asked the second question.
+
+`eval/attribute_pending.py` now measures a lesson against the case it came from, alternating repetitions
+between the two arms, and records the verdict on the lesson itself. A lesson is served only when that
+verdict is `fixes`, and the store keeps the case, the repetition count, and the lesson that donated the
+evidence, so any served line can be traced to the measurement that put it there.
+
+Running the gate against the twelve lessons that accumulation had actually produced:
+
+| verdict | count | what it means |
+| --- | --- | --- |
+| fixes | 0 | |
+| regresses | 1 | 3/3 -> 1/3, quarantined |
+| no failure to fix | 3 | source case already passes, so the lesson was never given a chance |
+| inconclusive | 2 | |
+| unmeasurable | 6 | four had no source case, two came from the holdout |
+
+So accumulation was not working: nothing in twelve lessons earned a place, and one made a case
+measurably worse. The served document drops from twelve lessons and eight distilled core lines to zero
+lessons and the three seed rules.
+
+The verdict that took the most care to get right is the difference between *no effect* and *nothing
+left to fix*. A lesson learned from a case that something else has since fixed cannot be judged there,
+because there is no failure for it to remove, and calling that "no effect" throws away good advice. The
+answer-delivery rule was discarded that way once. A saturated case is now reported as its own verdict,
+and a stalled lesson is re-measured against a case that still fails. Regression is still checked first,
+so a lesson that breaks a passing case is never mistaken for an untestable one.
+
+Four holes in the gate were found by running it rather than reading it, and each is a way a
+self-modifying loop can be talked into serving something it should not:
+
+- the gate only looked at `pending` lessons, while the twelve were `active`
+- consolidation carried the document forward, so it was self-perpetuating and no measurement could
+  ever reach what was already in it
+- promotion marked every lesson in the document active, silently undoing the gate's quarantine
+- the arm under test was built by removing a lesson that is, correctly, absent from the document
+  until it has been measured
+
+`tests/test_loop_invariants.py` states these as properties rather than examples: nothing is served
+without a measured effect, a verdict is auditable, inherited evidence names its donor, an unrelated
+lesson inherits nothing, the document cannot self-perpetuate, the core is rebuilt from the seed when
+nothing survives, and a lesson the catalog rejects is dropped even with evidence.
+
+### The ceiling: per-case attribution cannot see a general rule
+
+The answer-delivery rule is the clearest thing in the store, and the gate still could not promote it.
+Re-pointed at the one tuning case that still fails, it measured 0/3 -> 0/3. Yet it is independently
+worth two or three cases: removing it from the always-on core drops the suite from 30/33 to 27/33 with
+thinking off, and from 28/33 to 26/33 with it on.
+
+Both measurements are correct and they are not in conflict. A general behavioural nudge helps
+`sequential_0`, `sequential_1`, `sequential_2`, `rpc_districts_in_bbox_limits` and a SAM evidence
+case, one case each, and does nothing in particular on any single one of them. Attributing a lesson
+against the case it came from is therefore biased against exactly the advice most likely to be worth
+keeping.
+
+The same question was asked three ways, and the first two answers were wrong for instructive reasons.
+On a single case that already passed 5/5 with no rule at all, all three placements scored 5/5, which
+says nothing: a saturated case cannot detect anything. Repeating it on a case that genuinely fails,
+the on-demand channel was confirmed to be delivered, since `benthic_playbook` was called 4/4 and the
+case still failed, so the channel is not the blocker either. Resolving it at suite level is the
+measurement quoted above.
+
+The consequence for the loop is a limit, not a fix: per-case attribution can promote case-specific
+lessons, and needs a suite-level measurement to promote general ones. A suite-level A/B costs two
+full runs, so it is not something to do per lesson per round. Nothing in the loop claims the ability
+to discover a general rule on its own, and the one general rule that measurably works is hand-written.
+
 ### What the numbers can and cannot say
 
 Holdout cases are excluded from reflection, so the round trend describes cases the playbook was not
@@ -427,7 +499,7 @@ are the result; the verdict is a label over them and carries no weight on a case
 repetitions on its own. A sub-threshold difference at five reps is always inconclusive, because any
 non-zero difference leaves one arm mixing.
 
-`eval/golden/questions.json` is the harness's check on itself: five hand-verified cases drawn from
+`eval/golden/questions.json` is the harness's check on itself: four hand-verified cases drawn from
 the signed catalog and live calls, which must pass with the seed playbook alone. A failure there is
 a bug in the harness, the scorer, or the tool surface, and is never a result about the playbook. The
 generator refuses to write into that directory, and `tests/test_golden.py` re-checks the expected

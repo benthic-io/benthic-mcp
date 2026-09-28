@@ -15,12 +15,17 @@ than as examples, because each one was a way for the system to be wrong:
 """
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
 from benthic_mcp.playbook import LessonRecord, Playbook, verify
 from benthic_mcp.seed import seed_playbook
 from benthic_mcp.trace import LessonStore
+
+
+def tmp_path_of() -> Path:
+    return Path(tempfile.mkdtemp())
 
 
 def fetched(store: LessonStore, lesson_id: str) -> LessonRecord:
@@ -311,3 +316,109 @@ def test_an_evidenced_lesson_keeps_its_status_across_a_round(tmp_path: Path) -> 
     carry_forward(BASELINE_LESSONS, store)
 
     assert fetched(store, "evidenced").status == "active"
+
+
+def test_a_lesson_whose_case_no_longer_fails_is_not_rejected(tmp_path: Path) -> None:
+    """ "No effect" and "nothing left to fix" must stay distinct.
+
+    The answer-delivery rule was measured as having no effect on the case it came from, when that
+    case already passed every repetition because the client had stopped deliberating. The rule was
+    fine; the case had nothing left to fail. Rejecting it would have discarded the one lesson in the
+    store that independently measures as worth two or three cases.
+    """
+    from attribute_pending import GateResult, classify
+
+    store = store_with(
+        tmp_path,
+        [
+            lesson("stale", attribution="no_failure", status="active"),
+            lesson("harmful", attribution="regresses", status="active"),
+        ],
+    )
+    result = classify(store, GateResult([], [], [], [], [], [], []))
+
+    assert result.untestable == ["stale"]
+    assert [lesson_id for lesson_id, _ in result.rejected] == ["harmful"]
+    assert fetched(store, "stale").status == "pending"
+
+
+def test_an_untestable_lesson_is_not_served_and_not_quarantined(tmp_path: Path) -> None:
+    from attribute_pending import GateResult, classify
+
+    store = store_with(tmp_path, [lesson("stale", attribution="no_failure", status="active")])
+    result = classify(store, GateResult([], [], [], [], [], [], []))
+
+    assert store.candidate_lessons("fp") == []
+    assert result.quarantined == []
+    assert result.rejected == []
+
+
+# --- re-pointing a lesson whose own case no longer reproduces -------------------------------
+
+
+def test_a_lesson_is_re_measured_on_a_case_that_still_fails() -> None:
+    """The one good lesson in the store was blocked forever without this.
+
+    Its source case passes every repetition because the client stopped deliberating, so there is
+    no failure there for it to remove. A substitute that does still fail gives it the chance it was
+    denied.
+    """
+    from attribute_pending import substitute_cases
+
+    record = lesson("stale", attribution="no_failure", attribution_case="join_now_passes")
+
+    chosen = substitute_cases(record, ["multi_step_0_1_usaspending_irs_ng"], set(), 2)
+
+    assert chosen == ["multi_step_0_1_usaspending_irs_ng"]
+
+
+def test_a_substitute_is_never_the_holdout() -> None:
+    from attribute_pending import substitute_cases
+
+    record = lesson("stale", attribution="no_failure", attribution_case="c1")
+
+    assert (
+        substitute_cases(record, ["multi_step_0_0_usaspending_irs_ng"], {"multi_step_0_0_usaspending_irs_ng"}, 2) == []
+    )
+
+
+def test_a_lesson_is_never_re_measured_on_the_same_case_twice() -> None:
+    # Re-running the same saturated case would reproduce the same unreadable result, at full A/B
+    # cost, forever.
+    from attribute_pending import substitute_cases
+
+    record = lesson("stale", attribution="no_failure", attribution_case="c1")
+
+    assert substitute_cases(record, ["c1", "c2"], set(), 2) == ["c2"]
+
+
+def test_substitution_is_bounded_because_each_attempt_is_a_full_ab() -> None:
+    from attribute_pending import substitute_cases
+
+    record = lesson("stale", attribution="no_failure", attribution_case="c1")
+
+    assert substitute_cases(record, ["c2", "c3", "c4", "c5"], set(), 2) == ["c2", "c3"]
+
+
+def test_a_lesson_with_no_failing_case_stays_untestable() -> None:
+    from attribute_pending import substitute_cases
+
+    record = lesson("stale", attribution="no_failure", attribution_case="c1")
+
+    assert substitute_cases(record, [], set(), 2) == []
+
+
+def test_a_stalled_lesson_is_the_only_thing_asked_for_a_substitute() -> None:
+    # A lesson that was never measured needs its own case, and one already measured and rejected
+    # must not be re-measured every round.
+    store = store_with(
+        tmp_path_of(),
+        [
+            lesson("never", status="pending"),
+            lesson("stalled", attribution="no_failure", status="pending"),
+            lesson("rejected", attribution="no_effect", status="pending"),
+            lesson("harmful", attribution="regresses", status="quarantined"),
+        ],
+    )
+
+    assert [record.lesson_id for record in store.stalled()] == ["stalled"]

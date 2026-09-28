@@ -441,13 +441,18 @@ async def reflect_round(
     return lessons
 
 
-def run_attribution_gate(args: argparse.Namespace, sandbox: Path) -> dict[str, Any]:
+def run_attribution_gate(args: argparse.Namespace, sandbox: Path, failing: list[str] | None = None) -> dict[str, Any]:
     """Measure this round's new lessons before any of them can be served.
 
     Runs out of process because it drives eval/attrib.py, which itself drives the eval runner. It is
     the step that makes the loop honest: without it a lesson is promoted on the strength of being
     grounded and non-stale, and a store of true statements that change nothing is still a store of
     noise that costs prompt tokens on every turn.
+
+    `failing` is the tuning cases that still fail this round. A lesson whose own source case has
+    since been fixed elsewhere cannot be judged there - there is no failure left to remove - so it is
+    re-measured against one of these instead. Without that the one lesson in the store that
+    independently measures as worth two or three cases can never be promoted.
     """
     command = [
         sys.executable,
@@ -465,6 +470,8 @@ def run_attribution_gate(args: argparse.Namespace, sandbox: Path) -> dict[str, A
         "--llm-url",
         args.llm_url,
     ]
+    if failing:
+        command += ["--failing", ",".join(sorted(set(failing)))]
     if args.no_thinking:
         command += ["--no-thinking"]
     if args.model:
@@ -554,13 +561,14 @@ async def rounds_async(args: argparse.Namespace) -> int:
             gate = (
                 {"measured": [], "inherited": [], "skipped": True}
                 if args.no_gate
-                else run_attribution_gate(args, sandbox)
+                else run_attribution_gate(args, sandbox, [u.case_id for u in tuning if not u.passed])
             )
             if gate.get("measured") or gate.get("inherited"):
                 print(
                     f"  attribution gate: {len(gate['measured'])} measured,"
                     f" {len(gate['inherited'])} inherited from a measured twin,"
                     f" {len(gate.get('eligible_after_gate', []))} eligible,"
+                    f" {len(gate.get('untestable', []))} untestable,"
                     f" {len(gate.get('rejected', []))} rejected",
                     flush=True,
                 )

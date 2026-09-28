@@ -213,7 +213,7 @@ class LessonRecord(StrictModel):
     # used to promote on the catalog fingerprint alone, which is a staleness check and says nothing
     # about usefulness: twelve grounded lessons were measured as worth no more than one hand-written
     # rule, because grounding a true statement does not make it change what a model does.
-    attribution: Literal["untested", "fixes", "no_effect", "inconclusive", "regresses"] = "untested"
+    attribution: Literal["untested", "fixes", "no_effect", "no_failure", "inconclusive", "regresses"] = "untested"
     attribution_case: str | None = None
     attribution_reps: int = 0
     attribution_inherited_from: str | None = None

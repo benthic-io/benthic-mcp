@@ -48,6 +48,7 @@ class GateResult:
     measured: list[str]
     inherited: list[str]
     promoted: list[str]
+    untestable: list[str]
     rejected: list[tuple[str, str]]
     quarantined: list[str]
     unmeasurable: list[str]
@@ -57,6 +58,7 @@ class GateResult:
             "measured": self.measured,
             "inherited": self.inherited,
             "eligible_after_gate": self.promoted,
+            "untestable": self.untestable,
             "rejected": [{"lesson_id": lesson_id, "verdict": verdict} for lesson_id, verdict in self.rejected],
             "quarantined": self.quarantined,
             "unmeasurable": self.unmeasurable,
@@ -66,6 +68,13 @@ class GateResult:
 def source_case(record: Any) -> str | None:
     """The case id a lesson was learned from, if the reporter supplied one."""
     return record.source_ref or None
+
+
+def fetched(store: LessonStore, lesson_id: str) -> Any:
+    record = store.get(lesson_id)
+    if record is None:
+        raise KeyError(lesson_id)
+    return record
 
 
 def holdout_cases(questions_path: str) -> set[str]:
@@ -120,7 +129,7 @@ def apply_existing(args: argparse.Namespace, store: LessonStore) -> GateResult:
     A measurement costs two arms per repetition, so discarding one because the gate mishandled it is
     expensive. The report is the source of truth; the exit code only says whether one was produced.
     """
-    result = GateResult([], [], [], [], [], [])
+    result = GateResult([], [], [], [], [], [], [])
     for record in list(store.untested()):
         donor = store.inheritable(record)
         if donor is not None:
@@ -155,6 +164,14 @@ def classify(store: LessonStore, result: GateResult) -> GateResult:
         if record.attribution == "fixes":
             result.promoted.append(record.lesson_id)
             continue
+        if record.attribution == "no_failure":
+            # The case the lesson came from passes without it, so the lesson was never given a
+            # chance to show anything. It is not rejected and it is not re-measured against the
+            # same case; it waits for one that still reproduces. Demoted rather than left active,
+            # because active is supposed to mean "has evidence and is served".
+            result.untestable.append(record.lesson_id)
+            store.set_status(record.lesson_id, "pending")
+            continue
         result.rejected.append((record.lesson_id, record.attribution))
         if record.attribution == "regresses":
             store.set_status(record.lesson_id, "quarantined")
@@ -166,15 +183,40 @@ def classify(store: LessonStore, result: GateResult) -> GateResult:
     return result
 
 
+def substitute_cases(record: Any, failing: list[str], holdout: set[str], limit: int) -> list[str]:
+    """Cases to try when a lesson's own source case no longer reproduces.
+
+    A lesson learned from a case that something else has since fixed - most often the client no
+    longer deliberating - cannot be judged there, because there is no failure left to remove. This
+    gives it the chance it was denied. The without arm is run on the substitute too, so one that is
+    not actually broken is caught rather than credited, and holdout cases are never used.
+    """
+    already_tried = {record.attribution_case} if record.attribution_case else set()
+    return [case for case in failing if case not in holdout and case not in already_tried][:limit]
+
+
+def measure_one(args: argparse.Namespace, store: LessonStore, record: Any, case_id: str, result: GateResult) -> bool:
+    """Measure a lesson on one case and record the verdict. False if there is nothing to record."""
+    print(f"  attributing {record.lesson_id} on {case_id}: {record.lesson[:70]}", flush=True)
+    report = args.attribution_dir / f"{record.lesson_id}.json"
+    completed = _run_attribution(args, store, record, case_id, report)
+    if completed is None:
+        result.unmeasurable.append(record.lesson_id)
+        return False
+    import_measured(store, record.lesson_id, json.loads(report.read_text(encoding="utf-8")), args.min_reps)
+    result.measured.append(record.lesson_id)
+    return True
+
+
 def measure_and_apply(args: argparse.Namespace, sandbox: Path, store: LessonStore) -> GateResult:
-    result = GateResult([], [], [], [], [], [])
+    result = GateResult([], [], [], [], [], [], [])
     document, status = load_playbook(Path(args.playbook))
     if document is None:
         print(f"{args.playbook} did not load ({status}); nothing to measure against", file=sys.stderr)
         return result
     holdout = holdout_cases(args.questions)
 
-    for record in store.untested():
+    for record in list(store.untested()):
         if apply_inherited(store, record):
             result.inherited.append(record.lesson_id)
             continue
@@ -184,14 +226,14 @@ def measure_and_apply(args: argparse.Namespace, sandbox: Path, store: LessonStor
             # the lesson stays untested and therefore unserved, which is the correct outcome.
             result.unmeasurable.append(record.lesson_id)
             continue
-        print(f"  attributing {record.lesson_id} on {case_id}: {record.lesson[:70]}", flush=True)
-        report = args.attribution_dir / f"{record.lesson_id}.json"
-        completed = _run_attribution(args, store, record, case_id, report)
-        if completed is None:
-            result.unmeasurable.append(record.lesson_id)
-            continue
-        import_measured(store, record.lesson_id, json.loads(report.read_text(encoding="utf-8")), args.min_reps)
-        result.measured.append(record.lesson_id)
+        measure_one(args, store, record, case_id, result)
+
+    for record in store.stalled():
+        for case_id in substitute_cases(record, args.failing, holdout, args.substitute_limit):
+            if not measure_one(args, store, record, case_id, result):
+                break
+            if fetched(store, record.lesson_id).attribution != "no_failure":
+                break
 
     return classify(store, result)
 
@@ -273,7 +315,19 @@ def main() -> None:
         action="store_true",
         help="fold in reports already on disk instead of measuring, so a gate fix costs no LLM time",
     )
+    parser.add_argument(
+        "--failing",
+        default="",
+        help="comma-separated tuning cases that currently fail, used to re-measure a lesson whose own case no longer reproduces",
+    )
+    parser.add_argument(
+        "--substitute-limit",
+        type=int,
+        default=2,
+        help="substitute cases to try per stalled lesson; each is a full A/B",
+    )
     args = parser.parse_args()
+    args.failing = [case for case in args.failing.split(",") if case]
 
     store = LessonStore(Path(args.sandbox) / "cache" / "lessons")
     result = run_gate(args, Path(args.sandbox), store)

@@ -135,14 +135,24 @@ def judge(without: list[bool], with_lesson: list[bool], min_delta: int) -> dict[
     would throw away the partial effects this exists to find. A one-rep difference on a case that
     already flips on its own is the opposite case, and that is the one the guard mistook for a
     regression.
+
+    "No effect" and "nothing left to fix" are different verdicts, and conflating them is how a good
+    lesson gets thrown away. A source case that already passes every repetition has no failure left
+    for the lesson to remove, which says nothing about the lesson: the case was fixed by something
+    else, usually the client, so the lesson needs a case that still reproduces.
     """
     lost, gained = sum(without), sum(with_lesson)
     delta = gained - lost
     unstable = flaky(without) or flaky(with_lesson)
-    if delta >= min_delta:
-        verdict = "fixes"
-    elif delta <= -min_delta:
+    if delta <= -min_delta:
+        # Checked before the saturated case below: a lesson that makes a passing case fail is worse
+        # than useless, and that is worth knowing even though the case was already passing.
         verdict = "regresses"
+    elif lost == len(without) and not unstable:
+        # The case passes without the lesson, so there is no failure for it to remove.
+        verdict = "no_failure"
+    elif delta >= min_delta:
+        verdict = "fixes"
     else:
         verdict = "inconclusive" if unstable else "no_effect"
     return {

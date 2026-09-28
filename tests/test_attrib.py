@@ -182,11 +182,30 @@ def test_a_real_distillation_of_the_lesson_is_still_recognised() -> None:
     assert core_lines_from([record], distilled) == distilled
 
 
-def test_identical_arm_counts_are_reported_as_no_effect() -> None:
+def test_a_saturated_case_cannot_show_an_effect_either_way() -> None:
+    """ "No effect" and "nothing left to fix" are different, and conflating them throws good lessons away.
+
+    The answer-delivery rule was measured as "no effect" on the case it came from, when that case
+    already passed every repetition because the client had stopped deliberating. The rule was fine;
+    the case had nothing left to fail.
+    """
     outcome = judge([True] * 5, [True] * 5, min_delta=2)
 
-    assert outcome["verdict"] == "no_effect"
-    assert outcome["unstable"] is False
+    assert outcome["verdict"] == "no_failure"
+    assert outcome["delta"] == 0
+
+
+def test_a_lesson_that_breaks_a_passing_case_is_still_a_regression() -> None:
+    # Checked before the saturated case: this is worse than useless, so it must not be reported as
+    # "there was no failure to fix".
+    assert judge([True] * 5, [False] * 5, min_delta=2)["verdict"] == "regresses"
+
+
+def test_a_saturated_case_that_the_lesson_does_not_change_is_not_no_failure() -> None:
+    # The case passes without the lesson but not reliably, so there was a failure to measure.
+    assert (
+        judge([True, True, True, False, True], [True, True, True, True, True], min_delta=2)["verdict"] != "no_failure"
+    )
 
 
 def test_a_one_rep_difference_is_never_readable_at_five_reps() -> None:

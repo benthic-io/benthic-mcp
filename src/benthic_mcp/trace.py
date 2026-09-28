@@ -488,6 +488,19 @@ class LessonStore:
         """
         return [record for record in self.all() if record.attribution == "untested"]
 
+    def stalled(self) -> list[LessonRecord]:
+        """Lessons whose source case no longer fails, so they need a different one.
+
+        Distinct from untested() because these have been measured and the measurement was
+        unreadable, not absent. Re-running them against the same case would reproduce the same
+        unreadable result, so they need a substitute.
+        """
+        return [
+            record
+            for record in self.all()
+            if record.attribution == "no_failure" and record.status not in ("quarantined", "evicted")
+        ]
+
     def set_attribution(
         self,
         lesson_id: str,
