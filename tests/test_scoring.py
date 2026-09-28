@@ -328,3 +328,68 @@ def test_a_batch_with_no_recorded_holdout_falls_back_to_computing_one() -> None:
     cases = [{"id": "a", "capability": "paired"}, {"id": "b", "capability": "paired"}]
 
     assert {case["id"] for case in select_cases(cases, None, None, "holdout")} == {"a"}
+
+
+def test_a_case_with_one_required_tool_passes_when_that_tool_was_called() -> None:
+    from run_eval import score_case
+
+    case = {
+        "capability": "unsigned_join_rejection",
+        "expected": {"must_reject": True},
+        "required_tools": ["benthic_discover"],
+    }
+    events = [{"name": "benthic_discover", "ok": True, "arguments": {}}]
+
+    assert score_case(case, events, "No signed path exists.", strict=True)["tool_requirement"] is True
+
+
+def test_alternate_routes_accept_either_way_of_answering() -> None:
+    # The server can establish that a path does not exist by searching or by asking the route
+    # lookup, and pinning one of them fails a correct answer for using the other.
+    from run_eval import score_case
+
+    case = {
+        "capability": "unsigned_join_rejection",
+        "expected": {"must_reject": True},
+        "required_tools": [],
+        "required_tools_any": [["benthic_discover"], ["benthic_playbook"]],
+    }
+
+    by_search = score_case(
+        case, [{"name": "benthic_discover", "ok": True, "arguments": {}}], "No signed path.", strict=True
+    )
+    by_lookup = score_case(
+        case, [{"name": "benthic_playbook", "ok": True, "arguments": {}}], "No signed path.", strict=True
+    )
+    by_nothing = score_case(case, [], "No signed path.", strict=True)
+
+    assert by_search["tool_requirement"] is True
+    assert by_lookup["tool_requirement"] is True
+    assert by_nothing["tool_requirement"] is False
+
+
+def test_a_route_needing_two_tools_is_only_satisfied_by_both() -> None:
+    from run_eval import score_case
+
+    case = {
+        "capability": "unsigned_join_rejection",
+        "expected": {"must_reject": True},
+        "required_tools": [],
+        "required_tools_any": [["benthic_discover", "benthic_playbook"], ["benthic_rpc"]],
+    }
+
+    one_of_two = score_case(
+        case, [{"name": "benthic_discover", "ok": True, "arguments": {}}], "No signed path.", strict=True
+    )
+    both = score_case(
+        case,
+        [
+            {"name": "benthic_discover", "ok": True, "arguments": {}},
+            {"name": "benthic_playbook", "ok": True, "arguments": {}},
+        ],
+        "No signed path.",
+        strict=True,
+    )
+
+    assert one_of_two["tool_requirement"] is False
+    assert both["tool_requirement"] is True

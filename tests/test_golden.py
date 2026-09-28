@@ -61,8 +61,17 @@ def test_golden_ids_are_namespaced() -> None:
 
 def test_every_golden_case_only_requires_real_tools() -> None:
     for item in cases():
-        assert item["required_tools"], item["id"]
+        assert item["required_tools"] or item.get("required_tools_any"), item["id"]
         assert set(item["required_tools"]) <= KNOWN_TOOLS, item["id"]
+        for route in item.get("required_tools_any", []):
+            assert route and set(route) <= KNOWN_TOOLS, item["id"]
+
+
+def test_a_case_with_alternate_routes_pins_at_least_two_of_them() -> None:
+    # One route is just a requirement with extra syntax, and would hide which tools are acceptable.
+    for item in cases():
+        if item.get("required_tools_any"):
+            assert len(item["required_tools_any"]) >= 2, item["id"]
 
 
 def test_every_golden_case_states_what_it_expects() -> None:

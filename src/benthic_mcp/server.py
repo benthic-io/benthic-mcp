@@ -238,8 +238,8 @@ async def discover(
 
     A summary lists up to 12 columns per relation, so a wide relation is only partly shown and
     columns_truncated says so. To list every column of one relation, pass relation='dataset.relation'
-    with detail='full'. Prefer guessing the column over calling this: benthic_query reports near-miss
-    signed column names when a guess is wrong.
+    with detail='full'. Read the columns from here rather than guessing them: benthic_query will
+    report a near-miss signed name for a wrong guess, but that is a recovery step, not a plan.
     """
     try:
         service = await get_service()

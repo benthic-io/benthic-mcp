@@ -253,6 +253,48 @@ carrying weight the model uses when choosing a type or a spatial predicate. Cost
 test, so a large future addition is caught, but no field is removed on the argument that nothing
 reads it.
 
+### Joining two datasets, and why the fix was addressing rather than memory
+
+The join graph is a handful of signed edges, so every answer to "how do I get from relation A to
+relation B" is a pure function of the signed catalog. Nothing needed memising; the problem was that
+the only way to ask was a natural-language search, and a search can be rephrased. A model that asked
+for a path which does not exist got an answer indistinguishable from one that was worded badly, and
+the only available move was to ask again.
+
+`benthic_playbook(from_relation=, to_relation=)` returns the route hop by hop, shortest first, with
+the exact `benthic_join` arguments and nothing else - 1,958 bytes naming the hub, against 8,580 bytes
+listing every edge and leaving the caller to spot the route. A route that does not exist is a bounded
+negative naming what the source relation *is* signed to, never silence. `benthic_join` resolves its
+own path when the columns are omitted, so the common case is one call instead of search-then-join,
+and it resolves only a single reliable identifier edge: a heuristic, partial or spatial join is never
+chosen for the caller even when it is the only one.
+
+Measured on the two cases that were spinning on discovery, discovery calls before the first query fell
+from 5.0 to 3.0 and from 3.5 to 3.3, both still 0/4. The lookup was used on 3 of 11 playbook calls
+while `benthic_discover` ran 28 against its 3. So it helps and is not sufficient, which is consistent
+with the four guidance interventions that have also failed to move these cases.
+
+Rediscovery is recorded per case in `rounds.json` - discovery calls before the first query, repeated
+`(tool, source)` pairs, calls per case, and calls among sessions that answered - because pass rate
+cannot see it. A session spinning on discovery scores exactly like a working one.
+
+### Two regressions this work introduced, and their fixes
+
+`eval/golden/` is the harness's check on itself, and it caught both of these.
+
+Adding the route lookup made the golden unsigned-join case fail 3/6 while the model was answering
+*correctly* - it used the new lookup instead of discovery. The case pinned `benthic_discover` as the
+required tool, and there are now two correct routes to that answer, so the case was wrong rather than
+the server. `run_eval` gained `required_tools_any` so a case can accept either route, and the golden
+case uses it.
+
+The discover description gained a sentence advising the model to prefer a guessed column over reading
+the column list. On a case whose whole point is using discovery to get columns that made things
+worse: 3/6, five discovery calls and no answer. The advice is now the opposite, and reads the columns
+from discovery with `benthic_query`'s near-miss candidate as the recovery step rather than the plan.
+With both fixed the golden set went 18/24 to 23/24, and the single remaining failure is one repetition
+of an otherwise stable case.
+
 ### The column dead end, and the two cases that are not about it
 
 Discovery lists at most 12 columns per relation, 21 of the 119 signed relations have more than 40
@@ -270,9 +312,9 @@ repetitions, and the traces say why. Both call `benthic_discover` five or six ti
 repeatedly and does not act on it, in runs that burn 8,773 completion tokens reasoning and end on
 `finish_reason: length`.
 
-So these two are not addressable from the server. They need an agent-side rule, a different model, or
-a non-reasoning mode, and the honest thing is to say so rather than keep adding guidance that does not
-measure. Three separate attempts to move them by guidance have now failed.
+So these two are not addressable from the server alone. They need an agent-side rule, a different
+model, or a non-reasoning mode, and the honest thing is to say so rather than keep adding guidance
+that does not measure. Four separate interventions have now failed to move them.
 
 The core slice admits three playbook items and the cap is applied twice, in `verify()` by screened
 sentence and again in `render_core()`. The second cap is the binding one, so a seed rule longer

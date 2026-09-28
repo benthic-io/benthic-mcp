@@ -26,7 +26,8 @@
       "id": "golden_unsigned_agency_lookup",
       "capability": "unsigned_join_rejection",
       "question": "Check whether the signed catalog authorizes any join between usaspending.agency_lookup and usaspending.all_entities. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
-      "required_tools": ["benthic_discover"],
+      "required_tools": [],
+      "required_tools_any": [["benthic_discover"], ["benthic_playbook"]],
       "forbidden_claims": [],
       "expected": {
         "must_reject": true

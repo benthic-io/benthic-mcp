@@ -173,7 +173,12 @@ def score_case(
     successful = [event for event in events if event["ok"]]
     names = {event["name"] for event in successful}
     required = set(case.get("required_tools", []))
-    tool_requirement = required.issubset(names)
+    # Some questions have more than one correct route to the answer. The server can establish that a
+    # signed path does not exist either by searching discovery or by asking the route lookup, and
+    # pinning one of them fails a correct answer for using the other. Each entry is one acceptable
+    # route; at least one has to be satisfied.
+    routes = [set(route) for route in case.get("required_tools_any", [])]
+    tool_requirement = required.issubset(names) and (not routes or any(route.issubset(names) for route in routes))
     expected = case.get("expected", {})
     capability = case.get("capability", "")
     join_ok = True
