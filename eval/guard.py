@@ -206,7 +206,7 @@ def main() -> None:
     parser.add_argument("--sandbox", default=str(ROOT / "eval" / "harness"))
     parser.add_argument("--reps", type=int, default=2)
     parser.add_argument("--max-turns", type=int, default=5)
-    parser.add_argument("--llm-url", default="http://192.168.10.222:8081")
+    parser.add_argument("--llm-url", default="http://localhost:8081")
     parser.add_argument("--model")
     parser.add_argument("--output-dir", default=None)
     parser.add_argument(

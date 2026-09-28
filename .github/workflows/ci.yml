@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # --frozen so CI fails on a lockfile that does not match pyproject.toml, rather than
+      # silently resolving something nobody reviewed.
+      - name: Install
+        run: uv sync --frozen --all-extras
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Pyright
+        run: uv run pyright
+
+      # The non-live marker excludes the tests that need a real BDP endpoint and a running
+      # llama-server. They are marked rather than skipped by path so the same selection the
+      # developer runs locally is the one CI runs.
+      - name: Tests
+        run: uv run pytest -m "not live" -q

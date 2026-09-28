@@ -6,8 +6,12 @@ from urllib.parse import urlparse
 
 DEFAULT_BDP_ROOT = "https://benthic.io/bdp"
 DEFAULT_TRUSTED_KEYS = ("qwG8vQQN7m/uB0Nwgor3s1EJCKjqZM/SNThV+V7XumM=",)
-DEFAULT_MCP_HOSTS = ("192.168.10.222:8082", "127.0.0.1:8082", "localhost:8082", "[::1]:8082")
-DEFAULT_MCP_ORIGINS = ("http://192.168.10.222:8081",)
+DEFAULT_MCP_HOSTS = ("127.0.0.1:8082", "localhost:8082", "[::1]:8082")
+# Localhost only, and deliberately so. These are the allow-lists for the Host and Origin headers, so
+# a default that named a particular machine on a particular network would silently authorise that host
+# for anyone who installed the server without reading the configuration. Add your own host
+# explicitly; see config/benthic-mcp.env.example.
+DEFAULT_MCP_ORIGINS = ("http://127.0.0.1:8081", "http://localhost:8081")
 
 
 def _parse_float(name: str, default: float) -> float:

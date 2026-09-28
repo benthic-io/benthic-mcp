@@ -1,0 +1,33 @@
+# A user-level systemd unit for the Benthic MCP server.
+#
+# systemd does not expand environment variables in WorkingDirectory or ExecStart, so the checkout
+# path below has to be edited to point at your clone. It is written against %h so that at least the
+# env file and the cache resolve to the invoking user's home.
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp examples/benthic-mcp.service ~/.config/systemd/user/
+#   $EDITOR ~/.config/systemd/user/benthic-mcp.service   # set WorkingDirectory and ExecStart
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now benthic-mcp
+[Unit]
+Description=Read-only Benthic MCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# EDIT THESE TWO to match your checkout.
+WorkingDirectory=%h/src/benthic-mcp
+ExecStart=%h/src/benthic-mcp/.venv/bin/benthic-mcp
+
+EnvironmentFile=%h/.config/benthic-mcp/env
+Restart=on-failure
+RestartSec=3
+
+# The server is read-only and holds a token, so it needs no privileges of its own.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+
+[Install]
+WantedBy=default.target

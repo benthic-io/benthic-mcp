@@ -4,6 +4,17 @@ version = "0.1.0"
 description = "Read-only MCP access to signed Benthic Data Provenance datasets"
 readme = "README.md"
 requires-python = ">=3.12"
+# PEP 639. Declaring the license as an SPDX expression here means the License :: classifiers must
+# stay out, since tooling that reads both treats the combination as a conflict.
+license = "MIT"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Database :: Front-Ends",
+    "Topic :: Scientific/Engineering :: Information Analysis",
+]
 dependencies = [
     "cryptography>=45,<47",
     "httpx>=0.28,<1",

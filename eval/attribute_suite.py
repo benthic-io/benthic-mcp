@@ -121,6 +121,13 @@ def arm_command(args: argparse.Namespace, label: str, playbook: Path, questions:
 
 
 def run_arm(args: argparse.Namespace, label: str, playbook: Path, questions: Path) -> dict[str, Any]:
+    """Run one arm and read its results from the run directory.
+
+    The report is read from disk rather than scraped out of stdout, because run_eval prints a progress
+    line per case, `[3/25] case_id`, and the first `[` in its output belongs to one of those rather
+    than to the report.
+    """
+    out_root = Path(args.workdir) / label
     completed = subprocess.run(
         arm_command(args, label, playbook, questions), cwd=str(ROOT), capture_output=True, text=True
     )
@@ -128,11 +135,15 @@ def run_arm(args: argparse.Namespace, label: str, playbook: Path, questions: Pat
         print(completed.stdout[-2000:], file=sys.stderr)
         print(completed.stderr[-2000:], file=sys.stderr)
         raise SystemExit(f"the {label} arm failed")
-    results = json.loads(completed.stdout[completed.stdout.index("[") :])
+    runs = sorted(path for path in out_root.iterdir() if (path / "results.json").is_file())
+    if not runs:
+        raise SystemExit(f"the {label} arm wrote no results.json under {out_root}")
+    results = json.loads((runs[-1] / "results.json").read_text(encoding="utf-8"))
     passed = {record["id"]: record["score"]["passed"] for record in results}
     return {
         "label": label,
         "playbook": str(playbook),
+        "run": runs[-1].name,
         "cases": len(results),
         "passed": sum(passed.values()),
         "per_case": passed,

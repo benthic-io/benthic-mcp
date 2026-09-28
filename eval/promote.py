@@ -246,7 +246,7 @@ def main() -> None:
     parser.add_argument("--candidate", type=Path, default=None)
     parser.add_argument("--active", type=Path, default=None)
     parser.add_argument("--output-dir", default=str(ROOT / "eval" / "runs"))
-    parser.add_argument("--llm-url", default="http://192.168.10.222:8081")
+    parser.add_argument("--llm-url", default="http://localhost:8081")
     parser.add_argument("--model")
     parser.add_argument("--max-turns", type=int, default=6)
     parser.add_argument("--case-filter")

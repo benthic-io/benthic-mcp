@@ -390,7 +390,7 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=None, help="candidate path")
     parser.add_argument("--runs-dir", type=Path, default=Path("eval/runs"))
     parser.add_argument("--failure-runs", type=int, default=10)
-    parser.add_argument("--llm-url", default="http://192.168.10.222:8081")
+    parser.add_argument("--llm-url", default="http://localhost:8081")
     parser.add_argument("--request-timeout", type=float, default=180.0)
     parser.add_argument("--no-llm", action="store_true")
     parser.add_argument("--lesson-cap", type=int, default=40, help="max active lessons; 0 disables")

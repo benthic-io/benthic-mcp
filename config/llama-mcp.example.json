@@ -2,7 +2,7 @@
   {
     "id": "benthic",
     "enabled": true,
-    "url": "http://192.168.10.222:8082/mcp",
+    "url": "http://mcp.example:8082/mcp",
     "headers": "{\"Authorization\":\"Bearer REPLACE_WITH_BENTHIC_MCP_TOKEN\"}",
     "useProxy": false
   }

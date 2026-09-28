@@ -1,6 +1,7 @@
 import json
 from dataclasses import replace
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 import pytest
@@ -339,7 +340,7 @@ async def test_http_app_requires_token_and_allows_exact_origin(settings: Any) ->
         settings,
         mcp_bearer_token=token,
         mcp_allowed_hosts=("127.0.0.1:8082",),
-        mcp_allowed_origins=("http://192.168.10.222:8081",),
+        mcp_allowed_origins=("http://llama.example:8081",),
     )
     app = server_module.create_http_app(http_settings)
 
@@ -352,12 +353,12 @@ async def test_http_app_requires_token_and_allows_exact_origin(settings: Any) ->
             wrong = await client.get("/health", headers={"Authorization": "Bearer wrong"})
             allowed = await client.get(
                 "/health",
-                headers={"Authorization": f"Bearer {token}", "Origin": "http://192.168.10.222:8081"},
+                headers={"Authorization": f"Bearer {token}", "Origin": "http://llama.example:8081"},
             )
             preflight = await client.options(
                 "/mcp",
                 headers={
-                    "Origin": "http://192.168.10.222:8081",
+                    "Origin": "http://llama.example:8081",
                     "Access-Control-Request-Method": "POST",
                     "Access-Control-Request-Headers": "authorization,content-type,mcp-protocol-version",
                 },
@@ -370,9 +371,9 @@ async def test_http_app_requires_token_and_allows_exact_origin(settings: Any) ->
     assert missing.status_code == 401
     assert wrong.status_code == 401
     assert allowed.status_code == 200
-    assert allowed.headers["access-control-allow-origin"] == "http://192.168.10.222:8081"
+    assert allowed.headers["access-control-allow-origin"] == "http://llama.example:8081"
     assert preflight.status_code == 200
-    assert preflight.headers["access-control-allow-origin"] == "http://192.168.10.222:8081"
+    assert preflight.headers["access-control-allow-origin"] == "http://llama.example:8081"
     assert denied_origin.status_code == 200
     assert "access-control-allow-origin" not in denied_origin.headers
 
@@ -495,3 +496,21 @@ async def test_the_path_lookup_rejects_half_specified_relations(catalog: Catalog
 
     assert result.is_error
     assert "both from_relation and to_relation" in text_of(result)
+
+
+def test_the_default_allow_lists_name_no_host_but_localhost() -> None:
+    """A default allow-list is a default permission.
+
+    These gate the Host and Origin headers, so a default naming a machine on someone's network would
+    silently authorise that host for anyone who installed the server without reading the
+    configuration. The shipped default is localhost, and a deployment adds its own host.
+    """
+    from urllib.parse import urlsplit
+
+    from benthic_mcp.config import DEFAULT_MCP_HOSTS, DEFAULT_MCP_ORIGINS
+
+    for host in DEFAULT_MCP_HOSTS:
+        # urlsplit rather than split(":"), which breaks the bracketed IPv6 form.
+        assert urlsplit(f"//{host}").hostname in {"127.0.0.1", "localhost", "::1"}, host
+    for origin in DEFAULT_MCP_ORIGINS:
+        assert urlparse(origin).hostname in {"127.0.0.1", "localhost"}, origin
