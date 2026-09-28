@@ -456,22 +456,41 @@ worth two or three cases: removing it from the always-on core drops the suite fr
 thinking off, and from 28/33 to 26/33 with it on.
 
 Both measurements are correct and they are not in conflict. A general behavioural nudge helps
-`sequential_0`, `sequential_1`, `sequential_2`, `rpc_districts_in_bbox_limits` and a SAM evidence
-case, one case each, and does nothing in particular on any single one of them. Attributing a lesson
-against the case it came from is therefore biased against exactly the advice most likely to be worth
-keeping.
+`sequential_0`, `sequential_1`, `sequential_2`, `rpc_districts_in_bbox_limits` and a SAM evidence case,
+one case each, and does nothing in particular on any single one of them. Attributing a lesson against
+the case it came from is therefore biased against exactly the advice most likely to be worth keeping.
 
-The same question was asked three ways, and the first two answers were wrong for instructive reasons.
-On a single case that already passed 5/5 with no rule at all, all three placements scored 5/5, which
-says nothing: a saturated case cannot detect anything. Repeating it on a case that genuinely fails,
-the on-demand channel was confirmed to be delivered, since `benthic_playbook` was called 4/4 and the
-case still failed, so the channel is not the blocker either. Resolving it at suite level is the
-measurement quoted above.
+The same question was then asked three ways, and the first two answers were wrong for instructive
+reasons. On a single case that already passed 5/5 with no rule at all, all three placements scored
+5/5, which says nothing: a saturated case cannot detect anything. Repeating it on a case that
+genuinely fails confirmed the on-demand channel is delivered rather than ignored, since
+`benthic_playbook` was called 4/4 and the case still failed, so the channel is not the blocker either.
+The suite-level comparison is the one that settles it:
 
-The consequence for the loop is a limit, not a fix: per-case attribution can promote case-specific
-lessons, and needs a suite-level measurement to promote general ones. A suite-level A/B costs two
-full runs, so it is not something to do per lesson per round. Nothing in the loop claims the ability
-to discover a general rule on its own, and the one general rule that measurably works is hand-written.
+| placement of the same advice | result | tuning | holdout | empty answers | max-turns |
+| --- | --- | --- | --- | --- | --- |
+| always-on core | 30/33 | 24/25 | 6/8 | 3 | 3 |
+| absent entirely | 28/33 | 22/25 | 6/8 | 3 | 3 |
+| on-demand lesson | 27/33 | 22/25 | 5/8 | 6 | 6 |
+
+The core is worth two cases, and both are runs that previously exhausted their turns now answering. The
+lesson placement is not worth reading as a result: 27 against 28 is inside the spread this suite shows
+between identical runs, all four of its regressions are `maximum turns reached` in the capabilities
+already measured as unstable, and three of the four never called `benthic_playbook` at all, so the
+content was not what misled them. It is fair to say the on-demand store has shown no benefit, and not
+fair to say it has been shown to hurt.
+
+`eval/attribute_suite.py` is the instrument this calls for. It puts a rule in the always-on core, runs
+the tuning split with and without it, and calls it on the aggregate, which is the only measurement
+that can see a distributed effect. It never touches the holdout, refuses a questions file with an empty
+split, and reports the comparison as unreadable if one arm ran more than twice as slowly, because a
+wedged `llama-server` shows up as minutes-long runs rather than as cases that flip. One case cannot
+carry a verdict at this suite size, so `--min-delta` defaults to 2.
+
+It is not cheap, being two full runs of the tuning split, so it belongs to a rule that has already
+survived per-case scrutiny and looks general, not to the ordinary accumulation path. Nothing in the
+loop claims the ability to discover a general rule on its own, and the one general rule that measurably
+works is hand-written.
 
 ### What the numbers can and cannot say
 

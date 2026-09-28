@@ -422,3 +422,95 @@ def test_a_stalled_lesson_is_the_only_thing_asked_for_a_substitute() -> None:
     )
 
     assert [record.lesson_id for record in store.stalled()] == ["stalled"]
+
+
+# --- suite-level attribution, the only instrument that can see a general rule ----------------
+
+
+def test_a_rule_is_never_validated_against_the_holdout() -> None:
+    """A rule chosen on holdout performance is a rule tuned on the answer key.
+
+    The selection is left to the runner rather than done by writing a filtered file, because
+    `assign_splits` takes one holdout case per capability and is not stable under subsetting: a
+    filtered file would yield a different holdout than the rest of the harness uses.
+    """
+    import argparse
+
+    from attribute_suite import arm_command
+
+    suite = Path(__file__).resolve().parents[1] / "eval" / "generated" / "questions.json"
+    args = argparse.Namespace(
+        reps=1,
+        strict=True,
+        in_process=True,
+        max_turns=5,
+        llm_url="http://x",
+        no_thinking=True,
+        model=None,
+        workdir="/tmp/x",
+    )
+
+    command = arm_command(args, "with", suite, suite)
+
+    assert command[command.index("--split") + 1] == "tuning"
+
+
+def test_the_tuning_split_of_the_suite_is_not_empty() -> None:
+    from attribute_suite import tuning_split
+    from run_eval import assign_splits
+
+    suite = Path(__file__).resolve().parents[1] / "eval" / "generated" / "questions.json"
+    cases = json.loads(suite.read_text(encoding="utf-8"))["cases"]
+
+    assert len(tuning_split(suite)) == len(cases) - len(assign_splits(cases))
+
+
+def test_the_two_arms_differ_by_exactly_the_rule() -> None:
+    from attribute_suite import write_arm
+
+    from benthic_mcp.playbook import load_playbook
+
+    base = Path(__file__).resolve().parents[1] / "eval" / "arms" / "seed-no-answer.json"
+    with_arm = Path(tempfile.mkdtemp()) / "with.json"
+    without_arm = Path(tempfile.mkdtemp()) / "without.json"
+    rule = "Never end the turn without a final answer."
+
+    write_arm(with_arm, base, rule)
+    write_arm(without_arm, base, None)
+
+    with_document = load_playbook(with_arm)[0]
+    without_document = load_playbook(without_arm)[0]
+    assert with_document is not None and without_document is not None
+    assert with_document.core == [*without_document.core, rule]
+
+
+def test_a_server_that_ran_twice_as_slowly_makes_the_comparison_unreadable() -> None:
+    """A wedged llama-server shows up as minutes-long runs, not as cases that flip.
+
+    Two full runs at different moments is exactly when that happens, so the comparison says so rather
+    than reporting a delta that is really a timeout.
+    """
+    from attribute_suite import judge
+
+    slow = {"per_case": {}, "median_ms": 200_000}
+    quick = {"per_case": {}, "median_ms": 20_000}
+
+    assert "unreadable" in judge(quick, slow, 2)
+
+
+def test_one_case_cannot_carry_a_verdict() -> None:
+    from attribute_suite import judge
+
+    base = {"per_case": {f"c{i}": i > 0 for i in range(25)}, "median_ms": 20_000}
+    one_more = {"per_case": {**base["per_case"], "c0": True}, "median_ms": 20_000}
+
+    assert judge(base, one_more, 2) == "no_effect"
+
+
+def test_a_rule_that_gains_two_cases_is_kept() -> None:
+    from attribute_suite import judge
+
+    base = {"per_case": {f"c{i}": i > 2 for i in range(25)}, "median_ms": 20_000}
+    better = {"per_case": {**base["per_case"], "c0": True, "c1": True}, "median_ms": 20_000}
+
+    assert judge(base, better, 2) == "fixes"
