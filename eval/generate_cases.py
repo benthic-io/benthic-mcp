@@ -135,8 +135,9 @@ def make_case(
     *,
     required_tools: list[str],
     forbidden_claims: list[str] | None = None,
+    required_tools_any: list[list[str]] | None = None,
 ) -> dict[str, Any]:
-    return {
+    case = {
         "id": case_id,
         "question": question,
         "capability": capability,
@@ -144,6 +145,9 @@ def make_case(
         "expected": expected,
         "forbidden_claims": forbidden_claims or [],
     }
+    if required_tools_any:
+        case["required_tools_any"] = required_tools_any
+    return case
 
 
 _TRAP_NAME_TOKENS = ("current", "latest", "active", "now")
@@ -505,7 +509,10 @@ async def generate(settings: Settings, args: argparse.Namespace) -> tuple[list[d
                     f"Check whether the signed catalog authorizes any join between {relation_name(left)} and {relation_name(right)}. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
                     "unsigned_join_rejection",
                     {"must_reject": (left.dataset, left.name, right.dataset, right.name) not in signed_pairs},
-                    required_tools=["benthic_discover"],
+                    # Either route establishes the fact, and the server can now do both. Pinning one
+                    # marks down a correct answer for choosing the other.
+                    required_tools=[],
+                    required_tools_any=[["benthic_discover"], ["benthic_playbook"]],
                     forbidden_claims=[],
                 )
             )

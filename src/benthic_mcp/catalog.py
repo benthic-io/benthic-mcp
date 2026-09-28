@@ -286,11 +286,10 @@ class Catalog:
         if dataset and not any(name == dataset for name, _ in self.relations):
             dataset = None
         if detail == "full":
-            # detail="full" answers "what columns does this one relation have". Without a relation it
-            # would dump every column of every match, which is the response size this parameter
-            # exists to avoid.
-            if relation is None:
-                raise QueryValidationError("detail='full' needs relation='dataset.relation' to name one relation")
+            # "What columns does this relation have" for one relation. A caller who supplies a query
+            # but no relation means the best match for that query, which is what they are asking
+            # about. Refusing that made the model burn turns retrying the identical call, which is
+            # the dead end this parameter exists to remove.
             limit = 1
         matches: list[tuple[int, RelationDefinition, list[str], list[ColumnDefinition]]] = []
 

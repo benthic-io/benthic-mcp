@@ -236,10 +236,10 @@ async def discover(
     Use the returned source field verbatim in benthic_query. If join_paths is empty, make separate
     benthic_query calls; never invent a join.
 
-    A summary lists up to 12 columns per relation, so a wide relation is only partly shown and
-    columns_truncated says so. To list every column of one relation, pass relation='dataset.relation'
-    with detail='full'. Read the columns from here rather than guessing them: benthic_query will
-    report a near-miss signed name for a wrong guess, but that is a recovery step, not a plan.
+    One call is normally enough: it returns the best relations together with their columns, and
+    columns_truncated says when that list is partial. Ask again for more columns only when
+    columns_truncated is true, by passing detail='full'. A wrong column guess is recoverable rather
+    than fatal, because benthic_query reports the near-miss signed name.
     """
     try:
         service = await get_service()

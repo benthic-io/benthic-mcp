@@ -441,8 +441,14 @@
       "forbidden_claims": [],
       "id": "negative_unsigned_0",
       "question": "Check whether the signed catalog authorizes any join between usaspending.agency and usaspending.agency_by_subtier_and_optionally_toptier. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
-      "required_tools": [
-        "benthic_discover"
+      "required_tools": [],
+      "required_tools_any": [
+        [
+          "benthic_discover"
+        ],
+        [
+          "benthic_playbook"
+        ]
       ]
     },
     {
@@ -453,8 +459,14 @@
       "forbidden_claims": [],
       "id": "negative_unsigned_1",
       "question": "Check whether the signed catalog authorizes any join between usaspending.agency_by_subtier_and_optionally_toptier and usaspending.agency_lookup. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
-      "required_tools": [
-        "benthic_discover"
+      "required_tools": [],
+      "required_tools_any": [
+        [
+          "benthic_discover"
+        ],
+        [
+          "benthic_playbook"
+        ]
       ]
     },
     {
@@ -465,8 +477,14 @@
       "forbidden_claims": [],
       "id": "negative_unsigned_2",
       "question": "Check whether the signed catalog authorizes any join between usaspending.agency_lookup and usaspending.all_entities. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
-      "required_tools": [
-        "benthic_discover"
+      "required_tools": [],
+      "required_tools_any": [
+        [
+          "benthic_discover"
+        ],
+        [
+          "benthic_playbook"
+        ]
       ]
     },
     {

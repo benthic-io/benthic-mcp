@@ -138,11 +138,20 @@ def test_the_full_listing_returns_one_relation_so_the_response_stays_bounded(wid
     assert len(result.relations) == 1
 
 
-def test_the_full_listing_without_a_relation_is_refused(wide_catalog: Catalog) -> None:
-    # Otherwise it would dump every column of every match, which is the size this parameter exists
-    # to avoid.
-    with pytest.raises(QueryValidationError, match="needs relation"):
-        wide_catalog.discover(query="field_001", detail="full")
+def test_the_full_listing_applies_to_the_best_match_when_no_relation_is_named(wide_catalog: Catalog) -> None:
+    # Refusing this made the model spend whole turns retrying the identical call, which is the dead
+    # end the parameter exists to remove. A caller with a query but no relation is asking about the
+    # best match for that query.
+    result = wide_catalog.discover(query="field_001", dataset="usaspending", detail="full")
+
+    assert len(result.relations) == 1
+    assert result.relations[0].columns_truncated is False
+
+
+def test_the_full_listing_returns_nothing_rather_than_everything_when_nothing_matches(wide_catalog: Catalog) -> None:
+    result = wide_catalog.discover(query="no such thing", detail="full")
+
+    assert result.relations == []
 
 
 def test_the_summary_response_is_unchanged_by_the_new_parameter(wide_catalog: Catalog) -> None:
