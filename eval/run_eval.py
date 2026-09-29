@@ -155,6 +155,26 @@ def _join_matches(event: dict[str, Any], path: dict[str, Any]) -> bool:
     return forward or reverse
 
 
+# Mirrors BENTHIC_DEFAULT_QUERY_LIMIT. A caller who passes no limit gets this, so a
+# truncated result at this size has still answered as far as it was asked to.
+DEFAULT_QUERY_LIMIT = 100
+
+
+def _count_matches(event: dict[str, Any], structured: dict[str, Any], want: int) -> bool:
+    """Whether a returned row count answers the question, allowing for the query's own limit.
+
+    A bounded query that fills its limit has answered as far as it was asked to, and says so with
+    `truncated: true`. Insisting on the exact count would read a correct 100-row answer to a
+    127-row question as a wrong one. The default limit applies when the caller passed none, so the
+    argument is not always there to read.
+    """
+    got = structured.get("row_count")
+    if got == want:
+        return True
+    limit = (event.get("arguments") or {}).get("limit") or structured.get("limit") or DEFAULT_QUERY_LIMIT
+    return got == limit and want > limit and bool(structured.get("truncated"))
+
+
 def _join_answer_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) -> bool:
     """Whether any join call actually returned what the case expects.
 
@@ -166,17 +186,27 @@ def _join_answer_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) ->
     is the hardest thing to distinguish from a broken tool and therefore the most worth asserting.
     """
     want_count = expected.get("right_count")
-    want_keys = expected.get("right_keys")
+    # Distinct right-hand key values, not one per row: a joined relation returns many rows sharing a
+    # key, so a per-row list describes a data shape that does not exist.
+    want_keys = expected.get("right_keys_distinct") or expected.get("right_keys")
+    want_keys = set(want_keys or [])
     if want_count is None and not want_keys:
         return True
     for event in matching:
         structured = event.get("structured") or {}
-        if want_count is not None and structured.get("row_count") != want_count:
+        if want_count is not None and not _count_matches(event, structured, want_count):
             continue
         if want_keys:
+            # Rows are namespaced by source alias while the expectation names bare columns, so match
+            # on the column name after the last dot rather than reconstructing the server's alias.
             column = (expected.get("join_path") or {}).get("right_column")
-            got = [row.get(column) for row in structured.get("rows") or []]
-            if sorted(got, key=str) != sorted(want_keys, key=str):
+            got = {
+                value
+                for row in structured.get("rows") or []
+                for key, value in row.items()
+                if key.rsplit(".", 1)[-1] == column
+            }
+            if not want_keys <= got:
                 continue
         return True
     return False

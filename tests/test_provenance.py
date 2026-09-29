@@ -80,3 +80,145 @@ async def test_an_absent_reference_is_distinguishable_from_a_present_one(catalog
         assert absent.question_ref != present.question_ref
     finally:
         await service.close()
+
+
+def test_a_join_that_returns_the_wrong_row_count_is_a_failure_not_a_pass() -> None:
+    """The scorer checked the route and never the result, for 695 case-runs.
+
+    A signed join whose two endpoint columns are declared as different scalar types compared
+    '03' against 3 in Python, matched nothing, and returned 0 rows where the catalog says there
+    are 127. Both affected cases scored as passes because `join_check` only compared the argument
+    slots of the call. This is the contract that would have caught it.
+    """
+    from run_eval import score_case
+
+    case = {
+        "id": "contract_join_answer",
+        "capability": "identifier_partial_join",
+        "expected": {
+            "join_path": {
+                "left": "usaspending.all_entities",
+                "left_column": "congressional_district",
+                "right": "usp_cl.legislator_terms",
+                "right_column": "district",
+                "reliability": "partial",
+            },
+            "right_count": 127,
+            "right_keys_distinct": [3],
+        },
+    }
+    join = {
+        "name": "benthic_join",
+        "ok": True,
+        "arguments": {
+            "left_source": "usaspending.all_entities",
+            "right_source": "usp_cl.legislator_terms",
+            "left_column": "congressional_district",
+            "right_column": "district",
+        },
+        "structured": {
+            "row_count": 0,
+            "rows": [],
+            "truncated": False,
+            "joins": [{"reliability": "partial"}],
+        },
+    }
+
+    score = score_case(case, [join], "Both sides signed and reliable.", strict=True)
+
+    assert score["join_check"] is True, "the route is correct, which is what the old scorer saw"
+    assert score["answer_check"] is False
+    assert score["passed"] is False
+
+
+def test_a_truncated_result_at_the_default_limit_still_counts_as_answered() -> None:
+    """A bounded query that fills its limit has answered as far as it was asked to.
+
+    district 3 in Maryland is 127 rows. The default limit returns 100 with truncated: true, which is
+    a correct bounded answer, and reading it as a wrong one is how a fixed server stayed red.
+    """
+    from run_eval import score_case
+
+    case = {
+        "id": "contract_join_truncated",
+        "capability": "identifier_partial_join",
+        "expected": {
+            "join_path": {
+                "left": "usaspending.all_entities",
+                "left_column": "congressional_district",
+                "right": "usp_cl.legislator_terms",
+                "right_column": "district",
+                "reliability": "partial",
+            },
+            "right_count": 127,
+            "right_keys_distinct": [3],
+        },
+    }
+    join = {
+        "name": "benthic_join",
+        "ok": True,
+        "arguments": {
+            "left_source": "usaspending.all_entities",
+            "right_source": "usp_cl.legislator_terms",
+            "left_column": "congressional_district",
+            "right_column": "district",
+        },
+        "structured": {
+            "row_count": 100,
+            "truncated": True,
+            "rows": [{"right.district": 3}],
+            "joins": [{"reliability": "partial"}],
+        },
+    }
+
+    assert score_case(case, [join], "Signed, partial.", strict=True)["answer_check"] is True
+
+
+def test_right_keys_are_compared_as_distinct_values() -> None:
+    """127 rows share one key. A per-row expectation describes a data shape that does not exist."""
+    from run_eval import score_case
+
+    case = {
+        "id": "contract_join_keys",
+        "capability": "identifier_partial_join",
+        "expected": {
+            "join_path": {
+                "left": "l",
+                "left_column": "k",
+                "right": "r",
+                "right_column": "district",
+                "reliability": "partial",
+            },
+            "right_count": 3,
+            "right_keys_distinct": [3],
+        },
+    }
+    rows = [{"right.district": 3} for _ in range(3)]
+
+    def score(count: int) -> bool:
+        return score_case(
+            case,
+            [
+                {
+                    "name": "benthic_join",
+                    "ok": True,
+                    "arguments": {
+                        "left_source": "l",
+                        "right_source": "r",
+                        "left_column": "k",
+                        "right_column": "district",
+                    },
+                    "structured": {
+                        "row_count": count,
+                        "truncated": False,
+                        "rows": rows,
+                        "joins": [{"reliability": "partial"}],
+                    },
+                }
+            ],
+            "Signed.",
+            strict=True,
+        )["answer_check"]
+
+    assert score(3) is True
+    assert score(0) is False

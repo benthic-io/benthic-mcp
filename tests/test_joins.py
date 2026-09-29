@@ -223,3 +223,31 @@ def test_the_join_reports_the_type_mismatch_in_its_warnings() -> None:
 
     assert result.rows, "the zero-padded text key should now match the integer it represents"
     assert "different types" in " ".join(result.metadata[0].warnings or [])
+
+
+def test_a_context_conditions_column_is_actually_fetched(catalog: Catalog) -> None:
+    """A partial signed join whose context column is not selected can never return a row.
+
+    The select lists were built from the key column and the filter columns; a context condition's
+    columns were parsed afterwards and added to neither. The join key became (key, None),
+    execute_joins drops every row on a null component, and the result was 0 rows for a path the
+    catalog says is populated - indistinguishable from a join that is broken, which is what made
+    this worth a contract rather than a test of the helper.
+    """
+    from benthic_mcp.query import build_single_join
+
+    request = build_single_join(
+        question="probe",
+        left_source="usp_cl.legislator_terms",
+        right_source="usaspending.all_entities",
+        left_column="district",
+        right_column="congressional_district",
+        left_where=["state=eq.MD"],
+        context_conditions=["state=state"],
+    )
+
+    by_alias = {source.alias: source for source in request.sources}
+    condition = request.joins[0].extra_conditions[0]
+
+    assert condition.left_column in by_alias["left"].select
+    assert condition.right_column in by_alias["right"].select

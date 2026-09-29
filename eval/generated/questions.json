@@ -153,7 +153,8 @@
         },
         "left_key": "7S5S4",
         "right_count": 0,
-        "right_keys": []
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
       },
       "forbidden_claims": [
         "unsigned join"
@@ -181,7 +182,8 @@
         },
         "left_key": "7S5S4",
         "right_count": 0,
-        "right_keys": []
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
       },
       "forbidden_claims": [
         "unsigned join",
@@ -210,7 +212,8 @@
         },
         "left_key": "142362594",
         "right_count": 0,
-        "right_keys": []
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
       },
       "forbidden_claims": [
         "unsigned join"
@@ -238,7 +241,8 @@
         },
         "left_key": "142362594",
         "right_count": 0,
-        "right_keys": []
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
       },
       "forbidden_claims": [
         "unsigned join",
@@ -267,7 +271,8 @@
         },
         "left_key": "ESELKUJSAM45",
         "right_count": 0,
-        "right_keys": []
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
       },
       "forbidden_claims": [],
       "id": "join_usaspending_all_entities_samer_sam_registrations_evidence",
@@ -293,7 +298,8 @@
         },
         "left_key": "ESELKUJSAM45",
         "right_count": 0,
-        "right_keys": []
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
       },
       "forbidden_claims": [
         "unsigned join"
@@ -320,14 +326,11 @@
           "right_column": "district"
         },
         "left_key": "03",
-        "right_count": 5,
-        "right_keys": [
-          3,
-          3,
-          3,
-          3,
+        "right_count": 127,
+        "right_keys_distinct": [
           3
-        ]
+        ],
+        "right_keys_note": "Re-probed 2026-09-29 against direct PostgREST: district=3 AND state=MD returns 127 rows. The old value of 5 came from a generator path that filtered the right side on the key column only and ignored the context condition, so it never matched anything the join could produce. The default limit of 100 returns 100 rows with truncated=true, which is the correct bounded answer."
       },
       "forbidden_claims": [
         "unsigned join"
@@ -354,14 +357,11 @@
           "right_column": "district"
         },
         "left_key": "03",
-        "right_count": 5,
-        "right_keys": [
-          3,
-          3,
-          3,
-          3,
+        "right_count": 127,
+        "right_keys_distinct": [
           3
-        ]
+        ],
+        "right_keys_note": "Re-probed 2026-09-29 against direct PostgREST: district=3 AND state=MD returns 127 rows. The old value of 5 came from a generator path that filtered the right side on the key column only and ignored the context condition, so it never matched anything the join could produce. The default limit of 100 returns 100 rows with truncated=true, which is the correct bounded answer."
       },
       "forbidden_claims": [
         "unsigned join",

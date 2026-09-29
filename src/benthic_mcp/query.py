@@ -246,13 +246,27 @@ def build_single_join(
         propagated = next((item for item in right_filters if item.column == right_column), None)
         if propagated is not None:
             left_filters.append(FilterSpec(column=left_column, operator=propagated.operator, value=propagated.value))
+    extra_conditions = [_parse_context_condition(item) for item in context_conditions or []]
+    # A context condition's columns have to be fetched, not just compared. A partial signed join
+    # without them builds its key as (key, None), execute_joins drops every row on the null, and the
+    # join reports 0 rows for a path the catalog says is populated - which is what a broken join
+    # looks like, so it cannot be told apart from one.
     left_selected = _unique_strings(
-        [*(left_select or [left_column]), left_column, *(item.column for item in left_filters)]
+        [
+            *(left_select or [left_column]),
+            left_column,
+            *(item.column for item in left_filters),
+            *(item.left_column for item in extra_conditions),
+        ]
     )
     right_selected = _unique_strings(
-        [*(right_select or [right_column]), right_column, *(item.column for item in right_filters)]
+        [
+            *(right_select or [right_column]),
+            right_column,
+            *(item.column for item in right_filters),
+            *(item.right_column for item in extra_conditions),
+        ]
     )
-    extra_conditions = [_parse_context_condition(item) for item in context_conditions or []]
     return QueryRequest(
         question=question,
         sources=[
