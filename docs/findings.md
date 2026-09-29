@@ -60,7 +60,7 @@ systemctl --user restart benthic-mcp.service
 
 | change | result |
 | --- | --- |
-| **Disabling the model's reasoning** (`chat_template_kwargs.enable_thinking=false`) | **Kept, and the largest single effect measured.** `relation_trap_0_1` 0/4 to 3/4, the case that had failed in every run of this project. Suite 28/33 to 30/33 with zero regressions, completion tokens -68%, prompt tokens -19% |
+| **Disabling the model's reasoning** (`chat_template_kwargs.enable_thinking=false`) | **Kept, on cost and reproducibility rather than on accuracy.** Completion tokens -64%, and 29/33 twice where thinking-enabled gives 29/33 then 27/33. The pass-rate difference is about one case, which is what thinking-enabled repetitions disagree by, so the accuracy claim is withdrawn |
 | Answer-delivery rule in the always-on core | **Removed.** Kept for weeks on one measurement that turned a case from 2/5 to 5/5, then a paired A/B over the whole tuning split, two repetitions, 100 case-runs per arm, measured 23/50 with it and 23/50 without. The two-case gap that justified it was the suite's own run-to-run spread |
 | Unknown-column candidates plus `detail='full'` | **Kept.** Adopted 25 times in eight runs; the error message demonstrably recovered a session that had guessed five wrong columns |
 | Path lookup on `benthic_playbook`, `benthic_join` self-resolving | **Kept.** Discovery before first use 5.0 to 3.0 on one stuck case; the common join is one call instead of search-then-join |
@@ -89,9 +89,23 @@ Capping `max_tokens` does not work, and its failure is the clue: `finish_reason:
 looping through calls and being truncated earlier. A system prompt is ignored outright. Only the
 chat-template switch works, and it works completely, taking reasoning to zero characters.
 
-Across the full suite that is 30/33 against a 28/33 baseline, two cases gained and none lost,
-completion tokens down from 63,737 to 20,461, prompt tokens down 19%, empty answers 5 to 3, and
-discovery before first use roughly halved.
+Across the full suite, two repetitions of every case, the same seed on both sides:
+
+| | pass rate | completion tokens |
+| --- | --- | --- |
+| thinking enabled | 29/33, then 27/33 | 53,231 / 56,917 |
+| `enable_thinking=false` | 29/33, then 29/33 | 19,092 / 20,226 |
+
+The token effect is certain: about -64%, with no overlap between the arms. The pass-rate effect is
+about +1 case, and the thinking-enabled arm disagrees with itself by two, so **the accuracy claim does
+not survive and is withdrawn**. This was originally reported as the largest single effect in the
+project, at 28/33 to 30/33, from one repetition each and a seed that contained the now-removed
+answer-delivery rule. Both halves of that figure were wrong: the effect is half the size, and the
+seed it was measured against is not the one that ships.
+
+What does survive is reproducibility, which is a real operational property and was not the claim: two
+consecutive 29/33 runs against 29/33 then 27/33. A suite that returns the same answer twice is worth
+more for regression detection than one that is occasionally a case better and occasionally two worse.
 
 It is a **client-side** option, so this is a deployment instruction for whatever calls the MCP, not
 a server fix. `llama-server` cannot set it for its callers.
@@ -100,7 +114,9 @@ Every failure in the suite is a failure to deliver an answer, not a wrong answer
 invented join or a missed relation. For a long time that diagnosis was acted on in the wrong place: a
 rule telling the model to stop calling tools and write the answer went into the always-on core, and
 looked like it worked. Measured properly it does nothing. The non-delivery was a symptom of the
-deliberation, and disabling the deliberation is what removed it.
+deliberation, and disabling the deliberation is what addressed it - though the pass-rate half of that
+turns out to be unproven, which is its own lesson: the narrative was right about the cause and wrong
+about the size of the effect.
 
 The nudge is the informative failure. The same instruction delivered once in the always-on core is
 respected as a standing constraint; the same instruction delivered again on every completed result

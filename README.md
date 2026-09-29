@@ -83,8 +83,9 @@ The service listens on port 8082 by default and exposes the Streamable HTTP MCP 
 `start-llama-server.sh` is one tuned `llama-server` configuration (the one the numbers below were
 measured under), and `benthic-mcp.service` is a user-level systemd unit.
 
-**Disable thinking on the calling model.** This is the largest effect measured in the project:
-`enable_thinking=false` on the chat completion is worth about two cases in thirty-three, and
+**Set `enable_thinking=false` on the calling model.** It cuts completion tokens by about 64% and makes
+the result reproducible, which is a deployment instruction for whatever calls the MCP rather than a
+server setting. Its effect on the pass rate is about one case and is not established.
 `docs/findings.md` records that asking the model in a system prompt not to deliberate does not work.
 
 ## The playbook
@@ -109,26 +110,25 @@ regression is quarantined. The measurement, the dead ends, and the limits of the
 33 generated cases against a 35B MoE coder model, one repetition per case, 5-turn budget. The suite
 is small and noisy: it moves by one or two cases between identical runs.
 
-| configuration | result |
-| --- | --- |
-| seed, thinking enabled | 28/33 |
-| seed, `enable_thinking=false` | **30/33** |
-| answer-delivery rule removed, `enable_thinking=false` | 28/33 |
-| accumulated lessons, served | 0 of 12 earned a place; 1 measured as harmful |
+| configuration | pass rate | completion tokens |
+| --- | --- | --- |
+| seed, thinking enabled | 29/33 then 27/33 | 53,231 / 56,917 |
+| seed, `enable_thinking=false` | 29/33 then 29/33 | 19,092 / 20,226 |
 
-Held-out cases are excluded from reflection, so the headline is not a training number. Every row is
-one repetition, and the suite moves by one or two cases between identical runs, so treat the gaps as
-the size of the effect and not as a precise figure.
+Two repetitions of all 33 cases each, same seed, same turn budget. Held-out cases are excluded from
+reflection, so the headline is not a training number.
 
-Two things are worth stating plainly rather than burying:
+The two effects are not the same size and the table separates them deliberately. Disabling thinking cuts
+completion tokens by about 64%, and nothing in the run-to-run spread comes close to that, so it is not
+in question. Its effect on the pass rate is about one case, and one case is what thinking-enabled
+repetitions disagree with each other by, so **the accuracy benefit is not established** and the README
+does not claim it. What is visible is that thinking-off is reproducible where thinking-on is not:
+29/33 twice, against 29/33 then 27/33.
 
-- The largest single gain in this project was a **client setting**, not a server change. Four
-  server-side interventions were tried and reverted before the cause turned out to be the model's
-  reasoning mode.
-- **The self-improvement loop does not currently learn anything.** It can now measure whether a lesson
-  helps, refuse to serve one that does not, and quarantine one that harms, and it does all three
-  correctly. What it cannot yet do is *discover* a rule worth keeping, and the one general rule that
-  might be worth keeping has itself been measured only once.
+A third row is worth stating plainly. The accumulated lessons were served and measured, and **none of
+the twelve earned a place**; one was measured as actively harmful and quarantined. The single
+hand-written core line that the project had carried longest was removed after a paired A/B over 100
+case-runs per arm found no effect. Details in [`docs/findings.md`](docs/findings.md).
 
 ## Evaluation
 
@@ -145,7 +145,9 @@ so the evaluator does not depend on the MCP query implementation it is scoring.
 Four hand-verified cases in `eval/golden/questions.json` must pass with the seed playbook alone. They
 are a check on the harness, the scorer, and the tool surface, so a failure there is a bug rather than a
 result. `tests/test_golden.py` re-checks their expected values against the signed catalog, so a catalog
-change cannot leave the suite quietly stale.
+change cannot leave the suite quietly stale. Run it at `--max-turns 6`, not the 5 the generated suite
+uses: one case needs six to test what it is for and was failing about one run in five at five, which is
+a tripwire firing on a capability it is not watching. At six it is 12/12.
 
 Long runs belong in tmux so they can be watched:
 
