@@ -216,6 +216,12 @@ def _join_answer_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) ->
     want_keys = set(want_keys or [])
     if want_count is None and not want_keys:
         return True
+    if want_count == 0:
+        # A zero expectation asserts the join is not too wide, so it holds only if EVERY call on the
+        # signed path came back empty. Scored with `any` below, one empty call carried a session that
+        # had already matched rows it should not have.
+        column = (expected.get("join_path") or {}).get("right_column")
+        return all(_matched_row_count(event, event.get("structured") or {}, column) == 0 for event in matching)
     for event in matching:
         structured = event.get("structured") or {}
         column = (expected.get("join_path") or {}).get("right_column")
@@ -314,9 +320,26 @@ def score_case(
         or capability.startswith("nonprofits_nearby")
     ):
         rpc_events = [event for event in successful if event["name"] == "benthic_rpc"]
-        row_count_ok = any(
-            event.get("structured", {}).get("row_count") == expected.get("row_count") for event in rpc_events
-        )
+        # The operation and the arguments, not just the row count. `expected.arguments` was recorded
+        # and never read, so a districts_in_bbox case expecting one row for one bounding box was
+        # satisfied by any call returning one row - including a box the model invented, and including
+        # a different RPC entirely.
+        operation = expected.get("operation")
+        arguments = expected.get("arguments") or {}
+        answering = [
+            event
+            for event in rpc_events
+            if operation is None or (event.get("arguments") or {}).get("operation") == operation
+            if not arguments
+            or all((event.get("arguments") or {}).get(key) == value for key, value in arguments.items())
+        ]
+        if expected.get("row_count") == 0:
+            # Same asymmetry as the join: a zero expectation asserts the RPC did not invent rows.
+            row_count_ok = all(event.get("structured", {}).get("row_count") == 0 for event in answering)
+        else:
+            row_count_ok = any(
+                event.get("structured", {}).get("row_count") == expected.get("row_count") for event in answering
+            )
 
     if capability == "sequential_lookup":
         query_sources = {

@@ -277,3 +277,97 @@ def test_a_left_join_returning_one_row_with_a_null_key_counts_as_zero_matches() 
 
     assert score("left", 1) is True, "a left join that matched nothing is still the right answer"
     assert score("inner", 1) is False, "an inner join returning one row genuinely joined something"
+
+
+def test_a_zero_row_expectation_asserts_every_call_not_the_luckiest_one() -> None:
+    """`any()` over all join calls meant the emptiest one could carry a case.
+
+    A case with `right_count: 0` exists to catch a join that is too wide - one that matches rows it
+    should not. If any single call returning 0 satisfies it, a session that first returns 3 rows down
+    the signed path and then 0 passes, which is the exact regression the case was written for. 48
+    stored passing case-runs had a call on the signed path contradicting the expectation.
+    """
+    from run_eval import score_case
+
+    case = {
+        "id": "contract_no_false_join",
+        "capability": "heuristic_heuristic_join",
+        "expected": {
+            "join_path": {
+                "left": "l",
+                "left_column": "duns",
+                "right": "r",
+                "right_column": "ein",
+                "reliability": "heuristic",
+            },
+            "right_count": 0,
+        },
+    }
+
+    def call(row_count: int) -> dict:
+        return {
+            "name": "benthic_join",
+            "ok": True,
+            "arguments": {
+                "left_source": "l",
+                "right_source": "r",
+                "left_column": "duns",
+                "right_column": "ein",
+            },
+            "structured": {
+                "row_count": row_count,
+                "truncated": False,
+                "rows": [{"r.ein": "x"}] * row_count,
+                "joins": [{"reliability": "heuristic"}],
+            },
+        }
+
+    def score(calls: list[dict]) -> bool:
+        return score_case(case, calls, "No match.", strict=True)["answer_check"]
+
+    assert score([call(0)]) is True
+    assert score([call(3), call(0)]) is False, "a false match anywhere on the signed path is the regression"
+    assert score([call(3)]) is False
+
+
+def test_an_rpc_case_is_satisfied_only_by_the_operation_and_arguments_it_asked_for() -> None:
+    """The RPC check compared row_count alone, so any call with the right number of rows passed.
+
+    `expected.arguments` and `expected.operation` were recorded by the generator and never read. A
+    districts_in_bbox case expects 1 row for one specific bounding box; 33 stored case-runs satisfied
+    it on row_count with a box the model invented instead, including a zero-height one. Four of the
+    six RPC cases expect row_count 0, so a server returning nothing at all passed all four.
+    """
+    from run_eval import score_case
+
+    case = {
+        "id": "contract_rpc_arguments",
+        "capability": "districts_in_bbox_rpc",
+        "expected": {
+            "operation": "districts_in_bbox",
+            "arguments": {
+                "min_lon": 1.2823954,
+                "min_lat": 52.6185576,
+                "max_lon": 1.3023954,
+                "max_lat": 52.6385576,
+            },
+            "row_count": 1,
+        },
+    }
+
+    def score(operation: str | None, arguments: dict | None, row_count: int) -> bool:
+        event = {
+            "name": "benthic_rpc",
+            "ok": True,
+            "arguments": {k: v for k, v in {"operation": operation, **(arguments or {})}.items() if v},
+            "structured": {"row_count": row_count},
+        }
+        return score_case(case, [event], "One district.", strict=True)["row_count_check"]
+
+    expected_args = case["expected"]["arguments"]
+    assert score("districts_in_bbox", expected_args, 1) is True
+    assert score("find_district", expected_args, 1) is False, "a different RPC is not an answer"
+    assert score("districts_in_bbox", {"min_lon": 38.9, "min_lat": -77.1, "max_lon": 40.5, "max_lat": -74.2}, 1) is (
+        False
+    ), "a box the model invented is not the box the case asked about"
+    assert score("districts_in_bbox", expected_args, 6) is False
