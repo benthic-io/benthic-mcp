@@ -277,3 +277,40 @@ def test_a_run_that_answered_within_budget_is_not_reported_as_exhausted() -> Non
     usage = usage_from_result(record(score={"passed": True}, finish_reason="stop", final_text="42"))
 
     assert "token_exhausted" not in [signature["kind"] for signature in usage.signatures]
+
+
+def test_a_publish_reports_only_the_lessons_that_the_store_has_evidence_for(tmp_path: Path) -> None:
+    """The gate writes `attribution` to the store; a document written before it ran does not have it.
+
+    `promote_candidate` used to decide what is served by reading the document's own copy of that
+    verdict. On a stale document every copy read `None`, so it activated nothing and left every
+    unevidenced lesson marked active in the file it had just published - reporting 0 served while
+    all 12 were. The store is the source of truth for a verdict and has to be read back over the
+    document on the way out.
+    """
+    from harness import promote_candidate
+
+    from benthic_mcp.playbook import LessonRecord, Playbook
+    from benthic_mcp.trace import LessonStore
+
+    sandbox = tmp_path
+    (sandbox / "cache").mkdir(parents=True)
+
+    unevidenced = LessonRecord(lesson_id="stale", symptom="s", lesson="l", status="active")
+    # The document predates the measurement, so it still says `untested`/`None` while the store
+    # has the verdict the gate just wrote.
+    measured = LessonRecord(lesson_id="measured", symptom="s2", lesson="l2", status="active")
+    document = Playbook(collection="c", lessons=[unevidenced, measured])
+    (sandbox / "cache" / "playbook-candidate.json").write_text(document.to_json(), encoding="utf-8")
+
+    store = LessonStore(sandbox / "cache" / "lessons")
+    store.add(unevidenced)
+    store.add(LessonRecord(lesson_id="measured", symptom="s2", lesson="l2", status="pending", attribution="fixes"))
+
+    active, total = promote_candidate(sandbox)
+
+    assert (active, total) == (1, 2)
+    published = Playbook.from_json((sandbox / "cache" / "playbook.json").read_text(encoding="utf-8"))
+    by_id = {record.lesson_id: record for record in published.lessons}
+    assert by_id["measured"].status == "active", "the lesson the gate cleared must actually be served"
+    assert by_id["stale"].status == "pending", "an unevidenced lesson is still marked active and served"

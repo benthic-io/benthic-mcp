@@ -575,3 +575,47 @@ supplies no case, and there is no log that would let one be reconstructed.
 
 `tests/test_provenance.py` contracts the two pieces: the channels are told apart after a merge, and
 an empty source case reads as unmeasurable rather than as a pass.
+
+### The gate's first run
+
+Six lessons were measurable. Each costs six case-runs (three repetitions of two arms), 27 minutes
+wall clock on the 35B model:
+
+| verdict | n | what it means |
+| --- | --- | --- |
+| `fixes` | 1 | the lesson changes the case it was learned from |
+| `no_failure` | 3 | the source case passes without it, so it was never given a chance |
+| `inconclusive` | 2 | the arms mixed at 3 repetitions |
+| `unmeasurable` | 6 | 4 have no source case, 2 are on holdout |
+
+**One of six prose lessons has evidence behind it.** That is the first measurement the loop has
+ever had, and it is not 0 of 6 and not 8 of 8. The dominant outcome is `no_failure`: three lessons
+came from cases that now pass anyway, so their text was never load-bearing. `substitute_cases`
+exists to re-measure those against a case that still fails, and needs `--failing` to be supplied.
+
+Both `inconclusive` verdicts sit on `relation_trap_0_1`, which does not complete at `--max-turns 5`
+- `answered: false` in both arms, `maximum turns reached` in three of four. The case cannot be
+finished, so nothing can be learned there, and a case that never passes in either arm is
+indistinguishable from a lesson that does nothing. That is a scoring-budget problem, not a lesson
+problem.
+
+### The publish step reported 0 served while serving 12
+
+Running the gate exposed a second instrument failure. `promote_candidate` decided what to serve by
+reading `attribution` **out of the document**, but the document is written by consolidation and the
+gate writes to the store. On a document older than the gate every copy read `None`, so:
+
+- the check `record.attribution != "fixes"` activated nothing, and
+- no lesson was demoted, leaving all twelve marked `active` in the file it had just published.
+
+The gate's own summary printed `"served_lessons": 0` while the server was serving 12. The report
+and the reality were opposite, and both came from the same function.
+
+`promote_candidate` now reads the verdict back from the store over the document on the way out,
+leaves `quarantined`/`evicted` alone, and writes the result into the published file. Contracted in
+`tests/test_harness.py`, and checked by mutation: reverting the fix makes it fail with `(0, 2)` in
+place of `(1, 2)`.
+
+After the fix the sandbox serves **1** lesson instead of 12 - the single one with evidence. The live
+service is unaffected: it reads `~/.cache/benthic-mcp/playbook.json`, and `eval/harness/` is the
+sandbox.

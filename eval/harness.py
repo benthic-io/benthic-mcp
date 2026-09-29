@@ -36,7 +36,7 @@ from reflect import oracle_only_values, reflect  # noqa: E402
 
 from benthic_mcp.catalog import Catalog  # noqa: E402
 from benthic_mcp.config import Settings  # noqa: E402
-from benthic_mcp.playbook import Playbook  # noqa: E402
+from benthic_mcp.playbook import LessonRecord, Playbook  # noqa: E402
 from benthic_mcp.service import BenthicService  # noqa: E402
 from benthic_mcp.trace import (  # noqa: E402
     LessonStore,
@@ -346,6 +346,12 @@ def promote_candidate(sandbox: Path) -> tuple[int, int]:
     Only a lesson the gate found evidence for is marked active. Syncing unconditionally used to
     resurrect every quarantined and rejected lesson the moment the document was promoted, which
     silently undid the gate: one lesson measured as actively harmful went back to being served.
+
+    The gate writes `attribution` to the store, and a document written before the gate ran still
+    carries the old one. Reading it there meant the check below saw `None`, activated nothing, and
+    left every unevidenced lesson marked active in the very file it had just published - so the
+    count returned claimed nothing was served while all twelve were. The store is the verdict's
+    source of truth and is read back over the document here.
     """
     candidate = sandbox / "cache" / "playbook-candidate.json"
     served = sandbox / "cache" / "playbook.json"
@@ -353,12 +359,31 @@ def promote_candidate(sandbox: Path) -> tuple[int, int]:
     document = Playbook.from_json(served.read_text(encoding="utf-8"))
     store = LessonStore(sandbox / "cache" / "lessons")
     active = 0
+    synced: list[LessonRecord] = []
     for record in document.lessons:
-        if record.attribution != "fixes":
+        stored = store.get(record.lesson_id)
+        if stored is not None:
+            record = record.model_copy(update={"attribution": stored.attribution})
+        # The gate's terminal states outrank the promotion rule; a quarantined lesson is not
+        # something a publish step may quietly put back to pending.
+        if record.status in ("quarantined", "evicted"):
+            synced.append(record)
             continue
-        if store.set_status(record.lesson_id, "active") is not None:
+        if record.attribution == "fixes":
+            record = record.model_copy(update={"status": "active"})
+            if stored is not None:
+                store.set_status(record.lesson_id, "active")
             active += 1
-    return active, len(document.lessons)
+        else:
+            record = record.model_copy(update={"status": "pending"})
+        synced.append(record)
+    changed = any(
+        new.status != old.status or new.attribution != old.attribution
+        for new, old in zip(synced, document.lessons, strict=True)
+    )
+    if changed:
+        served.write_text(document.model_copy(update={"lessons": synced}).to_json(), encoding="utf-8")
+    return active, len(synced)
 
 
 def read_holdout_ids(run_dir: Path) -> frozenset[str]:
