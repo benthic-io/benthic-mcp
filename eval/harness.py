@@ -451,8 +451,7 @@ def run_attribution_gate(args: argparse.Namespace, sandbox: Path, failing: list[
 
     `failing` is the tuning cases that still fail this round. A lesson whose own source case has
     since been fixed elsewhere cannot be judged there - there is no failure left to remove - so it is
-    re-measured against one of these instead. Without that the one lesson in the store that
-    independently measures as worth two or three cases can never be promoted.
+    re-measured against one of these instead.
     """
     command = [
         sys.executable,

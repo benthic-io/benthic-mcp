@@ -521,7 +521,7 @@ def test_every_seed_core_rule_actually_reaches_the_served_slice(catalog: Catalog
     Two caps apply in sequence and the second one is the binding one: verify() screens the joined
     core into sentences, and render_core then takes only the first
     _MAX_CORE_LINES - len(BASE_CORE) of them. A two-sentence rule therefore lost everything past
-    its first sentence, and the measured answer-delivery guidance silently stopped being served.
+    its first sentence, and the measured guidance silently stopped being served.
     """
     from benthic_mcp.playbook import render_core, verify
     from benthic_mcp.seed import SEED_CORE

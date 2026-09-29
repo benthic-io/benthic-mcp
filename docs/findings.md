@@ -8,9 +8,9 @@ kept in rather than tidied away. Three entries are worth reading before changing
 
 - **Requiring evidence before a lesson can be served** - twelve accumulated lessons were measured and
   none earned a place, one of which made a case measurably worse.
-- **The ceiling: per-case attribution cannot see a general rule** - the one rule that measurably works
-  is invisible to the instrument that was built to validate it, and the second instrument that can
-  see it costs two full suite runs.
+- **The ceiling: per-case attribution cannot see a general rule** - and the rule that looked like it
+  proved the point turned out to have no effect at all once measured properly. A hand-written core line
+  is not evidence either; the instrument that can see a distributed effect costs two full suite runs.
 - **The two hard cases were the model, not the server** - four server-side interventions failed before
   the cause turned out to be the client's reasoning mode.
 
@@ -61,7 +61,7 @@ systemctl --user restart benthic-mcp.service
 | change | result |
 | --- | --- |
 | **Disabling the model's reasoning** (`chat_template_kwargs.enable_thinking=false`) | **Kept, and the largest single effect measured.** `relation_trap_0_1` 0/4 to 3/4, the case that had failed in every run of this project. Suite 28/33 to 30/33 with zero regressions, completion tokens -68%, prompt tokens -19% |
-| Answer-delivery rule in the always-on core | **Kept.** 2/5 to 5/5 on the case that failed by turn exhaustion, 5/5 to 4/5 on a case that already passed, net 7/10 to 9/10 over the pair |
+| Answer-delivery rule in the always-on core | **Removed.** Kept for weeks on one measurement that turned a case from 2/5 to 5/5, then a paired A/B over the whole tuning split, two repetitions, 100 case-runs per arm, measured 23/50 with it and 23/50 without. The two-case gap that justified it was the suite's own run-to-run spread |
 | Unknown-column candidates plus `detail='full'` | **Kept.** Adopted 25 times in eight runs; the error message demonstrably recovered a session that had guessed five wrong columns |
 | Path lookup on `benthic_playbook`, `benthic_join` self-resolving | **Kept.** Discovery before first use 5.0 to 3.0 on one stuck case; the common join is one call instead of search-then-join |
 | Capping `max_tokens` instead | **No effect.** 0/4, 0/3 and 0/3 at 4096, 2048 and 1024, and `finish_reason: length` got *more* common as the budget fell |
@@ -97,8 +97,10 @@ It is a **client-side** option, so this is a deployment instruction for whatever
 a server fix. `llama-server` cannot set it for its callers.
 
 Every failure in the suite is a failure to deliver an answer, not a wrong answer, a bad column, an
-invented join or a missed relation. That is what the kept rule targets, and it moved the worst case
-from 2/5 to 5/5.
+invented join or a missed relation. For a long time that diagnosis was acted on in the wrong place: a
+rule telling the model to stop calling tools and write the answer went into the always-on core, and
+looked like it worked. Measured properly it does nothing. The non-delivery was a symptom of the
+deliberation, and disabling the deliberation is what removed it.
 
 The nudge is the informative failure. The same instruction delivered once in the always-on core is
 respected as a standing constraint; the same instruction delivered again on every completed result
@@ -256,7 +258,7 @@ Running the gate against the twelve lessons that accumulation had actually produ
 
 So accumulation was not working: nothing in twelve lessons earned a place, and one made a case
 measurably worse. The served document drops from twelve lessons and eight distilled core lines to zero
-lessons and the three seed rules.
+lessons and the two seed rules.
 
 The verdict that took the most care to get right is the difference between *no effect* and *nothing
 left to fix*. A lesson learned from a case that something else has since fixed cannot be judged there,
@@ -280,41 +282,45 @@ without a measured effect, a verdict is auditable, inherited evidence names its 
 lesson inherits nothing, the document cannot self-perpetuate, the core is rebuilt from the seed when
 nothing survives, and a lesson the catalog rejects is dropped even with evidence.
 
-## The ceiling: per-case attribution cannot see a general rule
+## The ceiling: per-case attribution cannot see a general rule, and hand-written rules are not evidence
 
-The answer-delivery rule is the clearest thing in the store, and the gate still could not promote it.
-Re-pointed at the one tuning case that still fails, it measured 0/3 -> 0/3. Yet it is independently
-worth two or three cases: removing it from the always-on core drops the suite from 30/33 to 27/33 with
-thinking off, and from 28/33 to 26/33 with it on.
+This section is the one that changed the project's mind, in the opposite direction to the one it was
+written in. It began as an argument that a good rule existed and the instrument was too narrow to see
+it. The instrument was rebuilt, and the rule turned out not to be good.
 
-Both measurements are correct and they are not in conflict. A general behavioural nudge helps
-`sequential_0`, `sequential_1`, `sequential_2`, `rpc_districts_in_bbox_limits` and a SAM evidence case,
-one case each, and does nothing in particular on any single one of them. Attributing a lesson against
-the case it came from is therefore biased against exactly the advice most likely to be worth keeping.
+The answer-delivery rule was the clearest thing in the store. The gate could not promote it: re-pointed
+at the one tuning case that still fails, it measured 0/3 -> 0/3. At the time that was read as proof of
+the ceiling, on the strength of a suite-level comparison suggesting it was worth two or three cases.
+Three further measurements, in increasing rigour, took that apart:
 
-The same question was then asked three ways, and the first two answers were wrong for instructive
-reasons. On a single case that already passed 5/5 with no rule at all, all three placements scored
-5/5, which says nothing: a saturated case cannot detect anything. Repeating it on a case that
-genuinely fails confirmed the on-demand channel is delivered rather than ignored, since
-`benthic_playbook` was called 4/4 and the case still failed, so the channel is not the blocker either.
-The suite-level comparison is the one that settles it:
+| measurement | protocol | with the rule | without | verdict |
+| --- | --- | --- | --- | --- |
+| whole suite | 1 rep, 33 cases | 30/33 | 28/33 | +2, believed |
+| whole suite, reworded rule | 1 rep, 25 tuning | 22/25 | 22/25 | no effect |
+| tuning split, seed's own wording | **2 reps, 100 case-runs per arm** | **23/50** | **23/50** | **no effect** |
 
-| placement of the same advice | result | tuning | holdout | empty answers | max-turns |
-| --- | --- | --- | --- | --- | --- |
-| always-on core | 30/33 | 24/25 | 6/8 | 3 | 3 |
-| absent entirely | 28/33 | 22/25 | 6/8 | 3 | 3 |
-| on-demand lesson | 27/33 | 22/25 | 5/8 | 6 | 6 |
+The first row was noise read as signal. A 25-case suite at one repetition moves by one or two cases
+between identical runs, which is the same band the second row sat in, and the third row is the one to
+believe: paired, alternating, twice the repetitions, no delta.
 
-Neither row is a result on its own, and the honest reading is weaker than the table invites. The core
-row is one repetition of the whole suite, and this suite moves by one or two cases between identical
-runs. The lesson row is weaker still: 27 against 28 is inside that same spread, all four of its
-regressions are `maximum turns reached` in capabilities already measured as unstable, and three of the
-four never called `benthic_playbook` at all, so the content was not what misled them.
+Two things are worth keeping from the original mistake, because both generalise.
 
-A second suite-level run, against a reworded version of the same advice, measured 22/25 with the rule
-and 22/25 without it. It does not refute the row above, because the wording differed, and it does show
-the effect is fragile to phrasing, which is a reason for more caution rather than less. Treat "the
-answer rule is worth two cases" as a hypothesis that has been measured once, not as a finding.
+Per-case attribution is biased against general advice. A behavioural nudge of the kind that helps
+`sequential_0`, `sequential_1`, `sequential_2`, `rpc_districts_in_bbox_limits` and a SAM evidence case
+one case each, and nothing in particular on any single one of them, is invisible to any single case.
+That part of the diagnosis was right; it just turned out not to apply to this rule.
+
+A hand-written rule is not evidence. It was written by reading traces, it felt obviously true, and it
+was carried for weeks because one measurement agreed with what everyone already believed. The gate
+exists precisely to stop that, and it was applied to twelve learned lessons while the one rule that had
+been in the core from the start was exempt. Nothing is exempt: the seed core is now subject to the same
+standard, which is why the rule is gone rather than merely downgraded to a maybe.
+
+The channel question was also asked, and is still open on the evidence available. The on-demand
+`benthic_playbook` store was never shown to help: in a head-to-head it scored 27/33 against 28/33 for
+no rule at all, and three of its four regressions never called `benthic_playbook` at all, so the content
+was not what misled them. That is a null, not a demonstration of harm, and the channel has never been
+tested with a rule that actually works, because no such rule has been found.
 
 `eval/attribute_suite.py` is the instrument this calls for. It puts a rule in the always-on core, runs
 the tuning split with and without it, and calls it on the aggregate, which is the only measurement
@@ -323,6 +329,24 @@ split, and reports the comparison as unreadable if one arm ran more than twice a
 wedged `llama-server` shows up as minutes-long runs rather than as cases that flip. One case cannot
 carry a verdict at this suite size, so `--min-delta` defaults to 2, and `--record` is what lets a
 passing verdict reach the core through `eval/core-evidence.json`.
+
+## A must-pass case that was measuring the wrong thing
+
+Removing the core rule made one of the four hand-verified golden cases fail, so it was worth finding
+out whether the rule had broken it. It had not. Across eight historical golden runs that case had
+already passed 22 of 27 times, every failure being `maximum turns reached`, including one run where it
+failed both repetitions, and including runs from before the rule existed at all.
+
+The cause was the turn budget, not the guidance. The case spends a call on `benthic_playbook`, three on
+`benthic_query`, and one on `benthic_join`, which is the entire five-turn budget, so it has no turn
+left to write the answer. It needs six. Turn-budget adequacy is what the generated suite measures, and
+that capability is already unstable there at a 0.25 flake rate; a must-pass case that fails on a
+capability it is not testing is a tripwire people learn to ignore, which is the failure mode the golden
+suite exists to prevent. It is one of two things already removed from that suite for the same reason.
+
+At six turns the case is 3/3 and the suite is 12/12, so it stays, with the budget recorded in the
+questions file. The general lesson is the one the relation_trap removal already taught: a tripwire has
+to be tripped only by what it is watching, or its signal is worse than its silence.
 
 ## What the numbers can and cannot say
 

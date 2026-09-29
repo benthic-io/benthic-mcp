@@ -1,11 +1,15 @@
 """Which always-on core lines have been measured worth their tokens, and where that is recorded.
 
 A core line is re-sent on every turn, so it has to earn its place every turn. Per-case attribution
-cannot check that for a general rule: the answer-delivery rule measured 0/3 -> 0/3 on the case it was
-pointed at, and is worth two cases across the suite, because it helps five cases by one each and
-nothing in particular on any one of them. `eval/attribute_suite.py` is the instrument that can see
-that, and this is where its verdict is kept so the consolidator can put a passing rule into the core
-instead of re-deriving it from lessons that measured no effect.
+cannot check that for a general rule: a nudge can help five cases by one case each and nothing in
+particular on any single one of them, which no single-case comparison can see.
+`eval/attribute_suite.py` is the instrument that can, and this is where its verdict is kept so the
+consolidator can put a passing rule into the core instead of re-deriving it from lessons that measured
+no effect.
+
+It applies to hand-written rules too, and that is the part worth believing. The one core line that had
+been in the seed from the start measured no effect over 100 case-runs per arm and was removed. A rule
+gets in here by being measured, whatever wrote it.
 
 Two rules, and they are the whole point of the file existing:
 

@@ -1,10 +1,14 @@
 """Decide whether a rule belongs in the always-on core, by measuring the whole tuning split.
 
 Per-lesson attribution answers a narrow question: does this advice fix the case it came from. That
-instrument is biased against general advice, and the bias is not hypothetical. The answer-delivery
-rule measured 0/3 -> 0/3 on the case it was pointed at, while removing it from the core drops the
-suite from 30/33 to 27/33. It helps five different cases by one case each, so it is invisible to any
-single case and obvious to the suite.
+instrument is biased against general advice, and the bias is not hypothetical: a rule can help five
+different cases by one case each and nothing in particular on any single one of them, which no
+single-case comparison can see.
+
+This is the instrument that can. It exists partly because the obvious candidate for it turned out not
+to need it: the answer-delivery rule, which this was built to justify, measured 23/50 with and 23/50
+without over two repetitions of the tuning split, and was removed from the seed core. A rule reaches
+that core by being measured here, not by being written down.
 
 So the loop needs a second instrument, and this is it: put the rule in the always-on core, run the
 whole tuning split with and without it, and call it on the aggregate. The always-on core is also the

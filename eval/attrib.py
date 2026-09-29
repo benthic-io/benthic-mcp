@@ -38,8 +38,8 @@ from benthic_mcp.playbook import LessonRecord, Playbook, content_words, load_pla
 # Calibrated on the served playbook: a line genuinely distilled from a lesson scores 0.45-1.0, the
 # nearest line that is a different rule scores 0.16, and everything unrelated scores 0.0.
 CORE_OVERLAP_THRESHOLD = 0.4
-# Two shared content words is what "answer a historical question" and "deliver a final answer" have
-# in common, so a floor is needed as well as a ratio.
+# Two shared content words is what two short rules on the same subject can have in common, so a
+# floor is needed as well as a ratio.
 CORE_MIN_SHARED_WORDS = 3
 
 
@@ -49,9 +49,9 @@ def core_similarity(lesson_text: str, core_line: str) -> float:
     Not the containment measure the lesson store uses. Containment asks whether the shorter text is
     inside the longer one, which suits a lesson and its long paraphrase, but a core line and the
     lesson it came from are two short restatements of the same rule, so the right question is how
-    much they agree, not whether one contains the other. Containment scored the unrelated
-    current-only-view rule as a distillation of the answer-delivery lesson on the shared word
-    "answer", which would have dropped a legitimate core line and quietly corrupted the arm.
+    much they agree, not whether one contains the other. Containment scored an unrelated core rule
+    as a distillation of a lesson on one shared word, which would have dropped a legitimate core
+    line and quietly corrupted the arm.
     """
     left, right = content_words(lesson_text), content_words(core_line)
     if not left or not right:

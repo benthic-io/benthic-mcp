@@ -8,18 +8,25 @@
       "unsigned_pair": "usaspending.agency_lookup appears in none of the 6 signed join pairs"
     },
     "regeneration": "eval/generate_cases.py must not write into this directory",
-    "contract": "Every case here must pass with the seed playbook alone. A case that fails for capability reasons does not belong here, because a permanently red suite stops being read. The relation_trap capability is deliberately absent for that reason: it queried the correct historical relation on every attempt and then returned no answer at all, which is a model behaviour finding rather than a harness defect, and it is already covered by the relation_trap family in eval/generated/questions.json."
+    "contract": "Every case here must pass with the seed playbook alone. A case that fails for capability reasons does not belong here, because a permanently red suite stops being read. The relation_trap capability is deliberately absent for that reason: it queried the correct historical relation on every attempt and then returned no answer at all, which is a model behaviour finding rather than a harness defect, and it is already covered by the relation_trap family in eval/generated/questions.json.",
+    "turn_budget": "Run this suite at 6 turns, not the 5 the generated suite uses. At 5, golden_signed_uei_join_empty_right failed 5 of 27 historical runs - all of them 'maximum turns reached', because it spends a call on benthic_playbook, three on benthic_query, and one on benthic_join and then has no turn left to answer. That is turn-budget adequacy, which is what eval/generated/questions.json measures, and the capability is already unstable there at a 0.25 flake rate. A must-pass case that fires on a capability it is not testing trains people to ignore the suite. At 6 turns the same case is 3/3 and the suite is 12/12."
   },
   "cases": [
     {
       "id": "golden_discover_committee_membership",
       "capability": "discovery",
       "question": "Use the signed catalog to identify the relevant relation and fields in usp_cl.committee_membership for a small sample of membership_id, committee_thomas_id, bioguide_id.",
-      "required_tools": ["benthic_discover"],
+      "required_tools": [
+        "benthic_discover"
+      ],
       "forbidden_claims": [],
       "expected": {
         "relation": "usp_cl.committee_membership",
-        "columns": ["membership_id", "committee_thomas_id", "bioguide_id"]
+        "columns": [
+          "membership_id",
+          "committee_thomas_id",
+          "bioguide_id"
+        ]
       }
     },
     {
@@ -27,7 +34,14 @@
       "capability": "unsigned_join_rejection",
       "question": "Check whether the signed catalog authorizes any join between usaspending.agency_lookup and usaspending.all_entities. Do not inspect data or call benthic_join unless discovery returns a path. If no path exists, state that no signed path exists and stop.",
       "required_tools": [],
-      "required_tools_any": [["benthic_discover"], ["benthic_playbook"]],
+      "required_tools_any": [
+        [
+          "benthic_discover"
+        ],
+        [
+          "benthic_playbook"
+        ]
+      ],
       "forbidden_claims": [],
       "expected": {
         "must_reject": true
@@ -37,8 +51,12 @@
       "id": "golden_signed_uei_join_empty_right",
       "capability": "identifier_reliable_join",
       "question": "Use the signed join path to check the usaspending.all_entities record with uei equal to 'ESELKUJSAM45' against samer.sam_registrations on uei. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='samer.sam_registrations', left_column='uei', right_column='uei', left_where=[\"uei=eq.ESELKUJSAM45\"].",
-      "required_tools": ["benthic_join"],
-      "forbidden_claims": ["unsigned join"],
+      "required_tools": [
+        "benthic_join"
+      ],
+      "forbidden_claims": [
+        "unsigned join"
+      ],
       "expected": {
         "left_key": "ESELKUJSAM45",
         "right_count": 0,
@@ -57,7 +75,9 @@
       "id": "golden_find_district_empty",
       "capability": "find_district_rpc",
       "question": "Find the signed district containing latitude 52.6285576 and longitude 1.2923954, and state the result's geographic scope.",
-      "required_tools": ["benthic_rpc"],
+      "required_tools": [
+        "benthic_rpc"
+      ],
       "forbidden_claims": [],
       "expected": {
         "operation": "find_district",

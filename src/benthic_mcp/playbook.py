@@ -60,9 +60,10 @@ _NEGATION = re.compile(
     r"\b(no|not|never|without|instead|rather|absent|missing|cannot|avoid|wrong|avoid|don't|does not)\b",
 )
 # The always-on slice is BASE_CORE plus this many playbook lines. The cap is deliberately one more
-# than the number of seed rules: at 8 the answer-delivery rule was silently dropped in favour of a
-# dataset summary that benthic_playbook already serves on demand. The token budget below is what
-# actually bounds the slice, and it trims the dataset summaries first.
+# than the number of seed rules, leaving room for exactly one further rule that earned its place by
+# measurement. At the old value of 8 a seed rule was silently dropped in favour of a dataset summary
+# that benthic_playbook already serves on demand. The token budget is what actually bounds the slice,
+# and it trims the dataset summaries first.
 _MAX_CORE_LINES = 9
 
 
@@ -465,9 +466,9 @@ def render_core(playbook: Playbook | None, catalog: Catalog, token_budget: int) 
     and keeps _MAX_CORE_LINES of them; this function then keeps only the first
     _MAX_CORE_LINES - len(BASE_CORE), which is three. verify()'s cap is therefore a screen-time
     guard against a pathological document rather than the served size, and the served size is three
-    items. Both are stated here because a seed rule that does not fit in three sentences is dropped
-    from the guidance with no error raised, which is how a two-sentence answer-delivery rule lost
-    everything after its first sentence.
+    items. Both are stated here because a rule that does not fit in three sentences is dropped from
+    the guidance with no error raised, which is how a two-sentence core rule once lost everything
+    after its first sentence.
     """
     lines = list(BASE_CORE)
     if playbook is not None:

@@ -323,10 +323,11 @@ def test_an_evidenced_lesson_keeps_its_status_across_a_round(tmp_path: Path) -> 
 def test_a_lesson_whose_case_no_longer_fails_is_not_rejected(tmp_path: Path) -> None:
     """ "No effect" and "nothing left to fix" must stay distinct.
 
-    The answer-delivery rule was measured as having no effect on the case it came from, when that
-    case already passed every repetition because the client had stopped deliberating. The rule was
-    fine; the case had nothing left to fail. Rejecting it would have discarded the one lesson in the
-    store that independently measures as worth two or three cases.
+    A lesson learned from a case that something else has since fixed cannot be judged there, because
+    there is no failure left for it to remove. Conflating that with "no effect" throws away advice
+    that has not been given a chance, which is a different failure from having no effect. The rule
+    this distinction was written for was itself later removed for measuring no effect over 100
+    case-runs per arm; the distinction is still right, that particular lesson was not.
     """
     from attribute_pending import GateResult, classify
 
@@ -472,13 +473,18 @@ def test_the_two_arms_differ_by_exactly_the_rule() -> None:
 
     from benthic_mcp.playbook import load_playbook
 
-    base = Path(__file__).resolve().parents[1] / "eval" / "arms" / "seed-no-answer.json"
-    with_arm = Path(tempfile.mkdtemp()) / "with.json"
-    without_arm = Path(tempfile.mkdtemp()) / "without.json"
+    # Built here rather than read from eval/arms, which is gitignored: a missing base file makes
+    # write_arm fall back to the seed, so the test would silently compare the seed against the seed
+    # plus a rule and pass on CI while asserting nothing about the arm it was written for.
+    work = Path(tempfile.mkdtemp())
+    base = seed_playbook().model_copy(update={"core": ["Only a relation the manifest lists exists."]})
+    base_path = work / "base.json"
+    base_path.write_text(base.to_json(), encoding="utf-8")
+    with_arm, without_arm = work / "with.json", work / "without.json"
     rule = "Never end the turn without a final answer."
 
-    write_arm(with_arm, base, rule)
-    write_arm(without_arm, base, None)
+    write_arm(with_arm, base_path, rule)
+    write_arm(without_arm, base_path, None)
 
     with_document = load_playbook(with_arm)[0]
     without_document = load_playbook(without_arm)[0]
@@ -524,9 +530,9 @@ def test_a_rule_that_gains_two_cases_is_kept() -> None:
 def test_only_a_measured_rule_may_join_the_always_on_core() -> None:
     """A core line is re-sent on every turn, so it has to earn its tokens on every turn.
 
-    Per-case attribution cannot make this call for a general rule: the answer-delivery rule measured
-    0/3 -> 0/3 on the case it was pointed at and is worth two cases across the suite. So the only
-    other admissible source is a suite-level measurement, and a `fixes` verdict.
+    Per-case attribution cannot make this call for a general rule, since a nudge can help five cases
+    by one each and nothing in particular on any single one of them. So the only other admissible
+    source is a suite-level measurement, and a `fixes` verdict.
     """
     import core_evidence
     from consolidate import measured_core

@@ -150,8 +150,7 @@ def measured_core(catalog: Any, evidence_path: Path) -> list[str]:
 
     Two sources, and only two. The seed rules are hand-written and reviewed. The additions are rules
     that `eval/attribute_suite.py` measured across the whole tuning split, because a general rule is
-    invisible to per-case attribution: the answer-delivery rule scored 0/3 -> 0/3 on the case it was
-    pointed at and is worth two cases overall.
+    invisible to per-case attribution.
 
     Anything else is excluded, including a rule that measured as unhelpful. A core line is re-sent on
     every turn, so it has to earn its tokens on every turn rather than be nearly right.

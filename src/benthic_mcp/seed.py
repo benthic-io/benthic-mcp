@@ -144,13 +144,17 @@ SEED_RPC: dict[str, RpcRecipe] = {
 SEED_CORE: tuple[str, ...] = (
     "Dates in this catalog are ISO-8601; filter with gte/lte rather than string comparison.",
     "Never use a current-only view to answer a historical question.",
-    # Measured, not assumed. The dominant eval failure was not a wrong answer but no answer: the
-    # model fetched every row it needed and spent its last turn on another tool call, scoring zero
-    # on correct work. Adding this rule alone took a failing case from 2/5 to 5/5. Kept to a single
-    # sentence because the core slice is capped by screened sentence count, not by line count.
-    "You have a limited number of turns, so once you have the rows you need you must stop calling "
-    "tools and write the final answer, because a question left unanswered scores zero even when "
-    "every call succeeded.",
+    # A third rule used to sit here, telling the model to stop calling tools and write the answer. It
+    # was written because non-delivery was the loudest failure in the traces, and it was carried for
+    # weeks on the strength of one measurement that turned a case from 2/5 to 5/5.
+    #
+    # A paired A/B over the whole tuning split, two repetitions, 100 case-runs per arm, then measured
+    # 23/50 with the rule and 23/50 without it: no effect. The earlier two-case gap was this suite's
+    # own run-to-run spread. A core line is re-sent on every turn, so an unproven one is a standing
+    # cost, and removing it is the same discipline the gate applies to learned rules.
+    #
+    # The underlying problem was real and is addressed elsewhere: the calling model was deliberating,
+    # and enable_thinking=false is what fixes that. That is a client setting, not a rule to ship.
 )
 
 

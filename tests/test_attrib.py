@@ -185,9 +185,9 @@ def test_a_real_distillation_of_the_lesson_is_still_recognised() -> None:
 def test_a_saturated_case_cannot_show_an_effect_either_way() -> None:
     """ "No effect" and "nothing left to fix" are different, and conflating them throws good lessons away.
 
-    The answer-delivery rule was measured as "no effect" on the case it came from, when that case
-    already passed every repetition because the client had stopped deliberating. The rule was fine;
-    the case had nothing left to fail.
+    A lesson learned from a case that something else has since fixed cannot be judged there, because
+    there is no failure left for it to remove. Reporting that as "no effect" throws away advice that
+    has not been given a chance.
     """
     outcome = judge([True] * 5, [True] * 5, min_delta=2)
 
