@@ -533,5 +533,11 @@ async def health(_: Request) -> JSONResponse:
 
 def main() -> None:
     settings = Settings.from_env()
+    if settings.mcp_transport == "stdio":
+        # No token is required or consulted: stdio has no HTTP layer to authenticate, and the
+        # process is a child of the agent that spawned it rather than a service on a port. The
+        # signed catalog, the playbook, and the trust boundary are all unchanged.
+        mcp.run(transport="stdio")
+        return
     app = create_http_app(settings)
     uvicorn.run(app, host=settings.mcp_host, port=settings.mcp_port, log_level="info")

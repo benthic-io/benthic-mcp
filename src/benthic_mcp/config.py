@@ -85,6 +85,7 @@ class Settings:
     mcp_allowed_hosts: tuple[str, ...] = DEFAULT_MCP_HOSTS
     mcp_allowed_origins: tuple[str, ...] = DEFAULT_MCP_ORIGINS
     mcp_bearer_token: str | None = None
+    mcp_transport: str = "http"
     playbook_mode: str = "seed"
     playbook_path: Path | None = None
     playbook_token_budget: int = 600
@@ -127,6 +128,7 @@ class Settings:
             mcp_allowed_hosts=_parse_csv("BENTHIC_MCP_ALLOWED_HOSTS", DEFAULT_MCP_HOSTS),
             mcp_allowed_origins=_parse_csv("BENTHIC_MCP_ALLOWED_ORIGINS", DEFAULT_MCP_ORIGINS),
             mcp_bearer_token=os.environ.get("BENTHIC_MCP_BEARER_TOKEN") or None,
+            mcp_transport=os.environ.get("BENTHIC_MCP_TRANSPORT", "http"),
             playbook_mode=os.environ.get("BENTHIC_PLAYBOOK_MODE", "seed"),
             playbook_path=Path(os.environ.get("BENTHIC_PLAYBOOK_PATH", str(cache_dir / "playbook.json"))),
             playbook_token_budget=_parse_int("BENTHIC_PLAYBOOK_TOKEN_BUDGET", 600),
@@ -140,6 +142,8 @@ class Settings:
         return settings
 
     def validate(self) -> None:
+        if self.mcp_transport not in ("http", "stdio"):
+            raise ValueError("BENTHIC_MCP_TRANSPORT must be 'http' or 'stdio'")
         root = urlparse(self.bdp_root)
         if root.scheme != "https" or not root.netloc or root.username or root.password or root.query or root.fragment:
             raise ValueError("BENTHIC_BDP_ROOT must be an absolute HTTPS URL without credentials or query data")

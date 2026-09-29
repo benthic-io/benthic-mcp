@@ -49,7 +49,20 @@ uv sync --frozen
 
 ## Running it
 
-Copy the example configuration, set a token, and start the service:
+Two transports are supported, and they are not interchangeable with the two MCP clients in llama.cpp:
+
+| client | configured by | format | transport |
+| --- | --- | --- | --- |
+| llama-server | `--mcp-servers-config` | object with `mcpServers` | stdio only |
+| llama.cpp Web UI | its MCP settings dialog | array of server objects | HTTP and SSE |
+
+Set `BENTHIC_MCP_TRANSPORT=stdio` to serve over stdio, which is what llama-server's own client needs.
+A cold spawn is about two seconds. `config/llama-mcp.README.md` has both config formats, the accepted
+schema, and the two ways to fail silently; `config/llama-mcp-servers.example.json` and
+`config/llama-mcp.example.json` are the two files.
+
+For the HTTP service, which the Web UI uses and which needs a URL and a token because a browser cannot
+spawn a subprocess:
 
 ```sh
 mkdir -p ~/.config/benthic-mcp
@@ -64,8 +77,7 @@ scripts/start-benthic-mcp.sh
 ```
 
 The service listens on port 8082 by default and exposes the Streamable HTTP MCP provider at
-`http://<mcp-host>:8082/mcp`. `/health` requires the same bearer token. Point the llama.cpp Web UI at
-it with `config/llama-mcp.example.json`, which carries a placeholder token and host.
+`http://<mcp-host>:8082/mcp`. `/health` requires the same bearer token.
 
 `examples/` holds two starting points that need editing for your machine:
 `start-llama-server.sh` is one tuned `llama-server` configuration (the one the numbers below were
@@ -172,7 +184,8 @@ uv run python eval/attribute_suite.py --rule "Never end the turn without a final
 | `BENTHIC_MCP_PATH` | `/mcp` | Streamable HTTP path |
 | `BENTHIC_MCP_ALLOWED_HOSTS` | loopback only | Accepted Host headers |
 | `BENTHIC_MCP_ALLOWED_ORIGINS` | loopback only | Accepted browser origins |
-| `BENTHIC_MCP_BEARER_TOKEN` | unset | Required HTTP bearer token |
+| `BENTHIC_MCP_TRANSPORT` | `http` | `http` or `stdio`; stdio is what llama-server's MCP client needs |
+| `BENTHIC_MCP_BEARER_TOKEN` | unset | Required for the HTTP transport only |
 | `BENTHIC_PLAYBOOK_MODE` | `seed` | `off`, `seed`, or `active` |
 | `BENTHIC_PLAYBOOK_PATH` | `<cache>/playbook.json` | Promoted playbook location |
 | `BENTHIC_PLAYBOOK_TOKEN_BUDGET` | `600` | Token cap for the always-on core slice |

@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "benthic": {
+      "command": "/absolute/path/to/benthic-mcp/.venv/bin/benthic-mcp",
+      "env": {
+        "BENTHIC_MCP_TRANSPORT": "stdio"
+      },
+      "timeout_ms": 60000
+    }
+  }
+}

@@ -514,3 +514,30 @@ def test_the_default_allow_lists_name_no_host_but_localhost() -> None:
         assert urlsplit(f"//{host}").hostname in {"127.0.0.1", "localhost", "::1"}, host
     for origin in DEFAULT_MCP_ORIGINS:
         assert urlparse(origin).hostname in {"127.0.0.1", "localhost"}, origin
+
+
+def test_stdio_transport_needs_no_bearer_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    """stdio has no HTTP layer, so a token requirement would block the only transport llama.cpp speaks."""
+    monkeypatch.delenv("BENTHIC_MCP_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv("BENTHIC_MCP_TRANSPORT", "stdio")
+
+    settings = Settings.from_env()
+    settings.validate()
+
+    assert settings.mcp_transport == "stdio"
+    assert settings.mcp_bearer_token is None
+
+
+def test_http_transport_still_demands_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("BENTHIC_MCP_BEARER_TOKEN", raising=False)
+    monkeypatch.setenv("BENTHIC_MCP_TRANSPORT", "http")
+
+    with pytest.raises(ValueError, match="BENTHIC_MCP_BEARER_TOKEN is required for HTTP transport"):
+        server_module.create_http_app(Settings.from_env())
+
+
+def test_an_unknown_transport_is_rejected_at_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BENTHIC_MCP_TRANSPORT", "carrier-pigeon")
+
+    with pytest.raises(ValueError, match="BENTHIC_MCP_TRANSPORT"):
+        Settings.from_env().validate()
