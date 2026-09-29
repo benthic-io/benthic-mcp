@@ -1,0 +1,212 @@
+{
+  "description": "Tier 1: the server-discrimination canary. Six cases, one per signed join path plus the one non-join case that expects rows. This is a canary and nothing else - a step function over four server paths, reported as green or red, never as a percentage. The full 33-case suite is in generated/questions.json and is tier 2: it measures the model's turn discipline far more than the server's correctness.",
+  "tier": 1,
+  "gating": true,
+  "cases": [
+    {
+      "capability": "heuristic_heuristic_join",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "heuristic",
+          "left": "samer.sam_registrations",
+          "left_column": "duns",
+          "reliability": "heuristic",
+          "right": "irs_ng.bmf_organizations",
+          "right_column": "ein"
+        },
+        "left_key": "7S5S4",
+        "right_count": 0,
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
+      },
+      "forbidden_claims": [
+        "unsigned join",
+        "unqualified exact match"
+      ],
+      "id": "join_samer_sam_registrations_irs_ng_bmf_organizations_match",
+      "question": "Use the signed join path to check the samer.sam_registrations record with duns equal to '7S5S4' against irs_ng.bmf_organizations on ein. Treat these as heuristic matches and clearly label them as non-exact. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='samer.sam_registrations', right_source='irs_ng.bmf_organizations', left_column='duns', right_column='ein', left_where=[\"duns=eq.7S5S4\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "heuristic_heuristic_join",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "heuristic",
+          "left": "usaspending.all_entities",
+          "left_column": "duns",
+          "reliability": "heuristic",
+          "right": "irs_ng.bmf_organizations",
+          "right_column": "ein"
+        },
+        "left_key": "142362594",
+        "right_count": 0,
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
+      },
+      "forbidden_claims": [
+        "unsigned join",
+        "unqualified exact match"
+      ],
+      "id": "join_usaspending_all_entities_irs_ng_bmf_organizations_match",
+      "question": "Use the signed join path to check the usaspending.all_entities record with duns equal to '142362594' against irs_ng.bmf_organizations on ein. Treat these as heuristic matches and clearly label them as non-exact. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='irs_ng.bmf_organizations', left_column='duns', right_column='ein', left_where=[\"duns=eq.142362594\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_reliable_join",
+      "expected": {
+        "bound_column": null,
+        "bound_value": null,
+        "context_column": null,
+        "context_value": null,
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "uei",
+          "reliability": "reliable",
+          "right": "samer.sam_registrations",
+          "right_column": "uei"
+        },
+        "left_key": "ESELKUJSAM45",
+        "right_count": 0,
+        "right_keys_distinct": [],
+        "right_keys_note": "The distinct right-hand key values, not one entry per row. A joined relation returns many rows sharing a key (127 rows all on district 3), so a per-row list describes a data shape that does not exist. The scorer compares the distinct set."
+      },
+      "forbidden_claims": [
+        "unsigned join"
+      ],
+      "id": "join_usaspending_all_entities_samer_sam_registrations_match",
+      "question": "Use the signed join path to check the usaspending.all_entities record with uei equal to 'ESELKUJSAM45' against samer.sam_registrations on uei. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usaspending.all_entities', right_source='samer.sam_registrations', left_column='uei', right_column='uei', left_where=[\"uei=eq.ESELKUJSAM45\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_partial_join_evidence",
+      "expected": {
+        "bound_column": "uei",
+        "bound_value": "ESELKUJSAM45",
+        "context_column": "state",
+        "context_value": "MD",
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "congressional_district",
+          "reliability": "partial",
+          "right": "usp_cl.legislator_terms",
+          "right_column": "district"
+        },
+        "left_key": "03",
+        "right_count": 127,
+        "right_keys_distinct": [
+          3
+        ],
+        "right_keys_note": "Re-probed 2026-09-29 against direct PostgREST: district=3 AND state=MD returns 127 rows. The old value of 5 came from a generator path that filtered the right side on the key column only and ignored the context condition, so it never matched anything the join could produce. The default limit of 100 returns 100 rows with truncated=true, which is the correct bounded answer."
+      },
+      "forbidden_claims": [
+        "unsigned join"
+      ],
+      "id": "join_usaspending_all_entities_usp_cl_legislator_terms_evidence",
+      "question": "Use the signed join path to find the relationship for usaspending.all_entities value '03' in usp_cl.legislator_terms, explain the match evidence, and report whether it is reliable, partial, or heuristic. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "identifier_partial_join",
+      "expected": {
+        "bound_column": "uei",
+        "bound_value": "ESELKUJSAM45",
+        "context_column": "state",
+        "context_value": "MD",
+        "join_path": {
+          "join_type": "identifier",
+          "left": "usaspending.all_entities",
+          "left_column": "congressional_district",
+          "reliability": "partial",
+          "right": "usp_cl.legislator_terms",
+          "right_column": "district"
+        },
+        "left_key": "03",
+        "right_count": 127,
+        "right_keys_distinct": [
+          3
+        ],
+        "right_keys_note": "Re-probed 2026-09-29 against direct PostgREST: district=3 AND state=MD returns 127 rows. The old value of 5 came from a generator path that filtered the right side on the key column only and ignored the context condition, so it never matched anything the join could produce. The default limit of 100 returns 100 rows with truncated=true, which is the correct bounded answer."
+      },
+      "forbidden_claims": [
+        "unsigned join",
+        "unqualified exact match"
+      ],
+      "id": "join_usaspending_all_entities_usp_cl_legislator_terms_match",
+      "question": "Use the signed join path to check the usaspending.all_entities record with congressional_district equal to '03' against usp_cl.legislator_terms on district. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"].",
+      "required_tools": [
+        "benthic_join"
+      ]
+    },
+    {
+      "capability": "districts_in_bbox_rpc",
+      "expected": {
+        "arguments": {
+          "max_lat": 52.6385576,
+          "max_lon": 1.3023954,
+          "min_lat": 52.6185576,
+          "min_lon": 1.2823954
+        },
+        "operation": "districts_in_bbox",
+        "row_count": 1,
+        "rows": [
+          {
+            "district": 0,
+            "district_id": "002115119000",
+            "id": 38477,
+            "statename": "Alaska"
+          }
+        ]
+      },
+      "forbidden_claims": [
+        "exact geographic identity"
+      ],
+      "id": "rpc_districts_in_bbox_rows",
+      "question": "Call the districts_in_bbox RPC for the bounding box min_lon=1.2823954, min_lat=52.6185576, max_lon=1.3023954, max_lat=52.6385576. Report how many signed districts it returns, and explain the limits of the result.",
+      "required_tools": [
+        "benthic_rpc"
+      ],
+      "question_note": "Rewritten 2026-09-29. The original said 'the small bounding box around latitude X and longitude Y' and left the extent unstated, so the model chose its own - a zero-height box, which returned the same 1 row and satisfied the case for the wrong reason. The case asserts on the RPC arguments, so the question has to state them; an assertion the question does not ask for is indistinguishable from a model error."
+    }
+  ],
+  "metadata": {
+    "purpose": "Tier 1, the gating canary. Six cases chosen because each one asserts something about what the server returned, and between them they touch every signed join path plus the one non-join case that expects rows. Run this before changing server code. Report it as green or red; do not report it as a percentage, because six cases over four paths is a step function. The 33-case suite in generated/questions.json is tier 2 and is report-only.",
+    "tier": 1,
+    "gating": true,
+    "case_count": 6,
+    "signed_join_paths_covered": 4,
+    "expect_rows": [
+      "join_usaspending_all_entities_usp_cl_legislator_terms_evidence",
+      "join_usaspending_all_entities_usp_cl_legislator_terms_match",
+      "rpc_districts_in_bbox_rows"
+    ],
+    "expect_no_rows": [
+      "join_samer_sam_registrations_irs_ng_bmf_organizations_match",
+      "join_usaspending_all_entities_irs_ng_bmf_organizations_match",
+      "join_usaspending_all_entities_samer_sam_registrations_match"
+    ],
+    "caveat": "Four of the six cases expect zero rows, so they catch a join that is too wide and pass against a join that is too narrow. The canary is falsifiable only because two cases expect rows; tests/test_canary.py asserts that stays true.",
+    "generated_from": {
+      "suite": "eval/generated/questions.json",
+      "cases_identical": true,
+      "verified_against": "signed manifest"
+    }
+  }
+}

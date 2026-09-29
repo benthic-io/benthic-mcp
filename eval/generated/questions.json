@@ -541,10 +541,11 @@
       },
       "forbidden_claims": [],
       "id": "rpc_districts_in_bbox_limits",
-      "question": "List signed districts in the small bounding box around latitude 52.6285576 and longitude 1.2923954; explain the limits of the result. Include the operation arguments and the returned completeness/truncation information.",
+      "question": "Call the districts_in_bbox RPC for the bounding box min_lon=1.2823954, min_lat=52.6185576, max_lon=1.3023954, max_lat=52.6385576. Report how many signed districts it returns, and explain the limits of the result.",
       "required_tools": [
         "benthic_rpc"
-      ]
+      ],
+      "question_note": "Rewritten 2026-09-29. The original said 'the small bounding box around latitude X and longitude Y' and left the extent unstated, so the model chose its own - a zero-height box, which returned the same 1 row and satisfied the case for the wrong reason. The case asserts on the RPC arguments, so the question has to state them; an assertion the question does not ask for is indistinguishable from a model error."
     },
     {
       "capability": "districts_in_bbox_rpc",
@@ -570,10 +571,11 @@
         "exact geographic identity"
       ],
       "id": "rpc_districts_in_bbox_rows",
-      "question": "List signed districts in the small bounding box around latitude 52.6285576 and longitude 1.2923954; explain the limits of the result.",
+      "question": "Call the districts_in_bbox RPC for the bounding box min_lon=1.2823954, min_lat=52.6185576, max_lon=1.3023954, max_lat=52.6385576. Report how many signed districts it returns, and explain the limits of the result.",
       "required_tools": [
         "benthic_rpc"
-      ]
+      ],
+      "question_note": "Rewritten 2026-09-29. The original said 'the small bounding box around latitude X and longitude Y' and left the extent unstated, so the model chose its own - a zero-height box, which returned the same 1 row and satisfied the case for the wrong reason. The case asserts on the RPC arguments, so the question has to state them; an assertion the question does not ask for is indistinguishable from a model error."
     },
     {
       "capability": "find_district_rpc_limits",

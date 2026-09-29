@@ -288,6 +288,11 @@ def score_case(
     evidence_ok = True
     answer_ok = True
     answered = True
+    # Which checks this case's capability actually ran. Every check defaults to True, so a
+    # `row_count_check: true` on a discovery case reads as an assertion that was made and passed
+    # when nothing was checked at all. 27 of the 33 generated cases assert no server answer, and
+    # this is what says so.
+    asserted = {"tool_requirement", "answered"}
 
     if strict:
         # A run that exhausts its turns without producing an answer has delivered nothing, even
@@ -297,6 +302,7 @@ def score_case(
     if "join" in capability and capability != "unsigned_join_rejection":
         matching = [event for event in successful if event["name"] == "benthic_join"]
         join_ok = bool(matching)
+        asserted.add("join_check")
         if join_ok and expected.get("join_path"):
             path = expected["join_path"]
             join_ok = any(
@@ -313,6 +319,7 @@ def score_case(
         # as passes for 695 case-runs because nothing here read the result.
         answer_ok = _join_answer_ok(expected, matching)
         evidence_ok = _join_reliability_ok(expected, matching)
+        asserted |= {"join_check", "answer_check", "evidence_check"}
 
     if (
         capability.startswith("find_district")
@@ -320,6 +327,7 @@ def score_case(
         or capability.startswith("nonprofits_nearby")
     ):
         rpc_events = [event for event in successful if event["name"] == "benthic_rpc"]
+        asserted.add("row_count_check")
         # The operation and the arguments, not just the row count. `expected.arguments` was recorded
         # and never read, so a districts_in_bbox case expecting one row for one bounding box was
         # satisfied by any call returning one row - including a box the model invented, and including
@@ -346,10 +354,12 @@ def score_case(
             event.get("arguments", {}).get("source") for event in successful if event["name"] == "benthic_query"
         }
         join_ok = {expected.get("left"), expected.get("right")}.issubset(query_sources)
+        asserted.add("join_check")
 
     if capability == "unsigned_join_rejection":
         invalid_join = any(event["name"] == "benthic_join" and event["ok"] for event in events)
         join_ok = not invalid_join and contains_any(final_text, ["not signed", "no signed", "cannot", "unsigned"])
+        asserted.add("join_check")
 
     if capability == "multi_step_join":
         executed = [event for event in successful if event["name"] == "benthic_join"]
@@ -370,17 +380,20 @@ def score_case(
             join_ok = len(executed) >= len(expected_paths) and all(
                 any(_join_matches(event, path) for event in executed) for path in expected_paths
             )
+        asserted.add("join_check")
 
     if capability == "relation_trap":
         # The present-day view returns a confident wrong answer, so the only reliable signal is
         # whether the historical relation was the one actually queried.
         row_count_ok = str(expected.get("relation")) in queried_sources(successful)
+        asserted.add("row_count_check")
 
     if strict and capability == "discovery" and expected.get("relation"):
         # The legacy scorer only checks that benthic_discover was called, so a playbook that
         # merely nudges one extra tool call would look like progress.
         qualified, bare = discovered_relations(successful)
         row_count_ok = relation_was_discovered(qualified, bare, expected["relation"])
+        asserted.add("row_count_check")
 
     forbidden_hits = [claim for claim in case.get("forbidden_claims", []) if contains_any(final_text, [claim])]
     return {
@@ -389,6 +402,7 @@ def score_case(
         "row_count_check": row_count_ok,
         "evidence_check": evidence_ok,
         "answer_check": answer_ok,
+        "asserted": sorted(asserted),
         "answered": answered,
         "forbidden_claim_hits": forbidden_hits,
         "passed": (
