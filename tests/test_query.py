@@ -11,6 +11,7 @@ from benthic_mcp.models import (
     AggregateSpec,
     FilterOperator,
     FilterSpec,
+    HavingSpec,
     JoinMode,
     JoinSpec,
     OutputOrder,
@@ -260,3 +261,88 @@ async def test_zero_rows_preserve_explicit_output_columns(settings: Any, bdp_doc
 
     assert result.rows == []
     assert result.columns == ["awards.uei"]
+
+
+@pytest.mark.asyncio
+async def test_ordering_a_column_of_mixed_types_is_a_total_order_not_a_crash(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """`order=` raised an uncaught TypeError on a column the manifest calls `string`.
+
+    A declared `string` column is not guaranteed to hold strings: PostgREST returns whatever JSON
+    type is stored, and a numeric-looking value comes back as a number. `_sort_value` tagged numbers
+    and text with the same rank 1, so comparing `(1, 3)` with `(1, '7')` raised
+    `'<' not supported between instances of 'str' and 'int'`. That escaped the tool wrapper, which
+    catches BenthicMCPError and ValueError but not TypeError, so the caller got an internal error
+    rather than a result. Found by contract-checking the sort key's totality, invisible to 670
+    case-runs because no case orders by such a column.
+    """
+    client = _query_client(
+        bdp_documents,
+        {
+            "/ngopen/usaspending/all_entities": [
+                {"uei": "A", "name": 3},
+                {"uei": "B", "name": "alpha"},
+                {"uei": "C", "name": 1},
+                {"uei": "D", "name": "beta"},
+            ]
+        },
+    )
+    service = QueryService(settings, BdpRepository(settings, client), PostgrestTransport(settings, client))
+    request = QueryRequest(
+        question="Order by name",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities", select=["uei", "name"])],
+        order=[OutputOrder(column="s.name")],
+    )
+
+    try:
+        result = unqualify_result(await service.execute(request))
+    finally:
+        await client.aclose()
+
+    # Total order, deterministic, and every row present: sorting must not drop or invent rows.
+    # Documented order: nulls, then numbers by magnitude, then text as lowercase.
+    assert [row["uei"] for row in result.rows] == ["C", "A", "B", "D"]
+    assert result.row_count == 4
+
+
+@pytest.mark.asyncio
+async def test_having_never_compares_text_with_a_number(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """`having` built a dict of all eight comparisons, so an equality also computed `>`.
+
+    The dict literal is eager, so `having mx=eq.3` where `mx` is min() over a text column evaluated
+    `value > expected` and raised `'>' not supported between instances of 'str' and 'int'`. The
+    ordering operators are guarded by _numeric and refuse cleanly; equality and inequality were not,
+    because nothing stopped the dict from computing the unguarded ones as well. TypeError is not a
+    BenthicMCPError and not a ValueError, so it escaped the tool wrapper and the caller saw an
+    internal error instead of a message naming the column. Same family as the sort-key crash, one
+    layer over.
+    """
+    client = _query_client(
+        bdp_documents,
+        {
+            "/ngopen/usaspending/all_entities": [
+                {"uei": "A", "name": "alpha"},
+                {"uei": "B", "name": "beta"},
+            ]
+        },
+    )
+    service = QueryService(settings, BdpRepository(settings, client), PostgrestTransport(settings, client))
+    request = QueryRequest(
+        question="Having an equality on a text aggregate",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities", select=["uei", "name"])],
+        aggregates=[AggregateSpec(alias="mx", function=AggregateFunction.MIN, column="s.name")],
+        having=[HavingSpec(column="mx", operator=FilterOperator.EQ, value=3)],
+    )
+
+    ordering = request.model_copy(update={"having": [HavingSpec(column="mx", operator=FilterOperator.GT, value=3)]})
+    try:
+        equality = unqualify_result(await service.execute(request))
+        with pytest.raises(QueryValidationError) as caught:
+            await service.execute(ordering)
+    finally:
+        await client.aclose()
+
+    assert equality.rows == [], "no text equals 3, so the answer is an empty result, not a crash"
+    # The ordering operators still refuse, and the refusal names the column so the caller can act.
+    assert "mx" in str(caught.value)

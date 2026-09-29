@@ -580,20 +580,26 @@ def _matches_having(value: Any, condition: HavingSpec) -> bool:
         return value in condition.value
     else:
         expected = condition.value
-    comparisons = {
-        FilterOperator.EQ: value == expected,
-        FilterOperator.NEQ: value != expected,
-        FilterOperator.GT: value > expected,
-        FilterOperator.GTE: value >= expected,
-        FilterOperator.LT: value < expected,
-        FilterOperator.LTE: value <= expected,
-        FilterOperator.LIKE: str(value) == str(expected),
-        FilterOperator.ILIKE: str(value).lower() == str(expected).lower(),
-    }
-    result = comparisons.get(condition.operator)
-    if result is None:
-        raise QueryValidationError(f"Unsupported having operator {condition.operator.value}")
-    return result
+    # Dispatched, not looked up in a dict of all eight: a dict literal is evaluated eagerly, so
+    # `having mx=eq.3` on a text aggregate also computed `value > expected` and raised a TypeError
+    # the tool wrapper does not catch. Only the requested comparison may be computed.
+    if condition.operator == FilterOperator.EQ:
+        return value == expected
+    if condition.operator == FilterOperator.NEQ:
+        return value != expected
+    if condition.operator == FilterOperator.GT:
+        return value > expected
+    if condition.operator == FilterOperator.GTE:
+        return value >= expected
+    if condition.operator == FilterOperator.LT:
+        return value < expected
+    if condition.operator == FilterOperator.LTE:
+        return value <= expected
+    if condition.operator == FilterOperator.LIKE:
+        return str(value) == str(expected)
+    if condition.operator == FilterOperator.ILIKE:
+        return str(value).lower() == str(expected).lower()
+    raise QueryValidationError(f"Unsupported having operator {condition.operator.value}")
 
 
 def _order_rows(
@@ -613,14 +619,25 @@ def _order_rows(
     return ordered
 
 
-def _sort_value(value: Any) -> tuple[int, Any]:
+def _sort_value(value: Any) -> tuple[int, float | str]:
+    """A total order over a value of any type, so `order=` cannot raise.
+
+    A column the manifest declares `string` is not guaranteed to hold strings: PostgREST returns
+    whatever JSON type is stored, so a numeric-looking value comes back as a number. Ranking every
+    non-null value 1 meant Python compared `(1, 3)` with `(1, '7')` and raised a TypeError that the
+    tool wrapper does not catch.
+
+    The type class is the first element, so the second is only ever compared within a class: nulls
+    first, then numbers by magnitude, then everything else as lowercase text. Numbers before text is
+    an arbitrary choice, and a documented one, which is what makes the order stable.
+    """
     if value is None:
-        return (0, "")
+        return (0, 0.0)
     if isinstance(value, bool):
-        return (1, int(value))
+        return (1, float(value))
     if isinstance(value, (int, float)):
-        return (1, value)
-    return (1, str(value).lower())
+        return (1, float(value))
+    return (2, str(value).lower())
 
 
 def _available_source_columns(fetched: list[FetchedSource]) -> list[str]:
