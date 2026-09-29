@@ -222,3 +222,58 @@ def test_right_keys_are_compared_as_distinct_values() -> None:
 
     assert score(3) is True
     assert score(0) is False
+
+
+def test_a_left_join_returning_one_row_with_a_null_key_counts_as_zero_matches() -> None:
+    """The shape that keeps a must-pass golden case red when read as row_count.
+
+    benthic_join in left mode keeps every left row and fills the right with null, so "the right side
+    is empty" comes back as one row. Counting returned rows made a correct answer read as wrong, and
+    the case that asserts on it had been failing 5 of 27 runs for a long time for reasons that had
+    nothing to do with the server.
+    """
+    from run_eval import score_case
+
+    case = {
+        "id": "contract_left_join",
+        "capability": "identifier_join",
+        "expected": {
+            "join_path": {
+                "left": "l",
+                "left_column": "uei",
+                "right": "r",
+                "right_column": "uei",
+                "reliability": "reliable",
+            },
+            "right_count": 0,
+        },
+    }
+
+    def score(mode: str, row_count: int) -> bool:
+        return score_case(
+            case,
+            [
+                {
+                    "name": "benthic_join",
+                    "ok": True,
+                    "arguments": {
+                        "left_source": "l",
+                        "right_source": "r",
+                        "left_column": "uei",
+                        "right_column": "uei",
+                        "mode": mode,
+                    },
+                    "structured": {
+                        "row_count": row_count,
+                        "truncated": False,
+                        "rows": [{"left.uei": "A", "right.uei": None}],
+                        "joins": [{"reliability": "reliable"}],
+                    },
+                }
+            ],
+            "Signed, reliable, right side empty.",
+            strict=True,
+        )["answer_check"]
+
+    assert score("left", 1) is True, "a left join that matched nothing is still the right answer"
+    assert score("inner", 1) is False, "an inner join returning one row genuinely joined something"

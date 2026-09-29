@@ -160,7 +160,31 @@ def _join_matches(event: dict[str, Any], path: dict[str, Any]) -> bool:
 DEFAULT_QUERY_LIMIT = 100
 
 
-def _count_matches(event: dict[str, Any], structured: dict[str, Any], want: int) -> bool:
+def _matched_row_count(event: dict[str, Any], structured: dict[str, Any], column: str | None) -> int:
+    """Rows that actually joined, not rows returned.
+
+    A left join keeps every left row and fills the right with null, so a correct answer to "the
+    right side is empty" comes back as one row, not zero. Counting those filler rows as matches made
+    a right_kei join of 0 read as a wrong answer, which is what kept a must-pass golden case red.
+    """
+    if (event.get("arguments") or {}).get("mode") != "left":
+        return int(structured.get("row_count") or 0)
+    if not column:
+        return int(structured.get("row_count") or 0)
+    leaf = column.rsplit(".", 1)[-1]
+    # Count distinct right-hand aliases that actually joined. A left join names the right key
+    # twice, once per side - left.uei and right.uei both end in "uei" - so matching on the bare
+    # column name alone counts the left row as a match and reads one returned row as one join.
+    aliases = {key.rsplit(".", 1)[0] for key in (structured.get("rows") or [{}])[0] if "." in key}
+    right = [alias for alias in aliases if alias not in ("left",) and not alias.startswith("left.")]
+    if not right:
+        return int(structured.get("row_count") or 0)
+    return sum(
+        1 for row in structured.get("rows") or [] if any(row.get(f"{alias}.{leaf}") is not None for alias in right)
+    )
+
+
+def _count_matches(event: dict[str, Any], structured: dict[str, Any], want: int, matched: int | None = None) -> bool:
     """Whether a returned row count answers the question, allowing for the query's own limit.
 
     A bounded query that fills its limit has answered as far as it was asked to, and says so with
@@ -168,7 +192,7 @@ def _count_matches(event: dict[str, Any], structured: dict[str, Any], want: int)
     127-row question as a wrong one. The default limit applies when the caller passed none, so the
     argument is not always there to read.
     """
-    got = structured.get("row_count")
+    got = structured.get("row_count") if matched is None else matched
     if got == want:
         return True
     limit = (event.get("arguments") or {}).get("limit") or structured.get("limit") or DEFAULT_QUERY_LIMIT
@@ -194,12 +218,14 @@ def _join_answer_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) ->
         return True
     for event in matching:
         structured = event.get("structured") or {}
-        if want_count is not None and not _count_matches(event, structured, want_count):
+        column = (expected.get("join_path") or {}).get("right_column")
+        if want_count is not None and not _count_matches(
+            event, structured, want_count, _matched_row_count(event, structured, column)
+        ):
             continue
         if want_keys:
             # Rows are namespaced by source alias while the expectation names bare columns, so match
             # on the column name after the last dot rather than reconstructing the server's alias.
-            column = (expected.get("join_path") or {}).get("right_column")
             got = {
                 value
                 for row in structured.get("rows") or []

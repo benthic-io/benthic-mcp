@@ -107,35 +107,56 @@ regression is quarantined. The measurement, the dead ends, and the limits of the
 
 ## What has been measured
 
-33 generated cases against a 35B MoE coder model, one repetition per case, 5-turn budget. The suite
-is small and noisy: it moves by one or two cases between identical runs.
+33 generated cases against a 35B MoE coder model, 6-turn budget. Read this table as a count of cases
+answered correctly, not as a measurement of anything: the suite's minimum detectable effect is larger
+than the whole remaining failure set, so a difference of one or two cases between rows here is not
+distinguishable from noise.
 
-| configuration | pass rate | completion tokens |
-| --- | --- | --- |
-| seed, thinking enabled | 29/33 then 27/33 | 53,231 / 56,917 |
-| seed, `enable_thinking=false` | 29/33 then 29/33 | 19,092 / 20,226 |
+| configuration | result |
+| --- | --- |
+| seed, `enable_thinking=false`, 2 reps | **32/33 both reps**, holdout 8/8 and 7/8 |
+| completion tokens, thinking off | 19,092 / 20,226 per rep, against 53,231 / 56,917 with it |
 
-Two repetitions of all 33 cases each, same seed, same turn budget. Held-out cases are excluded from
-reflection, so the headline is not a training number.
+Held-out cases are excluded from reflection, so the headline is not a training number. 31 of 33 cases
+pass both repetitions; the two that do not are the `relation_trap` pair.
 
-The two effects are not the same size and the table separates them deliberately. Disabling thinking cuts
-completion tokens by about 64%, and nothing in the run-to-run spread comes close to that, so it is not
-in question. Its effect on the pass rate is about one case, and one case is what thinking-enabled
-repetitions disagree with each other by, so **the accuracy benefit is not established** and the README
-does not claim it. What is visible is that thinking-off is reproducible where thinking-on is not:
-29/33 twice, against 29/33 then 27/33.
+`enable_thinking=false` cuts completion tokens by about 64%, and nothing in the run-to-run spread
+comes close to that. Its effect on the pass rate is not claimed, because this suite cannot resolve an
+effect that size. `docs/findings.md` records the arithmetic and the three measurements that got there.
 
-A third row is worth stating plainly. The accumulated lessons were served and measured, and **none of
-the twelve earned a place**; one was measured as actively harmful and quarantined. Details in
-[`docs/findings.md`](docs/findings.md).
+## What is actually verified, and how
 
-And one correction worth reading, because it is the project's clearest methodological result. The
-answer-delivery core line was removed on the strength of a paired A/B over 100 case-runs per arm that
-came back 23/50 in both arms. That null was an artefact: the instrument keyed its result by case
-rather than by case and repetition, so it kept only the last repetition of each. Over all repetitions
-the same data reads 44/50 without the rule against 46/50 with it, which clears the threshold and reads
-`fixes`. The rule has been restored. Half the data in a measurement is worth less than none if you
-report it as if it were all of it.
+The statistical A/B is no longer the gate. It could not be: the suite's minimum detectable effect is
+larger than the entire remaining failure set, so a gate built on it can only ever detect harm, which
+is why it kept reporting that nothing worked. Two things replaced it.
+
+**Contracts.** 26 properties over the catalog and join subsystems, stated in the code's own
+vocabulary, with no model and no network. Each is falsifiable, and each one was: five arrived
+violated and are now fixed. They are in `tests/test_contracts_catalog.py`, and they are what found
+the bugs below.
+
+**Answer checking.** The scorer now reads the result of a call, not just its route, so a wrong answer
+delivered confidently along the right path is a failure.
+
+Between them they found three real defects that the model-in-the-loop apparatus never saw:
+
+- A signed join between a `string` column holding `'03'` and an `integer` column holding `3` compared
+  them in Python, matched nothing, and returned 0 rows where 127 exist. 55 of 55 observed calls. The
+  two affected cases scored as **passes** for 51 stored runs, and a `benthic_report` had diagnosed it
+  correctly while the harness could not see it.
+- The columns a `context_conditions` entry compares were never fetched, so no partial signed join
+  could ever match a row, for any input.
+- `order=` raised a bare `TypeError` on a column holding mixed types, which the tool wrapper does not
+  catch, so the call failed with an unhandled error instead of a message.
+
+Two of the suite's cases were also asking for things that cannot exist: a two-hop chain whose first
+hop is provably empty, scored as a failure for reporting that truthfully. They now ask where the chain
+terminates, and pass 4/4.
+
+The honest position on self-improvement is unchanged by any of this and worth stating: **the loop does
+not learn.** Eight of eight lessons it produced restate guidance the model already receives, and it
+has no way to express a code change, which is the only kind that has ever worked here. The
+mechanism that works is contracts plus a reviewer.
 
 ## Evaluation
 

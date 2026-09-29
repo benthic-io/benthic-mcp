@@ -153,7 +153,6 @@ def run_arm(args: argparse.Namespace, label: str, playbook: Path, questions: Pat
     per_case: dict[str, list[bool]] = {}
     for record in records:
         per_case.setdefault(record["id"], []).append(bool(record["score"]["passed"]))
-    passed = {case_id: outcomes for case_id, outcomes in per_case.items()}
     total = sum(len(outcomes) for outcomes in per_case.values())
     return {
         "label": label,
@@ -163,7 +162,7 @@ def run_arm(args: argparse.Namespace, label: str, playbook: Path, questions: Pat
         "reps": max(len(outcomes) for outcomes in per_case.values()),
         "case_runs": total,
         "passed": sum(sum(outcomes) for outcomes in per_case.values()),
-        "per_case": passed,
+        "per_case": per_case,
         "empty_answers": sum(1 for record in records if not record.get("final_text", "").strip()),
         "max_turns": sum(1 for record in records if record.get("error") == "maximum turns reached"),
         "median_ms": round(statistics.median(record["elapsed_ms"] for record in records)),
