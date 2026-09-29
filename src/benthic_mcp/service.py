@@ -135,6 +135,7 @@ class BenthicService:
         self,
         symptom: str,
         lesson: str,
+        channel: Literal["report", "reflector"],
         question_summary: str = "",
         dataset: str | None = None,
         relation: str | None = None,
@@ -142,7 +143,12 @@ class BenthicService:
         source_ref: str = "",
     ) -> ReportResult:
         """Store one author-reported lesson. Shared by the benthic_report tool and the harness
-        reflector, so both go through identical validation, grounding, and merge behaviour."""
+        reflector, so both go through identical validation, grounding, and merge behaviour.
+
+        `channel` is required because that identity was previously discarded here: the two callers
+        differ in what they can be held to, and once merged the store could not say which one had
+        written a given lesson.
+        """
         runtime = await self.playbook()
         catalog = runtime.catalog
         warnings: list[str] = []
@@ -167,6 +173,7 @@ class BenthicService:
                 hashlib.sha256(question_summary.encode("utf-8")).hexdigest()[:16] if question_summary else ""
             ),
             source_ref=source_ref.strip()[:120],
+            channels=[channel],
             question_summary=question_summary.strip()[:300] if self.settings.trace_include_text else None,
             catalog_fingerprint=runtime.catalog.fingerprint(),
             evidence=self.trace_store.recent_summary(12),

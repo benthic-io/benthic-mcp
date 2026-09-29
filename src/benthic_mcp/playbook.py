@@ -223,6 +223,11 @@ class LessonRecord(StrictModel):
     # The server never interprets it, and a voluntary benthic_report has none, which is why a lesson
     # without it cannot be attributed and so cannot be served.
     source_ref: str = ""
+    # Which paths have ever produced this lesson: the MCP `benthic_report` tool, or the offline
+    # harness reflector. They merge through `record_lesson` and used to be indistinguishable
+    # afterwards, so no claim about what "the reflector" had written could be checked against the
+    # store. Empty means the lesson predates the field, not that it came from nowhere.
+    channels: list[Literal["report", "reflector"]] = Field(default_factory=list)
     catalog_fingerprint: str = ""
     evidence: list[str] = Field(default_factory=list)
     question_ref: str = ""

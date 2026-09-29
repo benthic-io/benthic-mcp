@@ -424,6 +424,7 @@ async def reflect_round(
             # The gate measures a lesson against the case it came from, so the case has to travel
             # with it. Without this a lesson is unmeasurable and therefore never served.
             source_ref=usage.case_id,
+            channel="reflector",
         )
         await service.close()
         lessons.append(

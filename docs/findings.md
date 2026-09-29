@@ -517,3 +517,61 @@ number when the stored value is numeric, and the code trusted the declaration.
 `except (BenthicMCPError, ValueError)`. The caller got an internal error instead of a message. Found
 by contract-checking the sort key's totality in about ten minutes; invisible to 670 case-runs because
 no case orders by such a column or asks for an equality on a text aggregate.
+
+## A claim about the reflector that could not be checked
+
+The working notes recorded: *"8 of 8 lessons the reflector produced restate guidance already in the
+always-on core."* It was quoted as the reason the prose loop does not learn. It is not supportable,
+and the reason it survived is the same defect class as everything else in this file: the instrument
+discarded the variable.
+
+`eval/harness/rounds.json` logs `lesson_id` and `case_id` per reflection. Reconstructing from it:
+
+| channel | distinct lessons served | overlap the core |
+| --- | --- | --- |
+| reflector | 8 | **3 of 8** |
+| `benthic_report` | 4 | 0 of 4 |
+
+Overlap is token similarity against the 8 core lines at a 0.72 threshold, with a token-subset test
+for full containment. That threshold is chosen here, so the count is not a fact about the world:
+the reflector scores are 0.86, 0.73, 0.70, 0.69, 0.33, 0.31, 0.31, 0.20, and depending on where the
+line is drawn anywhere from 1 to 4 of 8 count. **8 of 8 is not reachable at any threshold.** The
+claim's direction was wrong, not just its precision.
+
+The four `benthic_report` lessons overlap the core zero times and include both of the sharpest
+findings in the store: the `'03'`/`3` defect described correctly, and a materialized view that 500s
+until it is `REFRESH`ed. The reflector's eight are method advice - paginate a truncated scan, deliver
+an answer, confirm column names. Two channels, opposite characters, and neither was ever labelled.
+
+What *is* true behind the original claim is the mechanism, verified in code: `eval/reflect.py`
+`build_prompt` never includes the core rules, and the pipeline drops any sentence naming a
+non-manifest identifier, so a reflection saying "add a type coercion" has nowhere to land. The
+mechanism was confirmed; the outcome was assumed.
+
+### The gate never ran, because it postdates its own data
+
+All twelve stored lessons are `attribution: untested`. Two reasons, both structural:
+
+- `attribute_pending.py` and the `attribution_gate` hook in `harness.py` were both added
+  **2026-09-28**. Round 6 was written **2026-09-27**. Zero of six round files contain the key
+  `attribution_gate`.
+- The gate's only eligibility rule is `source_case()` returning `record.source_ref`. That field was
+  added in the same commit, a day after every lesson in the store was written. Every one read `None`,
+  so every lesson landed in `unmeasurable` by construction.
+
+The gate therefore reported nothing, and "0 eligible" was read as a finding about the lessons.
+
+### The backfill
+
+`rounds.json` records `lesson_id` -> `case_id` for each reflection, so provenance is recoverable for
+the eight reflector lessons. The arithmetic closes exactly: 30 recorded reflection instances merge
+to 8 distinct ids, and 4 `benthic_report` calls across the same rounds produced 4 more, giving the
+12 in the store. So the 8/4 split is not an inference about likelihood, it is a partition.
+
+After backfilling `source_ref` and adding a `channels` field that records the same fact going
+forward: **8 have a source case, 2 of them are on holdout and correctly refused, 6 are measurable**
+for the first time. The four report lessons stay unattributed, which is honest - a voluntary report
+supplies no case, and there is no log that would let one be reconstructed.
+
+`tests/test_provenance.py` contracts the two pieces: the channels are told apart after a merge, and
+an empty source case reads as unmeasurable rather than as a pass.

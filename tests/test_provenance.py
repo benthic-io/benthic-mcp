@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from benthic_mcp.playbook import LessonRecord
 from benthic_mcp.service import BenthicService
 
 pytestmark = pytest.mark.asyncio
@@ -39,7 +40,7 @@ async def _completed(value: Any) -> Any:
 async def test_a_report_with_no_question_records_no_reference(catalog, settings) -> None:
     service = await service_for(catalog, settings)
     try:
-        report = await service.record_lesson(symptom="guessed a column", lesson="check the schema")
+        report = await service.record_lesson(symptom="guessed a column", lesson="check the schema", channel="report")
         record = service.lesson_store.get(report.lesson_id)
 
         assert record is not None
@@ -55,6 +56,7 @@ async def test_a_report_with_a_question_records_a_resolvable_reference(catalog, 
             symptom="guessed a column",
             lesson="check the schema",
             question_summary="which district did the CA representative run in during 2019",
+            channel="report",
         )
         record = service.lesson_store.get(report.lesson_id)
 
@@ -70,8 +72,10 @@ async def test_a_report_with_a_question_records_a_resolvable_reference(catalog, 
 async def test_an_absent_reference_is_distinguishable_from_a_present_one(catalog, settings) -> None:
     service = await service_for(catalog, settings)
     try:
-        without = await service.record_lesson(symptom="a", lesson="b")
-        with_question = await service.record_lesson(symptom="c", lesson="d", question_summary="a question")
+        without = await service.record_lesson(symptom="a", lesson="b", channel="report")
+        with_question = await service.record_lesson(
+            symptom="c", lesson="d", question_summary="a question", channel="report"
+        )
 
         absent = service.lesson_store.get(without.lesson_id)
         present = service.lesson_store.get(with_question.lesson_id)
@@ -80,6 +84,60 @@ async def test_an_absent_reference_is_distinguishable_from_a_present_one(catalog
         assert absent.question_ref != present.question_ref
     finally:
         await service.close()
+
+
+async def test_the_two_reporters_are_told_apart_in_the_store(catalog, settings) -> None:
+    """`record_lesson` is shared by the MCP tool and the offline reflector, and used to drop which
+    one called it.
+
+    That made every question of the form "what has the reflector actually written" unanswerable
+    from the store, which is how a claim that the reflector only restates the core rules survived
+    as long as it did. Both callers must be distinguishable after the merge, not just at write time.
+    """
+    service = await service_for(catalog, settings)
+    try:
+        report = await service.record_lesson(
+            symptom="signed join returns nothing", lesson="check the key", channel="report"
+        )
+        reflect = await service.record_lesson(
+            symptom="signed join returns nothing", lesson="check the key", channel="reflector"
+        )
+
+        assert reflect.lesson_id == report.lesson_id, "identical symptoms should merge, or this proves nothing"
+        record = service.lesson_store.get(report.lesson_id)
+
+        assert record is not None
+        assert sorted(record.channels) == ["reflector", "report"]
+    finally:
+        await service.close()
+
+
+async def test_a_lesson_that_predates_the_field_is_not_claiming_a_channel(catalog, settings) -> None:
+    """Records written before `channels` existed parse with an empty list, and must stay empty.
+
+    Silently defaulting them to `report` would have put a channel on every one of the twelve
+    existing lessons, which is exactly the kind of confident answer this field exists to prevent.
+    """
+    legacy = LessonRecord(lesson_id="legacy", symptom="symptom", lesson="lesson")
+    assert legacy.channels == []
+
+
+async def test_a_reflector_lesson_carries_the_case_it_came_from() -> None:
+    """`source_case` is the whole eligibility rule, and its failure mode is silence.
+
+    The gate ran zero times in six rounds: `attribution_gate` appears in none of the round files,
+    every stored lesson is still `untested`, and `source_ref` was added the day after all of them
+    were written. An empty source case has to read as "cannot be measured", never as "measured and
+    fine", or the gate reports a clean run over nothing at all.
+    """
+    from attribute_pending import source_case
+
+    attributed = LessonRecord(lesson_id="l", symptom="s", lesson="l", channels=["reflector"], source_ref="join_x_match")
+    assert source_case(attributed) == "join_x_match"
+
+    unattributed = LessonRecord(lesson_id="l", symptom="s", lesson="l", channels=["report"])
+    assert source_case(unattributed) is None
+    assert unattributed.channels == ["report"]
 
 
 def test_a_join_that_returns_the_wrong_row_count_is_a_failure_not_a_pass() -> None:

@@ -484,6 +484,7 @@ async def report(
             dataset=dataset,
             relation=relation,
             confidence=confidence,
+            channel="report",
         )
         await _maybe_sweep(service)
         return result

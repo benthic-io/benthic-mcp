@@ -174,8 +174,10 @@ distinguishable from noise.
 comes close to that. Its effect on the pass rate is not claimed, because this suite cannot resolve an
 effect that size. `docs/findings.md` records the arithmetic and the three measurements that got there.
 
-The honest position on self-improvement is worth stating plainly: **the loop does not learn.** Eight
-of eight lessons it produced restate guidance the model already receives, and it has no way to
+The honest position on self-improvement is worth stating plainly: **the loop does not learn.** Its
+8 recorded lessons were never measured - `source_ref` was added after all of them were written, so
+the attribution gate had nothing to read and had run zero times. Provenance has been reconstructed
+from the round log, and 6 lessons are measurable for the first time. The loop also has no way to
 express a code change, which is the only kind that has ever worked here - five of five kept
 interventions were code, four of four reverted ones were prose. The mechanism that works is
 contracts plus a reviewer.

@@ -81,8 +81,8 @@ def holdout_cases(questions_path: str) -> set[str]:
     """The holdout split, so a lesson can never be measured against it.
 
     Measuring a lesson on a holdout case would be training on the holdout through the back door, and
-    three of the twelve accumulated lessons were learned from holdout cases. The gate has to be able
-    to see that, or it will happily measure them and then trust the result.
+    the store does contain lessons learned from holdout cases. The gate has to be able to see that,
+    or it will happily measure them and then trust the result.
     """
     from run_eval import assign_splits
 

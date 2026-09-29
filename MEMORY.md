@@ -22,11 +22,22 @@ guidance is 4.5 cases. A gate with an MDE larger than the maximum achievable eff
 harm, which is why it kept reporting that nothing worked. Do not build on suite-level A/B for
 small effects. `llama-server` runs with `-np 1`, so concurrency buys 1.00x (measured, not assumed).
 
-**2. The prose self-improvement loop cannot express a code change.** 8 of 8 lessons the reflector
-produced restate guidance already in the always-on core, because the reflector is never shown the
-core. The pipeline deletes any sentence naming a non-manifest identifier, so "add a type coercion" has
-nowhere to go. Every change that ever worked here was a code change. Struggle detection reflected on
-62.5% of passing cases and never once selected the 0/94 case.
+**2. The prose self-improvement loop cannot express a code change, and no claim about it was ever
+measured.** The reflector produced exactly 8 distinct lessons over 6 rounds (48 reflections
+attempted, 30 recorded, merging to 8). Measured against the always-on core by token overlap, **3 of
+8** restate it - not 8 of 8. The earlier figure was written down before the store recorded which
+channel a lesson arrived by, so it could not be checked either way. The mechanism behind it is real
+and verified: `eval/reflect.py:build_prompt` never shows the reflector the core, and the pipeline
+deletes any sentence naming a non-manifest identifier, so "add a type coercion" has nowhere to go.
+
+What actually blocks the loop is colder than restatement: **0 of 12 lessons had ever been
+attributed.** `source_case()` reads `record.source_ref`, the field was added after all 12 were
+written, and `classify()` therefore had never run. Provenance was reconstructed from
+`eval/harness/rounds.json`, which logs `lesson_id` and `case_id` per reflection: 8 reflector lessons
+now carry a source case, of which 2 are on holdout and correctly refused, leaving **6 measurable**.
+The 4 `benthic_report` lessons match the 4 report calls across the same rounds exactly, so the
+8 + 4 = 12 split is arithmetic, not inference. Every change that ever worked here was a code change.
+Struggle detection reflected on 62.5% of passing cases and never once selected the 0/94 case.
 
 **3. The scorer checked the route, not the result.** It read 6 of 22 expected-value fields, so a
 wrong answer delivered confidently along the right path passed. This hid three real defects.

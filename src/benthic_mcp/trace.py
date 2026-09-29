@@ -429,6 +429,7 @@ class LessonStore:
                     "last_seen": _now(),
                     "evidence": sorted({*existing.evidence, *record.evidence})[-12:],
                     "dataset": existing.dataset or record.dataset,
+                    "channels": sorted({*existing.channels, *record.channels}),
                 }
             )
             if not same_scope:
