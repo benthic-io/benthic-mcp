@@ -187,8 +187,12 @@ def _type_coercion(
     right = right_definition.columns.get(right_column)
     if left is None or right is None or left.type == right.type:
         return None
+    # `number` is the catalog's own name for a decimal column, not a PostgREST type, and it is the
+    # second most common declaration in the signed manifest: 427 of 3419 columns. Leaving it out
+    # meant a text key against a number key still matched nothing, which is the same defect this
+    # function exists to prevent, one type name over.
     text_like = {"string", "varchar", "text", "character varying"}
-    numeric = {"integer", "bigint", "smallint", "numeric", "real", "double precision"}
+    numeric = {"integer", "bigint", "smallint", "numeric", "number", "real", "double precision", "decimal"}
     mismatch = (left.type in text_like and right.type in numeric) or (right.type in text_like and left.type in numeric)
     if not mismatch:
         return None

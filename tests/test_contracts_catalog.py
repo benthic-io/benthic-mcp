@@ -334,16 +334,6 @@ def test_every_declared_type_mismatch_on_a_signed_edge_warns_naming_both_types(s
     assert checked, "the graph must contain a mismatched edge or this contract asserts nothing"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "joins._type_coercion classifies 'number' as neither numeric nor text-like, so a signed edge "
-        "between a text key and a number key is silently left unnormalised. 'number' is the second "
-        "most common column type in the live signed manifest (427 of 3419 columns) and is the type "
-        "the signed collection uses for every district code range column, so the same class of "
-        "silent 0-row join the fix addressed is still open one type name over."
-    ),
-)
 def test_a_text_key_against_a_number_key_also_warns(number_typed_catalog: Catalog) -> None:
     """The failing input built directly: the district edge with its right endpoint typed `number`."""
     spending = number_typed_catalog.resolve_relation("usaspending", "all_entities")
@@ -405,16 +395,6 @@ def test_equivalent_values_across_a_mismatched_edge_produce_equal_keys(signed_ca
     assert compared, "the graph must contain a mismatched edge or this contract asserts nothing"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "The same '03' against 3 that the fix resolved for an integer endpoint still returns 0 rows "
-        "when the right endpoint is declared 'number'. _coerce_token handles the pair correctly when "
-        "coerced, but _type_coercion never returns a note for text against number, so the coerce flag "
-        "is never set and the equijoin compares '03' with 3.0 as it stood before the fix. 'number' is "
-        "the second most common column type in the live signed manifest (427 of 3419 columns)."
-    ),
-)
 def test_a_text_key_against_a_number_key_joins(number_typed_catalog: Catalog) -> None:
     """The failing input built directly, end to end, exactly as the live district call was made."""
     result = execute_joins(
