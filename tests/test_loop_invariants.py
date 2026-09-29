@@ -509,8 +509,8 @@ def test_a_server_that_ran_twice_as_slowly_makes_the_comparison_unreadable() -> 
 def test_one_case_cannot_carry_a_verdict() -> None:
     from attribute_suite import judge
 
-    base = {"per_case": {f"c{i}": i > 0 for i in range(25)}, "median_ms": 20_000}
-    one_more = {"per_case": {**base["per_case"], "c0": True}, "median_ms": 20_000}
+    base = {"per_case": {f"c{i}": [i > 0] for i in range(25)}, "median_ms": 20_000}
+    one_more = {"per_case": {**base["per_case"], "c0": [True]}, "median_ms": 20_000}
 
     assert judge(base, one_more, 2) == "no_effect"
 
@@ -518,10 +518,44 @@ def test_one_case_cannot_carry_a_verdict() -> None:
 def test_a_rule_that_gains_two_cases_is_kept() -> None:
     from attribute_suite import judge
 
-    base = {"per_case": {f"c{i}": i > 2 for i in range(25)}, "median_ms": 20_000}
-    better = {"per_case": {**base["per_case"], "c0": True, "c1": True}, "median_ms": 20_000}
+    base = {"per_case": {f"c{i}": [i > 2] for i in range(25)}, "median_ms": 20_000}
+    better = {"per_case": {**base["per_case"], "c0": [True], "c1": [True]}, "median_ms": 20_000}
 
     assert judge(base, better, 2) == "fixes"
+
+
+def test_every_repetition_counts_towards_the_verdict() -> None:
+    """Keying by case alone silently kept only the last repetition.
+
+    The 2-repetition run that was used to remove the answer-delivery rule read 23/25 per arm and
+    "no effect" because the other repetition was discarded. Over all repetitions the same data is
+    44/50 against 46/50, which crosses min_delta and reads "fixes".
+    """
+    from attribute_suite import _totals, judge
+
+    without = {"per_case": {"c1": [False, False]}, "median_ms": 20_000}
+    with_rule = {"per_case": {"c1": [True, True]}, "median_ms": 20_000}
+
+    # Both repetitions: 0 -> 2, which clears min_delta.
+    assert _totals(with_rule) == (2, 2)
+    assert judge(without, with_rule, 2) == "fixes"
+    # The bug: keeping only the last repetition gives 0 -> 1, which does not, and the run reads
+    # as no effect with half the data.
+    collapsed_without = {"per_case": {"c1": [False]}, "median_ms": 20_000}
+    collapsed_with = {"per_case": {"c1": [True]}, "median_ms": 20_000}
+    assert judge(collapsed_without, collapsed_with, 2) == "no_effect"
+
+
+def test_a_case_that_passes_more_often_is_counted_as_gained() -> None:
+    from attribute_suite import _moved
+
+    gained, lost = _moved(
+        {"per_case": {"a": [True, False], "b": [True, True]}},
+        {"per_case": {"a": [True, True], "b": [True, False]}},
+    )
+
+    assert gained == ["a"]
+    assert lost == ["b"]
 
 
 # --- what may enter the always-on core once no lesson survived --------------------------------

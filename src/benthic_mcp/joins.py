@@ -2,7 +2,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from benthic_mcp.catalog import Catalog
+from benthic_mcp.catalog import Catalog, RelationDefinition
 from benthic_mcp.errors import QueryValidationError
 from benthic_mcp.models import (
     JoinCondition,
@@ -89,12 +89,16 @@ def execute_joins(
             warnings.append("Heuristic join matches must not be presented as exact entity matches")
 
         new_rows = rows_by_alias[new_alias]
+        coercion = _type_coercion(current_definition, current_column, new_definition, new_column)
+        if coercion is not None:
+            warnings.append(coercion)
         right_index: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
         for row in new_rows:
             key = _join_key(
                 row,
                 new_alias,
                 [new_column, *(condition.right_column for condition in conditions)],
+                coerce=coercion is not None,
             )
             if any(value is None for value in key):
                 continue
@@ -107,6 +111,7 @@ def execute_joins(
                 row,
                 current_alias,
                 [current_column, *(condition.left_column for condition in conditions)],
+                coerce=coercion is not None,
             )
             matches = [] if any(value is None for value in key) else right_index.get(key, [])
             if not matches and spec.mode == JoinMode.LEFT:
@@ -160,11 +165,65 @@ def _prefix_row(alias: str, row: dict[str, Any]) -> dict[str, Any]:
     return {f"{alias}.{column}": value for column, value in row.items()}
 
 
-def _join_key(row: dict[str, Any], alias: str, columns: list[str]) -> tuple[Any, ...]:
+def _type_coercion(
+    left_definition: RelationDefinition,
+    left_column: str,
+    right_definition: RelationDefinition,
+    right_column: str,
+) -> str | None:
+    """A note when the two sides of a signed join are declared with different scalar types.
+
+    Keys are compared in Python, not in SQL, so nothing coerces them. A signed edge between
+    `usaspending.all_entities.congressional_district` (text, zero-padded, `'03'`) and
+    `usp_cl.legislator_terms.district` (integer, `3`) therefore matched nothing, on every call, for
+    as long as the suite had been running. The scores said the join was being taken correctly,
+    because the scorer only ever checked the route.
+
+    Returns the warning to attach, and the presence of a warning is what switches key comparison to
+    the normalised form. Only integer-versus-text is coerced, and only by stripping leading zeros,
+    so `'03'` and `3` agree while `'abc'` and `0` do not.
+    """
+    left = left_definition.columns.get(left_column)
+    right = right_definition.columns.get(right_column)
+    if left is None or right is None or left.type == right.type:
+        return None
+    text_like = {"string", "varchar", "text", "character varying"}
+    numeric = {"integer", "bigint", "smallint", "numeric", "real", "double precision"}
+    mismatch = (left.type in text_like and right.type in numeric) or (right.type in text_like and left.type in numeric)
+    if not mismatch:
+        return None
+    return (
+        f"Join keys are declared as different types ({left.type} against {right.type}); matching on the "
+        f"zero-stripped form, so {left_column}='03' will match {right_column}=3"
+    )
+
+
+def _coerce_token(value: Any) -> Any:
+    """One comparable token for a key on a join whose sides are declared with different types.
+
+    Both sides are reduced to the same form, because normalising only one leaves '3' against 3.
+    A string is stripped of leading zeros, an integral number is rendered without its decimal
+    point, and anything else is left alone so a word still cannot equal a number.
+    """
+    if isinstance(value, str):
+        stripped = value.lstrip("0")
+        return stripped or ("0" if value else value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return value
+
+
+def _join_key(row: dict[str, Any], alias: str, columns: list[str], coerce: bool = False) -> tuple[Any, ...]:
     values: list[Any] = []
     for column in columns:
         value = row.get(f"{alias}.{column}")
         if isinstance(value, (dict, list)):
             value = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        elif coerce:
+            value = _coerce_token(value)
         values.append(value)
     return tuple(values)

@@ -144,26 +144,57 @@ def run_arm(args: argparse.Namespace, label: str, playbook: Path, questions: Pat
     runs = sorted(path for path in out_root.iterdir() if (path / "results.json").is_file())
     if not runs:
         raise SystemExit(f"the {label} arm wrote no results.json under {out_root}")
-    results = json.loads((runs[-1] / "results.json").read_text(encoding="utf-8"))
-    passed = {record["id"]: record["score"]["passed"] for record in results}
+    records = json.loads((runs[-1] / "results.json").read_text(encoding="utf-8"))
+    # Keyed by case and rep, then counted. Keying by case alone keeps only the last repetition,
+    # silently discarding every other one: a 2-repetition run reported 23/25 per arm and read
+    # "no effect", where the same data over all repetitions is 44/50 against 46/50 and reads
+    # "fixes". Repetitions are the only thing that buys statistical power here, so throwing them
+    # away makes the instrument weaker than it appears to be.
+    per_case: dict[str, list[bool]] = {}
+    for record in records:
+        per_case.setdefault(record["id"], []).append(bool(record["score"]["passed"]))
+    passed = {case_id: outcomes for case_id, outcomes in per_case.items()}
+    total = sum(len(outcomes) for outcomes in per_case.values())
     return {
         "label": label,
         "playbook": str(playbook),
         "run": runs[-1].name,
-        "cases": len(results),
-        "passed": sum(passed.values()),
+        "cases": len(per_case),
+        "reps": max(len(outcomes) for outcomes in per_case.values()),
+        "case_runs": total,
+        "passed": sum(sum(outcomes) for outcomes in per_case.values()),
         "per_case": passed,
-        "empty_answers": sum(1 for record in results if not record.get("final_text", "").strip()),
-        "max_turns": sum(1 for record in results if record.get("error") == "maximum turns reached"),
-        "median_ms": round(statistics.median(record["elapsed_ms"] for record in results)),
+        "empty_answers": sum(1 for record in records if not record.get("final_text", "").strip()),
+        "max_turns": sum(1 for record in records if record.get("error") == "maximum turns reached"),
+        "median_ms": round(statistics.median(record["elapsed_ms"] for record in records)),
     }
 
 
+def _totals(arm: dict[str, Any]) -> tuple[int, int]:
+    outcomes = arm["per_case"]
+    return sum(sum(passes) for passes in outcomes.values()), sum(len(passes) for passes in outcomes.values())
+
+
+def _moved(baseline: dict[str, Any], candidate: dict[str, Any]) -> tuple[list[str], list[str]]:
+    """Cases that passed more repetitions, and fewer, with or without the rule."""
+    gained = [
+        cid for cid, passes in candidate["per_case"].items() if sum(passes) > sum(baseline["per_case"].get(cid, []))
+    ]
+    lost = [
+        cid for cid, passes in baseline["per_case"].items() if sum(passes) > sum(candidate["per_case"].get(cid, []))
+    ]
+    return gained, lost
+
+
 def judge(baseline: dict[str, Any], candidate: dict[str, Any], min_delta: int) -> str:
-    """Aggregate verdict, and a check that the comparison is not reading server drift."""
-    gained = [cid for cid, ok in candidate["per_case"].items() if ok and not baseline["per_case"].get(cid)]
-    lost = [cid for cid, ok in baseline["per_case"].items() if ok and not candidate["per_case"].get(cid)]
-    delta = len(gained) - len(lost)
+    """Aggregate verdict over every repetition, and a check that this is not reading server drift.
+
+    The comparison is on totals across repetitions rather than on which cases flipped, because a
+    case that passes 2 of 3 is not the same observation as one that passes 3 of 3, and reducing
+    them to a single bit would discard exactly the partial effects worth finding.
+    """
+    gained, lost = _moved(baseline, candidate)
+    delta = _totals(candidate)[0] - _totals(baseline)[0]
     # A wedged llama-server shows up as a run that takes minutes, not as a case that flips. Two
     # full runs at different moments is exactly when that happens, so it is checked rather than
     # assumed away.
@@ -211,16 +242,23 @@ def main() -> int:
 
     baseline = run_arm(args, "without", without_arm, Path(args.questions))
     candidate = run_arm(args, "with", with_arm, Path(args.questions))
+    gained, lost = _moved(baseline, candidate)
+    base_passed, base_runs = _totals(baseline)
+    cand_passed, cand_runs = _totals(candidate)
     report = {
         "rule": rule,
         "reps": args.reps,
         "min_delta": args.min_delta,
         "baseline": baseline,
         "candidate": candidate,
-        "gained": [cid for cid, ok in candidate["per_case"].items() if ok and not baseline["per_case"].get(cid)],
-        "lost": [cid for cid, ok in baseline["per_case"].items() if ok and not candidate["per_case"].get(cid)],
+        "gained": gained,
+        "lost": lost,
+        "baseline_passed": base_passed,
+        "baseline_case_runs": base_runs,
+        "candidate_passed": cand_passed,
+        "candidate_case_runs": cand_runs,
     }
-    report["delta"] = len(report["gained"]) - len(report["lost"])
+    report["delta"] = cand_passed - base_passed
     report["verdict"] = judge(baseline, candidate, args.min_delta)
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(json.dumps(report, indent=2), encoding="utf-8")
@@ -230,7 +268,10 @@ def main() -> int:
         entry = core_evidence.record(Path(args.record), Path(args.output))
         print(f"recorded in {args.record} as {entry.verdict} ({entry.baseline} -> {entry.candidate})")
     print(json.dumps({k: v for k, v in report.items() if k not in ("baseline", "candidate")}, indent=2))
-    print(f"\n  without: {baseline['passed']}/{baseline['cases']}  with: {candidate['passed']}/{candidate['cases']}")
+    print(
+        f"\n  without: {base_passed}/{base_runs} case-runs over {len(baseline['per_case'])} cases"
+        f"  with: {cand_passed}/{cand_runs}"
+    )
     return 0 if report["verdict"] == "fixes" else 1
 
 

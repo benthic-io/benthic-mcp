@@ -126,9 +126,16 @@ does not claim it. What is visible is that thinking-off is reproducible where th
 29/33 twice, against 29/33 then 27/33.
 
 A third row is worth stating plainly. The accumulated lessons were served and measured, and **none of
-the twelve earned a place**; one was measured as actively harmful and quarantined. The single
-hand-written core line that the project had carried longest was removed after a paired A/B over 100
-case-runs per arm found no effect. Details in [`docs/findings.md`](docs/findings.md).
+the twelve earned a place**; one was measured as actively harmful and quarantined. Details in
+[`docs/findings.md`](docs/findings.md).
+
+And one correction worth reading, because it is the project's clearest methodological result. The
+answer-delivery core line was removed on the strength of a paired A/B over 100 case-runs per arm that
+came back 23/50 in both arms. That null was an artefact: the instrument keyed its result by case
+rather than by case and repetition, so it kept only the last repetition of each. Over all repetitions
+the same data reads 44/50 without the rule against 46/50 with it, which clears the threshold and reads
+`fixes`. The rule has been restored. Half the data in a measurement is worth less than none if you
+report it as if it were all of it.
 
 ## Evaluation
 

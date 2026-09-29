@@ -155,6 +155,46 @@ def _join_matches(event: dict[str, Any], path: dict[str, Any]) -> bool:
     return forward or reverse
 
 
+def _join_answer_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) -> bool:
+    """Whether any join call actually returned what the case expects.
+
+    Checks the result, not the route. `right_count` and `right_keys` are read from the server's
+    structured output rather than from the model's prose, so a confidently wrong answer cannot pass
+    by sounding right.
+
+    Only enforced where the generator recorded a value. `right_count` is 0 on most join cases, which
+    is the hardest thing to distinguish from a broken tool and therefore the most worth asserting.
+    """
+    want_count = expected.get("right_count")
+    want_keys = expected.get("right_keys")
+    if want_count is None and not want_keys:
+        return True
+    for event in matching:
+        structured = event.get("structured") or {}
+        if want_count is not None and structured.get("row_count") != want_count:
+            continue
+        if want_keys:
+            column = (expected.get("join_path") or {}).get("right_column")
+            got = [row.get(column) for row in structured.get("rows") or []]
+            if sorted(got, key=str) != sorted(want_keys, key=str):
+                continue
+        return True
+    return False
+
+
+def _join_reliability_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) -> bool:
+    """Whether the join was reported with the reliability the signed edge declares.
+
+    The previous check looked for the substring "unsigned" in the final text, which never fired once
+    in 695 case-runs and whose one live path would fail an agent for faithfully echoing the server's
+    own warning. The reliability is a field on the result, so it is read from there.
+    """
+    want = (expected.get("join_path") or {}).get("reliability")
+    if not want:
+        return True
+    return any((event.get("structured", {}).get("joins") or [{}])[0].get("reliability") == want for event in matching)
+
+
 def queried_sources(events: list[dict[str, Any]]) -> set[str]:
     return {
         str(event.get("arguments", {}).get("source"))
@@ -184,6 +224,7 @@ def score_case(
     join_ok = True
     row_count_ok = True
     evidence_ok = True
+    answer_ok = True
     answered = True
 
     if strict:
@@ -203,7 +244,13 @@ def score_case(
                 and event.get("arguments", {}).get("right_column") == path.get("right_column")
                 for event in matching
             )
-        evidence_ok = not contains_any(final_text, ["unsigned", "not signed"]) or "reliable" in final_text.lower()
+        # The route is not the answer. A join can take exactly the signed path and still return
+        # nothing, which is not something a route check can see: usaspending.all_entities.
+        # congressional_district is text and usp_cl.legislator_terms.district is an integer, so
+        # the equijoin never matched, every call returned 0 rows, and these two cases still scored
+        # as passes for 695 case-runs because nothing here read the result.
+        answer_ok = _join_answer_ok(expected, matching)
+        evidence_ok = _join_reliability_ok(expected, matching)
 
     if (
         capability.startswith("find_district")
@@ -250,9 +297,18 @@ def score_case(
         "join_check": join_ok,
         "row_count_check": row_count_ok,
         "evidence_check": evidence_ok,
+        "answer_check": answer_ok,
         "answered": answered,
         "forbidden_claim_hits": forbidden_hits,
-        "passed": tool_requirement and join_ok and row_count_ok and evidence_ok and answered and not forbidden_hits,
+        "passed": (
+            tool_requirement
+            and join_ok
+            and row_count_ok
+            and evidence_ok
+            and answer_ok
+            and answered
+            and not forbidden_hits
+        ),
     }
 
 

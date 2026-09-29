@@ -61,7 +61,7 @@ systemctl --user restart benthic-mcp.service
 | change | result |
 | --- | --- |
 | **Disabling the model's reasoning** (`chat_template_kwargs.enable_thinking=false`) | **Kept, on cost and reproducibility rather than on accuracy.** Completion tokens -64%, and 29/33 twice where thinking-enabled gives 29/33 then 27/33. The pass-rate difference is about one case, which is what thinking-enabled repetitions disagree by, so the accuracy claim is withdrawn |
-| Answer-delivery rule in the always-on core | **Removed.** Kept for weeks on one measurement that turned a case from 2/5 to 5/5, then a paired A/B over the whole tuning split, two repetitions, 100 case-runs per arm, measured 23/50 with it and 23/50 without. The two-case gap that justified it was the suite's own run-to-run spread |
+| Answer-delivery rule in the always-on core | **Kept, after being wrongly removed.** A paired A/B over the tuning split, two repetitions, read 23/50 in both arms and was taken as a null. It was an artefact of the instrument discarding all but the last repetition: over all repetitions the same data is 44/50 without the rule and 46/50 with it, which clears min_delta and reads `fixes` |
 | Unknown-column candidates plus `detail='full'` | **Kept.** Adopted 25 times in eight runs; the error message demonstrably recovered a session that had guessed five wrong columns |
 | Path lookup on `benthic_playbook`, `benthic_join` self-resolving | **Kept.** Discovery before first use 5.0 to 3.0 on one stuck case; the common join is one call instead of search-then-join |
 | Capping `max_tokens` instead | **No effect.** 0/4, 0/3 and 0/3 at 4096, 2048 and 1024, and `finish_reason: length` got *more* common as the budget fell |
@@ -274,7 +274,7 @@ Running the gate against the twelve lessons that accumulation had actually produ
 
 So accumulation was not working: nothing in twelve lessons earned a place, and one made a case
 measurably worse. The served document drops from twelve lessons and eight distilled core lines to zero
-lessons and the two seed rules.
+lessons and the seed rules.
 
 The verdict that took the most care to get right is the difference between *no effect* and *nothing
 left to fix*. A lesson learned from a case that something else has since fixed cannot be judged there,
@@ -345,6 +345,43 @@ split, and reports the comparison as unreadable if one arm ran more than twice a
 wedged `llama-server` shows up as minutes-long runs rather than as cases that flip. One case cannot
 carry a verdict at this suite size, so `--min-delta` defaults to 2, and `--record` is what lets a
 passing verdict reach the core through `eval/core-evidence.json`.
+
+## The scorer could not see the one real bug in the server
+
+`usaspending.all_entities.congressional_district` is declared `string` and is zero-padded, so the value
+is `'03'`. `usp_cl.legislator_terms.district` is declared `integer`, so the value is `3`. The signed
+join path between them is an equijoin, and the join keys are compared in Python, where nothing coerces
+them. So the path matched nothing.
+
+It matched nothing on every call, for as long as the harness had been running: 55 of 55 observed
+`benthic_join` calls on the two affected cases returned `row_count: 0`, and the expectation was 5. The
+two cases scored as **passes**, in 51 stored case-runs, because the scorer checked that the agent had
+taken the right route and never read the result. The `evidence_check` that was supposed to cover this
+looked for the substring `unsigned` in the final text; it never fired once in 695 case-runs, and its
+one live path would have failed an agent for faithfully quoting the server's own warning.
+
+A `benthic_report` from an earlier round had diagnosed it exactly: *"congressional_district is text and
+is zero-padded (e.g. '03'); usp_cl.legislator_terms.district is integer (3). The signed identifier join
+does not coerce the type, so '03' != 3 and the match yields 0 rows."* The volunteer channel found the
+one real defect. The reflection loop could not, because its output type is prose and `screen_prose`
+deletes any sentence naming an identifier that is not already in the manifest, so a proposal to fix
+the server has nowhere to go. And the harness, which existed to catch exactly this, was blind to it.
+
+Both halves are now fixed. Keys on a join whose two sides are declared with different scalar types are
+compared in a zero-stripped form, and the result carries a warning saying so, so a 0-row answer that
+the catalog can explain no longer looks like an absence of data. The scorer reads `right_count`,
+`right_keys` and the signed `reliability` off the server's structured output rather than the model's
+prose. Rescoring 597 stored case-runs with the fixed scorer turns 46 of them red, all on these two
+cases, and turns 6 red-to-green: those were negative cases failing on the dead substring check rather
+than on anything real.
+
+The unit-test fixture had also declared `legislator_terms.district` as `string`, so the types agreed
+in tests and disagreed in production. A fixture that is not checked against the signed manifest will
+happily hide a bug that only exists in the catalog.
+
+What this costs is worth stating, because it is the whole project in one example: a reproducible,
+100%-signature server defect, reported by a user, invisible to the automated harness for the entire
+life of the harness, and worth more than every one of the twelve accumulated lessons.
 
 ## A must-pass case that was measuring the wrong thing
 
