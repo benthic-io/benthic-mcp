@@ -105,9 +105,62 @@ worse. Lessons are now attributed against the case they came from before they ca
 regression is quarantined. The measurement, the dead ends, and the limits of the instrument are in
 [`docs/findings.md`](docs/findings.md).
 
-## What has been measured
+## What is actually verified, and how
 
-33 generated cases against a 35B MoE coder model, 6-turn budget. Read this table as a count of cases
+The statistical A/B is no longer the gate. It could not be: the suite's minimum detectable effect is
+7.81 cases against 4.5 cases of total headroom, so a gate built on it can only ever detect harm,
+which is why it kept reporting that nothing worked. Classifying all 1534 stored case-runs found that
+**2 of 33 cases have ever moved because server code changed**. Three things replaced it.
+
+**Contracts.** 24 properties over the catalog and join subsystems, stated in the code's own
+vocabulary, with no model and no network, in `tests/test_contracts_catalog.py`. Each is falsifiable,
+and each one was: six arrived violated and are now fixed, so the file's `xfail` list is empty. A
+contract that arrives already green is asserting nothing.
+
+**Answer checking.** The scorer reads the result of a call, not just its route, and `score_case`
+returns `asserted` - which checks this capability actually ran. Every check defaults to `True`, so a
+`row_count_check: true` on a discovery case read as an assertion that was made and passed when
+nothing was checked.
+
+**A canary that was tested by breaking it.** `eval/canary/questions.json` is six cases: one per
+signed join path, plus the one non-join case that expects rows.
+
+| server | verdict |
+| --- | --- |
+| correct | **18/18 green** |
+| `_type_coercion` forced off, reproducing the `'03'`/`3` bug | **8/12, red on exactly the two district cases** |
+
+The four zero-row guards stayed green against the broken server, because silence satisfies a zero
+expectation. That is the predicted behaviour and the reason the canary keeps cases in both
+directions. It runs in **184s/rep against 778s/rep** for the full suite.
+
+```sh
+uv run python eval/run_eval.py --questions eval/canary/questions.json --reps 3
+```
+
+Report it as green or red, never as a percentage: six cases over four paths is a step function. The
+33-case suite is tier 2, reported alongside it but not gating.
+
+### What they found
+
+Five real defects, none of which the model-in-the-loop apparatus saw:
+
+- A signed join between a `string` column holding `'03'` and an `integer` column holding `3` compared
+  them in Python, matched nothing, and returned 0 rows where 127 exist. 55 of 55 observed calls. The
+  two affected cases scored as **passes** for 51 stored runs, and a `benthic_report` had diagnosed it
+  correctly while the harness could not see it.
+- The columns a `context_conditions` entry compares were never fetched, so no partial signed join
+  could ever match a row, for any input - the unit test hand-built rows that already had the column.
+- `number` was missing from the numeric type set. It is the catalog's own name for a decimal and the
+  second most common declaration in the signed manifest, at 427 of 3419 columns.
+- `order=` and `having` each computed a comparison the caller never asked for, on a column whose
+  declared type PostgREST did not honour, and raised a `TypeError` the tool wrapper does not catch.
+- Two of the suite's cases asked for a chain whose first hop is provably empty, and the scorer
+  counted a truthful dead end as a failure. They now ask where the chain terminates, 4/4.
+
+### What has been measured
+
+33 generated cases against a 35B MoE coder model, 6-turn budget. Read this as a count of cases
 answered correctly, not as a measurement of anything: the suite's minimum detectable effect is larger
 than the whole remaining failure set, so a difference of one or two cases between rows here is not
 distinguishable from noise.
@@ -117,52 +170,25 @@ distinguishable from noise.
 | seed, `enable_thinking=false`, 2 reps | **32/33 both reps**, holdout 8/8 and 7/8 |
 | completion tokens, thinking off | 19,092 / 20,226 per rep, against 53,231 / 56,917 with it |
 
-Held-out cases are excluded from reflection, so the headline is not a training number. 31 of 33 cases
-pass both repetitions; the two that do not are the `relation_trap` pair.
-
 `enable_thinking=false` cuts completion tokens by about 64%, and nothing in the run-to-run spread
 comes close to that. Its effect on the pass rate is not claimed, because this suite cannot resolve an
 effect that size. `docs/findings.md` records the arithmetic and the three measurements that got there.
 
-## What is actually verified, and how
-
-The statistical A/B is no longer the gate. It could not be: the suite's minimum detectable effect is
-larger than the entire remaining failure set, so a gate built on it can only ever detect harm, which
-is why it kept reporting that nothing worked. Two things replaced it.
-
-**Contracts.** 26 properties over the catalog and join subsystems, stated in the code's own
-vocabulary, with no model and no network. Each is falsifiable, and each one was: five arrived
-violated and are now fixed. They are in `tests/test_contracts_catalog.py`, and they are what found
-the bugs below.
-
-**Answer checking.** The scorer now reads the result of a call, not just its route, so a wrong answer
-delivered confidently along the right path is a failure.
-
-Between them they found three real defects that the model-in-the-loop apparatus never saw:
-
-- A signed join between a `string` column holding `'03'` and an `integer` column holding `3` compared
-  them in Python, matched nothing, and returned 0 rows where 127 exist. 55 of 55 observed calls. The
-  two affected cases scored as **passes** for 51 stored runs, and a `benthic_report` had diagnosed it
-  correctly while the harness could not see it.
-- The columns a `context_conditions` entry compares were never fetched, so no partial signed join
-  could ever match a row, for any input.
-- `order=` raised a bare `TypeError` on a column holding mixed types, which the tool wrapper does not
-  catch, so the call failed with an unhandled error instead of a message.
-
-Two of the suite's cases were also asking for things that cannot exist: a two-hop chain whose first
-hop is provably empty, scored as a failure for reporting that truthfully. They now ask where the chain
-terminates, and pass 4/4.
-
-The honest position on self-improvement is unchanged by any of this and worth stating: **the loop does
-not learn.** Eight of eight lessons it produced restate guidance the model already receives, and it
-has no way to express a code change, which is the only kind that has ever worked here. The
-mechanism that works is contracts plus a reviewer.
+The honest position on self-improvement is worth stating plainly: **the loop does not learn.** Eight
+of eight lessons it produced restate guidance the model already receives, and it has no way to
+express a code change, which is the only kind that has ever worked here - five of five kept
+interventions were code, four of four reverted ones were prose. The mechanism that works is
+contracts plus a reviewer.
 
 ## Evaluation
 
 ```sh
-uv run python eval/generate_cases.py                 # rebuild the suite from the signed catalog
+# Tier 1, the gate: six cases, one per signed join path, 184s/rep
+uv run python eval/run_eval.py --questions eval/canary/questions.json --reps 3
+
+# Tier 2, report only: the full 33, 778s/rep. Measures turn discipline more than server correctness
 uv run python eval/run_eval.py                       # run it
+uv run python eval/generate_cases.py                 # rebuild it from the signed catalog
 uv run python eval/run_eval.py --case-filter multi_step --reps 5
 ```
 

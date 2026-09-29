@@ -433,3 +433,87 @@ a bug in the harness, the scorer, or the tool surface, and is never a result abo
 generator refuses to write into that directory, and `tests/test_golden.py` re-checks the expected
 values against the signed catalog so a catalog change cannot leave the suite quietly stale.
 
+
+## Tier 1: a canary that was tested by breaking it
+
+Classifying all 1534 stored case-runs across 162 run files (re-scored with the current scorer,
+because only 9 files were scored by it) found that **2 of the 33 cases have ever moved because
+server code changed**: the district pair. They are also the two lowest-scoring cases in the suite,
+at .044 and .111. The other 31 either never move or move for reasons the model caused.
+
+Twenty-two of the 33 cases carry no server assertion at all and account for 64.8% of wall clock:
+
+- all 8 `discover_*`: `expected.columns` is never read; the only server touch is a relation-name
+  presence check. Four are literal constants at 35-36/36.
+- all 3 `negative_unsigned_*`: `expected.must_reject` is never read, and 140 of 142 case-runs never
+  called `benthic_join` at all, so `not invalid_join` is vacuously true.
+- all 4 `sequential_*`: `expected.right_count` is never read - `sequential_lookup` does not match
+  the substring `join`, so the join branch is skipped and `answer_ok` stays hard-coded True.
+- the `relation_trap` pair and the `multi_step` pair, both route-plus-prose checks.
+
+`score_case` now returns **`asserted`**: the checks this capability actually ran. Every check
+defaults to `True`, so `row_count_check: true` on a discovery case read as an assertion that was
+made and passed when nothing was checked. 7 of 33 cases assert no server answer; the score dict
+could not previously tell you which.
+
+### Two quantifier bugs, both found in the stored corpus
+
+`_join_answer_ok` scored with `any` over every join call, so a `right_count: 0` case - written to
+catch a join that is too *wide* - passed if any single call came back empty. A session that first
+matched 3 rows down the signed path and then 0 passed. **48 stored passing case-runs** had a call on
+the signed path contradicting the expectation.
+
+The RPC check compared `row_count` and nothing else. `expected.operation` and `expected.arguments`
+were recorded by the generator and never read, so a `districts_in_bbox` case expecting one row for
+one bounding box was satisfied by any `benthic_rpc` call returning one row - **33 stored case-runs**
+did the latter, one of them a zero-height box. Four of the six RPC cases expect `row_count: 0`, so a
+server returning nothing at all passed all four.
+
+### `eval/canary/questions.json`
+
+Six cases: one per signed join path, plus the one non-join case that expects rows. Copied verbatim
+from `generated/`, never authored - `tests/test_canary.py` asserts byte-identity so the canary
+cannot grow a second answer key. **184s/rep against 778s/rep**, 23.6% of the suite.
+
+Four of the six expect zero rows, which is a guard against a join that is too wide and *passes*
+against a join that is too narrow. That is why at least two cases must expect rows, and the
+contract suite asserts it.
+
+### The mutation test
+
+The canary was tested by breaking the server it watches. In a detached worktree, `_type_coercion`
+was forced to return `None`, reproducing the `'03'`/`3` defect exactly:
+
+| server | verdict | district cases |
+| --- | --- | --- |
+| correct | **18/18 GREEN** | row_count 100, truncated |
+| mutated | **8/12 RED** | row_count 0 |
+
+The two district cases went red on both reps, and **exactly** those two: the four zero-row guards
+stayed green, because silence satisfies a zero expectation. That is the predicted behaviour, and it
+is the reason the canary keeps cases in both directions.
+
+First attempt at this experiment was invalid and worth recording. The worktree was given the main
+venv by symlink, and `benthic_mcp` is installed via a `.pth` pointing at the main `src/`, so the
+mutation never loaded - the run was against the correct server and reported 12/12. The mutation
+also had a syntax error, which nothing caught because it was never imported. Both were visible only
+by asserting on `benthic_mcp.joins.__file__` and whether the marker string was present *before*
+trusting any number the run produced. A green result from a mutation that did not apply is
+indistinguishable from a canary that cannot go red.
+
+## The `order=` and `having` crashes
+
+Both are the same defect: a comparison computed that the caller never asked for, on values PostgREST
+returns without honouring the manifest's declared type. A column declared `string` comes back as a
+number when the stored value is numeric, and the code trusted the declaration.
+
+- `_sort_value` ranked every non-null value `1`, so `order=` compared `(1, 3)` with `(1, '7')`.
+- `_matches_having` built a dict of **all eight** comparisons. A dict literal is evaluated eagerly,
+  so `having mx=eq.3` on a text aggregate also computed `value > expected`. The ordering operators
+  were already guarded by `_numeric`; equality was not, because nothing stopped the dict from
+  computing the guarded ones as well.
+
+`TypeError` is neither `BenthicMCPError` nor `ValueError`, so neither escaped the tool wrapper's
+`except (BenthicMCPError, ValueError)`. The caller got an internal error instead of a message. Found
+by contract-checking the sort key's totality in about ten minutes; invisible to 670 case-runs because
+no case orders by such a column or asks for an equality on a text aggregate.
