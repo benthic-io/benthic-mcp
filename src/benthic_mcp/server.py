@@ -1,6 +1,7 @@
 import asyncio
 import functools
 import logging
+import re
 import secrets
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
@@ -337,10 +338,32 @@ def _unresolved_join_message(left: str, right: str, candidates: list[JoinEdge]) 
     listed = "; ".join(
         f"{edge.left_column} = {edge.right_column} [{edge.join_type}/{edge.reliability}]" for edge in candidates
     )
+    # A spatial edge cannot be walked by benthic_join at all: execute_joins refuses one, so telling
+    # the caller to pass the columns explicitly walks it into a second dead end. Name the tool that
+    # can service the edge instead.
+    if all(edge.join_type == "spatial" for edge in candidates):
+        operations = ", ".join(sorted({_spatial_operation(edge) for edge in candidates if _spatial_operation(edge)}))
+        return (
+            f"The only signed path from {left} to {right} is spatial: {listed}. "
+            f"benthic_join cannot walk a spatial edge; use benthic_rpc with {operations}. "
+            "Call benthic_playbook(from_relation='%s', to_relation='%s') for the signed recipe." % (left, right)
+        )
     return (
         f"Refusing to choose between signed paths from {left} to {right}: {listed}. "
         "Pass left_column and right_column explicitly, and pass context_conditions for a partial join."
     )
+
+
+def _spatial_operation(edge: JoinEdge) -> str:
+    """The allowlisted RPC that services a spatial edge, from the signed recipe in its note.
+
+    Read from the note rather than derived, so the message names what the catalog actually says
+    rather than a mapping invented here.
+    """
+    if not edge.notes:
+        return ""
+    match = re.search(r"\b(rpc_[a-z_]+)\b", edge.notes)
+    return match.group(1) if match else ""
 
 
 @mcp.tool(name="benthic_join", annotations=READ_ONLY)

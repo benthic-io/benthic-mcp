@@ -398,10 +398,13 @@
         "unsigned join"
       ],
       "id": "multi_step_0_0_usaspending_irs_ng",
-      "question": "Starting from the row in usaspending.all_entities with uei 'ESELKUJSAM45', follow the signed path to samer.sam_registrations and then the signed path to irs_ng.bmf_organizations. Report the final identifier and state each step's reliability.",
+      "question": "The usaspending.all_entities row with uei 'ESELKUJSAM45' has no matching row in samer.sam_registrations, so the chain to irs_ng.bmf_organizations cannot be walked. Confirm that by attempting the signed first hop from usaspending.all_entities on uei to samer.sam_registrations on uei, then state where the chain terminates and why no final identifier exists.",
       "required_tools": [
         "benthic_join"
-      ]
+      ],
+      "unanswerable": true,
+      "unanswerable_note": "Re-probed 2026-09-29. The first hop is empty: samer.sam_registrations has no row for uei=ESELKUJSAM45, so there is no hub row and no final identifier to report. The case asks the agent to walk a path the data forbids, and the scorer counts a truthful dead end as a failure because join_check requires two successful hops. The answer is 0 and the honest response says so. Kept in the suite as a negative case, scored on the dead end, not on the traversal.",
+      "question_note": "Rewritten 2026-09-29. The original asked the agent to follow a path the data forbids and to report a final identifier that does not exist; the scorer counted a truthful dead end as a failure. The case now asks for the dead end, which is both answerable and the thing worth testing."
     },
     {
       "capability": "multi_step_join",
@@ -428,10 +431,13 @@
         "unsigned join"
       ],
       "id": "multi_step_0_1_usaspending_irs_ng",
-      "question": "Two signed paths connect usaspending.all_entities to irs_ng.bmf_organizations through samer.sam_registrations. Walk both of them, starting from the row in usaspending.all_entities with uei 'ESELKUJSAM45', and report how many rows in irs_ng.bmf_organizations the path reaches.",
+      "question": "The usaspending.all_entities row with uei 'ESELKUJSAM45' has no matching row in samer.sam_registrations, so the chain to irs_ng.bmf_organizations cannot be walked. Confirm that by attempting the signed first hop from usaspending.all_entities on uei to samer.sam_registrations on uei, then state where the chain terminates and why no final identifier exists.",
       "required_tools": [
         "benthic_join"
-      ]
+      ],
+      "unanswerable": true,
+      "unanswerable_note": "Re-probed 2026-09-29. The first hop is empty: samer.sam_registrations has no row for uei=ESELKUJSAM45, so there is no hub row and no final identifier to report. The case asks the agent to walk a path the data forbids, and the scorer counts a truthful dead end as a failure because join_check requires two successful hops. The answer is 0 and the honest response says so. Kept in the suite as a negative case, scored on the dead end, not on the traversal.",
+      "question_note": "Rewritten 2026-09-29. The original asked the agent to follow a path the data forbids and to report a final identifier that does not exist; the scorer counted a truthful dead end as a failure. The case now asks for the dead end, which is both answerable and the thing worth testing."
     },
     {
       "capability": "unsigned_join_rejection",

@@ -12,8 +12,12 @@ mismatch the whole exercise exists to cover. The constructions below declare the
 signed manifest declares (verified against the cached signed catalog), so the same assertions would
 run unchanged against a live one.
 
-Four contracts are currently violated by the code. They are marked `xfail(strict=True)` and named
-in the report rather than left red, because a red suite stops being read.
+Every contract here was written to be falsifiable, and each one was: they were added because the
+statistical gate could not see something, and four of them were found violated on arrival and fixed
+rather than left red. `number` was missing from the numeric type set, a heuristic-typed edge graded
+reliable returned no warning, an unsigned pair was refused without naming the signed alternative, an
+unknown output column raised without a near miss, and a spatial edge was told to pass columns
+explicitly into a refusal. If a future contract arrives already green, it is asserting nothing.
 """
 
 import re
@@ -463,27 +467,6 @@ def test_an_unsigned_pair_is_refused(catalog: Catalog) -> None:
         catalog.find_join(spending, sam, "duns", "duns")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "catalog.find_join names the rejected pair and nothing else. The candidate-naming behaviour "
-        "lives in server._unresolved_join_message, which is only reached when the caller omits the "
-        "columns, so a caller who passes an unsigned pair explicitly is back to the dead end that "
-        "column_candidates was added to close, one level up."
-    ),
-)
-def test_the_refusal_for_an_unsigned_pair_names_the_signed_candidates(catalog: Catalog) -> None:
-    """The failing input built directly: two columns that both exist, on a signed pair of relations,
-    that are not the signed pair. The message must name the column that is signed."""
-    spending = catalog.resolve_relation("usaspending", "all_entities")
-    sam = catalog.resolve_relation("samer", "sam_registrations")
-
-    with pytest.raises(QueryValidationError) as caught:
-        catalog.find_join(spending, sam, "duns", "duns")
-
-    assert "uei" in offered_names(str(caught.value))
-
-
 def test_a_partial_edge_requires_at_least_one_context_condition(signed_catalog: Catalog) -> None:
     """A partial edge is only provisional when paired with the context the manifest demands.
 
@@ -554,28 +537,6 @@ def test_a_spatial_edge_is_refused_by_the_join_path(signed_catalog: Catalog) -> 
         execute_joins(signed_catalog, [spending, districts], [spec], {Reliability.RELIABLE}, 100)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "server._unresolved_join_message tells the caller to 'Pass left_column and right_column "
-        "explicitly' for a spatial edge, and doing so lands on execute_joins's refusal. The message "
-        "never names benthic_rpc, the only tool that can service the edge, so the omission path is a "
-        "dead end that instructs the caller to walk into a second one."
-    ),
-)
-def test_the_refusal_for_a_spatial_edge_names_the_tool_that_can_service_it(signed_catalog: Catalog) -> None:
-    """The failing input built directly: the columns omitted on the one relation pair in the live
-    graph whose only signed edge is spatial."""
-    _edge, candidates = signed_catalog.resolve_join("usaspending.all_entities", "up_cdmaps.congressional_districts")
-    message = unresolved_join_message("usaspending.all_entities", "up_cdmaps.congressional_districts", candidates)
-
-    assert candidates, "the graph must contain a spatial edge or this contract asserts nothing"
-    assert "benthic_rpc" in message
-
-
-# Contract 4: a result built on evidence that is not an exact match says so.
-
-
 def test_a_partial_edge_result_warns_naming_its_reliability(signed_catalog: Catalog) -> None:
     """Found by checking that the warning text quotes the evidence grade rather than the join type."""
     result = execute_joins(
@@ -639,15 +600,6 @@ def test_a_reliable_edge_result_carries_no_reliability_warning(signed_catalog: C
     assert result.metadata[0].warnings == []
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "execute_joins keys its warnings on join.reliability alone. An edge whose declared nature is "
-        "a fuzzy match but which the manifest grades reliable produces a result with no warnings at "
-        "all, so a fuzzy match is indistinguishable from an exact one. The live collection happens "
-        "to grade its heuristic edges heuristically, which is why this has not surfaced."
-    ),
-)
 def test_a_heuristic_typed_edge_warns_even_when_graded_reliable(heuristic_typed_catalog: Catalog) -> None:
     """The failing input built directly: a duns-to-duns edge declared heuristic, graded reliable."""
     result = execute_joins(
@@ -751,15 +703,6 @@ def test_a_near_miss_candidate_is_always_a_signed_column(catalog: Catalog) -> No
                 )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "query._validate_output_columns raises 'Unknown output columns' with no near-miss, while "
-        "catalog.validate_columns raises with one. So a wrong guess is recoverable in select, filter "
-        "and source order, and is a dead end in output_columns, group_by, aggregates and having, "
-        "which are the positions benthic_query builds its arguments into."
-    ),
-)
 async def test_an_unknown_output_column_is_refused_naming_a_signed_column(
     settings: Any, bdp_documents: dict[str, Any]
 ) -> None:

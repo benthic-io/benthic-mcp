@@ -87,6 +87,14 @@ def execute_joins(
             warnings.append(message)
         if join.reliability == Reliability.HEURISTIC:
             warnings.append("Heuristic join matches must not be presented as exact entity matches")
+        # Keyed on join_type as well as reliability, because the two are separate declarations and a
+        # collection can grade a fuzzy edge as reliable. Reliability alone let a heuristic-typed edge
+        # return no warning at all, which makes a fuzzy match indistinguishable from an exact one.
+        if join.join_type == "heuristic" and join.reliability == Reliability.RELIABLE:
+            warnings.append(
+                "This signed edge is graded reliable but declared as a heuristic match, so the grade "
+                "and the join type disagree; the result is not an exact identifier match"
+            )
 
         new_rows = rows_by_alias[new_alias]
         coercion = _type_coercion(current_definition, current_column, new_definition, new_column)

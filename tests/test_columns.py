@@ -170,3 +170,48 @@ def test_the_inline_view_plus_the_full_listing_covers_every_signed_column(wide_c
 
     assert listed == set(definition.columns)
     assert inline < listed
+
+
+def test_a_wrong_output_column_is_refused_naming_a_signed_column(catalog) -> None:
+    """Output positions used to be a dead end where every other position was recoverable.
+
+    A wrong guess in select, a filter or a source order is answered with the signed near misses, so
+    the model can correct itself. group_by, aggregates, having, output_columns and order - the
+    positions benthic_query builds its arguments into - raised a bare "Unknown output columns",
+    which leaves the caller with no way to learn the right name.
+    """
+    from benthic_mcp.errors import QueryValidationError
+    from benthic_mcp.models import OutputOrder, QueryRequest, RelationSource
+    from benthic_mcp.query import _validate_output_columns
+
+    request = QueryRequest(
+        question="probe",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities", select=["uei"])],
+        order=[OutputOrder(column="s.ueis")],
+    )
+
+    with pytest.raises(QueryValidationError) as excinfo:
+        _validate_output_columns(
+            request, ["s.uei"], catalog, {"s": catalog.resolve_relation("usaspending", "all_entities")}
+        )
+
+    assert "uei" in str(excinfo.value)
+    assert "Did you mean" in str(excinfo.value)
+
+
+def test_the_near_miss_comes_from_the_signed_manifest_and_nothing_else(catalog) -> None:
+    """A candidate the request never selected would be rejected on the next call, so it is no help."""
+    from benthic_mcp.errors import QueryValidationError
+    from benthic_mcp.models import OutputOrder, QueryRequest, RelationSource
+    from benthic_mcp.query import _validate_output_columns
+
+    request = QueryRequest(
+        question="probe",
+        sources=[RelationSource(alias="s", dataset="samer", relation="sam_registrations", select=["uei"])],
+        order=[OutputOrder(column="s.congressional_district")],
+    )
+
+    with pytest.raises(QueryValidationError):
+        _validate_output_columns(
+            request, ["s.uei"], catalog, {"s": catalog.resolve_relation("samer", "sam_registrations")}
+        )

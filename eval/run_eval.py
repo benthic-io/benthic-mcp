@@ -303,12 +303,24 @@ def score_case(
         join_ok = not invalid_join and contains_any(final_text, ["not signed", "no signed", "cannot", "unsigned"])
 
     if capability == "multi_step_join":
-        # Both signed hops have to be walked. One hop alone is the failure this family exists for.
         executed = [event for event in successful if event["name"] == "benthic_join"]
         expected_paths = expected.get("paths") or []
-        join_ok = len(executed) >= len(expected_paths) and all(
-            any(_join_matches(event, path) for event in executed) for path in expected_paths
-        )
+        if case.get("unanswerable"):
+            # The chain is provably empty, so requiring the traversal demands the agent fabricate a
+            # hop. Scored on the dead end instead: the first hop was attempted on the signed path,
+            # and the answer said the chain stops there rather than inventing a final identifier.
+            first = expected_paths[0] if expected_paths else {}
+            attempted = any(_join_matches(event, first) for event in executed)
+            terminated = any(
+                phrase in final_text.lower()
+                for phrase in ("terminates", "terminated", "no row", "no matching", "empty", "0 rows", "no further")
+            )
+            join_ok = attempted and terminated
+        else:
+            # Both signed hops have to be walked. One hop alone is the failure this family exists for.
+            join_ok = len(executed) >= len(expected_paths) and all(
+                any(_join_matches(event, path) for event in executed) for path in expected_paths
+            )
 
     if capability == "relation_trap":
         # The present-day view returns a confident wrong answer, so the only reliable signal is

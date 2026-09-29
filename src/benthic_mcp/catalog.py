@@ -500,9 +500,24 @@ class Catalog:
             )
             if direct or reverse:
                 return join
+        # Name what *is* signed between these two relations. A caller who guessed the columns
+        # explicitly was in the same dead end a wrong select is in, and the candidate-naming that
+        # closes it there is not reached from this branch, so close it here too.
+        left_name = f"{left.dataset}.{left.name}"
+        right_name = f"{right.dataset}.{right.name}"
+        between = [
+            edge for edge in self.join_graph().get(left_name, []) if f"{edge.right[0]}.{edge.right[1]}" == right_name
+        ]
+        hint = ""
+        if between:
+            listed = "; ".join(
+                f"{edge.left_column} = {edge.right_column} [{edge.join_type}/{edge.reliability}]" for edge in between
+            )
+            hint = f" Signed paths between them: {listed}."
         raise QueryValidationError(
             "The requested key pair is not a signed BDP join path: "
-            f"{left.dataset}.{left.name}.{left_column} -> {right.dataset}.{right.name}.{right_column}"
+            f"{left.dataset}.{left.name}.{left_column} -> {right.dataset}.{right.name}.{right_column}."
+            f"{hint}"
         )
 
     def endpoint_for(self, dataset: str) -> str:

@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import Any
 
 from benthic_mcp.bdp import BdpRepository
-from benthic_mcp.catalog import Catalog
+from benthic_mcp.catalog import Catalog, RelationDefinition
 from benthic_mcp.config import Settings
 from benthic_mcp.errors import QueryValidationError, UpstreamError
 from benthic_mcp.joins import build_source_metadata, execute_joins
@@ -94,6 +94,7 @@ class QueryService:
             set(request.allowed_reliability),
             self.settings.max_rows,
         )
+        by_alias = {item.source.alias: item.definition for item in fetched}
         if requires_complete and (any(item.truncated for item in fetched) or join_result.truncated):
             raise QueryValidationError(
                 "The query exceeds the complete-scan limit and cannot produce reliable aggregates or joins. "
@@ -101,7 +102,7 @@ class QueryService:
             )
         rows = _aggregate_rows(join_result.rows, request)
         available_columns = _available_source_columns(fetched)
-        _validate_output_columns(request, available_columns)
+        _validate_output_columns(request, available_columns, catalog, by_alias)
         rows = _apply_having(rows, request.having)
         rows = _order_rows(rows, request, available_columns)
         columns = list(request.output_columns) if request.output_columns else _infer_columns(rows, available_columns)
@@ -484,7 +485,19 @@ def _numeric(value: Any, alias: str) -> float | int:
     return value
 
 
-def _validate_output_columns(request: QueryRequest, source_columns: list[str]) -> None:
+def _validate_output_columns(
+    request: QueryRequest,
+    source_columns: list[str],
+    catalog: Catalog | None = None,
+    definitions: dict[str, RelationDefinition] | None = None,
+) -> None:
+    """Reject output positions naming a column that was not fetched, naming near misses.
+
+    A wrong guess is recoverable in select, in a filter and in a source order, because
+    catalog.validate_columns offers the signed near misses. It was a dead end here, in the
+    positions the model uses to say what it wants back: group_by, aggregates, having,
+    output_columns and order. Candidates come from the signed catalog and from nothing else.
+    """
     available = set(source_columns)
     unknown_inputs = sorted(set(request.group_by) - available)
     unknown_inputs.extend(
@@ -493,7 +506,7 @@ def _validate_output_columns(request: QueryRequest, source_columns: list[str]) -
         if aggregate.column is not None and aggregate.column not in available
     )
     if unknown_inputs:
-        raise QueryValidationError(f"Unknown output columns: {', '.join(sorted(set(unknown_inputs)))}")
+        raise _unknown_output_error(sorted(set(unknown_inputs)), source_columns, catalog, definitions)
     available.update(aggregate.alias for aggregate in request.aggregates)
     output_references = [
         *request.output_columns,
@@ -502,7 +515,42 @@ def _validate_output_columns(request: QueryRequest, source_columns: list[str]) -
     ]
     unknown_outputs = sorted(set(output_references) - available)
     if unknown_outputs:
-        raise QueryValidationError(f"Unknown output columns: {', '.join(unknown_outputs)}")
+        raise _unknown_output_error(unknown_outputs, source_columns, catalog, definitions)
+
+
+def _unknown_output_error(
+    unknown: list[str],
+    source_columns: list[str],
+    catalog: Catalog | None,
+    definitions: dict[str, RelationDefinition] | None = None,
+) -> QueryValidationError:
+    detail = ""
+    if catalog is not None:
+        candidates = _nearest_output_columns(unknown, definitions or {}, catalog)
+        if candidates:
+            detail = f" Did you mean: {', '.join(candidates)}?"
+    return QueryValidationError(f"Unknown output columns: {', '.join(unknown)}.{detail}")
+
+
+def _nearest_output_columns(
+    unknown: list[str], definitions: dict[str, RelationDefinition], catalog: Catalog
+) -> list[str]:
+    """Signed columns close to a wrong guess, from the source it was named against.
+
+    Resolved through the fetched definitions rather than the manifest, so the hint cannot offer a
+    relation the request did not fetch, and the candidates come from the signed catalog and nowhere
+    else.
+    """
+    candidates: list[str] = []
+    for reference in unknown:
+        alias, _, column = reference.rpartition(".")
+        definition = definitions.get(alias)
+        if definition is None:
+            continue
+        near = catalog.column_candidates(definition, column)
+        if near:
+            candidates.append(f"{alias}.{near[0]}")
+    return sorted(dict.fromkeys(candidates))
 
 
 def _apply_having(rows: list[dict[str, Any]], conditions: list[HavingSpec]) -> list[dict[str, Any]]:
