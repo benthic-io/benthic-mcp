@@ -619,3 +619,72 @@ place of `(1, 2)`.
 After the fix the sandbox serves **1** lesson instead of 12 - the single one with evidence. The live
 service is unaffected: it reads `~/.cache/benthic-mcp/playbook.json`, and `eval/harness/` is the
 sandbox.
+
+## Driving the MCP from the outside, and what it cost to listen
+
+The suite scores cases. It does not show you *why* a session failed, because the reasoning never
+reaches it. So the loop here was built around a probe driver instead: one realistic question,
+through the same loop the llama.cpp web UI implements, with every assistant turn recorded verbatim.
+
+llama-server has no agent loop. It emits `tool_calls` and stops; the caller executes each against
+`POST /tools` and feeds the result back as a `tool` role message. `GET /tools` returns six MCP
+tools, namespaced `benthic_benthic_*` because the server name and the tool name are both
+`benthic`. Results arrive as `plain_text_response` - JSON encoded as a string, so the model parses
+text-wrapped JSON on every call.
+
+Eighteen probes, six clusters, `max_turns=6`: **10 of 18 answered**.
+
+### The driver was wrong first
+
+The first records showed 61% of turns with empty content, and sessions dying on
+`finish_reason: length` with nothing recorded. The server runs with `--reasoning-preserve`: a
+thinking turn puts its output in `reasoning_content` and leaves `content` empty. The driver read
+only `content`.
+
+So the instrument was discarding the exact artifact the investigation was for, and it looked like
+a model failure. Fixed, and the reasoning is what identified every defect below.
+
+### What the failures actually were
+
+Not loops. Across the six failed probes there were **zero to one repeated calls each** - every turn
+was a genuinely different attempt. The model was not stubborn; the server was refusing work and
+each recovery cost a turn out of a fixed budget. That reframes the fix: make fewer attempts
+necessary, not encourage earlier answers.
+
+Five defects, each fixed with a mutation-checked contract:
+
+| defect | was | now |
+| --- | --- | --- |
+| `discover` dropped a relation filter | `dataset` + qualified `relation` returned an unrelated relation | returns the relation asked for |
+| paging with no stable order | 63 of 99 relations paged with no `ORDER BY`, so aggregates silently dropped and duplicated rows | refused; single-page still works |
+| scan-limit refusal | "Narrow the filters", to a caller that had narrowed | names the real count: "1416153 rows match ... 1406153 more than" |
+| bare `count(*)` | refused at 10,545 rows against a 10,000 limit; no filter can fix a count | answered exactly from the count HEAD |
+| filter/metric/operator rejection | named a shape, never an operator, and `name=` vs `alias=` | operator list, worked example, consistent names |
+
+The sixth was found only after fixing the driver: aggregate function names were case-sensitive
+while every message listed lowercase. The transcript shows the model writing
+`metrics: ["alias=MAX:..."]` - the literal placeholder word - being told `Unknown aggregate
+function 'MAX'`, reasoning *"The aggregate function should be lowercase max"*, and then sending
+uppercase **twice more**. It had correctly identified the fix and could not act on it.
+
+### The refusal that is not a bug
+
+`group_by` over a wide source remains refused, and the obvious remedy - probing group-key
+cardinality instead of source width - is unsound. Measured:
+
+- `samer.mv_contractor_registry.physical_state` is a ZIP code, not a state: 22 distinct values from
+  200 rows
+- `usaspending.all_entities.state` gives **1** distinct value from 200 ordered rows, because sorted
+  order clusters
+
+A one-page probe would therefore wrongly approve a wide group_by and wrongly refuse a narrow one.
+Trading a loud dead end for a silent wrong answer is the failure this project exists to prevent, so
+it needs a different mechanism.
+
+### One capability gap, stated plainly
+
+`reporting_agency_overview` has no agency-name column, only `toptier_code`, and no signed join
+touches it. The name lives in `usaspending.toptier_agency`, which discovery ranks first for
+"agency name for toptier code" - the model asked about the relation it already had instead. That is
+model behaviour, not a server defect. The server's own answer is honest: `benthic_playbook` reports
+"No signed join touches usaspending.reporting_agency_overview, so it cannot reach anything."
