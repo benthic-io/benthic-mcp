@@ -9,7 +9,7 @@ import httpx
 
 from benthic_mcp.catalog import ColumnDefinition, RelationDefinition
 from benthic_mcp.config import Settings
-from benthic_mcp.errors import QueryValidationError, UpstreamError
+from benthic_mcp.errors import BenthicMCPError, QueryValidationError, UpstreamError
 from benthic_mcp.models import FilterOperator, FilterSpec, RelationSource, SourceOrder
 
 
@@ -47,6 +47,7 @@ class PostgrestTransport:
                 else source.order
             }
         )
+        stable_order = bool(scan_source.order)
 
         while remaining > 0:
             limit = min(self.settings.max_rows, remaining)
@@ -57,6 +58,22 @@ class PostgrestTransport:
             remaining -= len(page.rows)
             if len(page.rows) < limit:
                 return FetchedSource(source, definition, rows, request_url, False)
+            if not stable_order:
+                # The page filled, so a second one is due, and `offset` only means anything against
+                # a total order. 63 of the 99 queryable relations declare no primary key and
+                # `source.order` is never set by the query builder, so these requests carry no
+                # ORDER BY at all and PostgREST guarantees nothing about row order between them: a
+                # row can come back twice or be skipped outright. The aggregate would then be
+                # quietly wrong on the one path whose entire purpose is to be exact.
+                #
+                # A single page is unaffected, because no offset is used. Refusing only once paging
+                # is genuinely required keeps small relations and narrow filters working.
+                raise BenthicMCPError(
+                    f"{definition.dataset}.{definition.name} declares no primary key, so its rows cannot be "
+                    f"paged deterministically and an aggregate over them would be unreliable. "
+                    f"Narrow the filter so the result fits in one page of {self.settings.max_rows} rows, "
+                    f"or aggregate over a relation that declares a primary key."
+                )
 
         probe = await self._fetch_page(scan_source, definition, 1, offset, sentinel=False)
         return FetchedSource(source, definition, rows, probe.request_url or request_url, bool(probe.rows))
