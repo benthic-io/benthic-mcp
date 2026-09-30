@@ -125,16 +125,105 @@ Seven cases of an instrument reporting success while measuring nothing:
   Department of Veterans Affairs; it is the **Department of the Treasury**. Every candidate finding
   is checked against the manifest before it becomes guidance.
 
-## Next steps, in order
+## Production access, and the 32-minute orphan
 
-1. **Rewrite or retire the three unanswerable probes** so the failure count means something.
-2. **Check whether `rpc_*` regressed**: `rpc_box` 6/8 and `rpc_point` 7/8, from a previous 8/8.
-   Either new guidance hurt or it is variance; cheap to test and a real regression matters.
-3. The scan wall is x47. The refusal stays; only guidance naming aggregate-free routes remains.
-4. Investigate the recurring hallucinations: `legislator_term` x9, `count` x8 (an aggregate alias
-   put into `select` - the server is right), `registrations` x7, `terms` x5.
-5. Do not chase the eleven probes that vary run to run. That is the signal already known not to
+The upstream is not a third party. `benthic.io` (165.22.33.22) is nginx proxying to **thunkah**
+(192.168.10.202), which runs the production Postgres. I spent a while guessing wrong here; the
+architecture is not derivable from the code.
+
+```bash
+ssh -i ~/.ssh/id_ed25519_thunkah thunkah                      # key installed 2026-09-30
+PGOPTIONS='-c statement_timeout=15000' psql -d usaspending_db -c "..."
+```
+
+`otherdrums` has a Postgres role on thunkah, so **no sudo is needed**. Databases: `usaspending_db`
+(the big one), plus `benthic_fresh_check`, `benthic_metrics`, `irs_ng`, `sam_er`, and nine
+`benthic_metrics_test_*` scratch databases nobody cleans up.
+
+**The orphan.** A probe call at 16:53:29 was abandoned by nginx at its 60s `proxy_read_timeout` while
+Postgres kept executing. It ran **32 minutes** before I found and terminated it - matching the
+timestamp to the second. It was `ORDER BY award_id LIMIT/OFFSET` over `prime_awards`, and the plan
+explains everything:
+
+```
+Limit (cost=99723..100831)
+  -> Index Scan using idx_prime_awards_award_id (cost=0.57..112744059 rows=10175169)
+       Filter: (fiscal_year = 2023)
+```
+
+`prime_awards` is 183M rows / **192 GB** with ~24 GB of indexes. It has single-column indexes on
+both `award_id` and `fiscal_year` but **not the composite**, so the planner walks the entire
+`award_id` index filtering on fiscal year. 112M cost units. `CREATE INDEX CONCURRENTLY
+(fiscal_year, award_id)` turns it into a seek.
+
+**I was wrong twice here and it cost time.** I asserted twice that no index could help these
+queries. The index was missing and composite. I had been reasoning from client-side traces without
+having looked at the database at all. Lesson: when a question is about performance, go and read the
+plan before theorising - two confident wrong answers is worse than one "I don't know".
+
+Related, and the same mistake: `count(*)` here uses a *partial* index
+(`idx_prime_awards_pop_state`, parallel index-only scan, cost 1.5M), not a seq scan. Counts are
+cheaper than I implied. Only bare counts over whole 400M+ row tables are genuinely expensive.
+
+## What the manifest already knows and the server ignores
+
+`row_count_estimate` is in the signed catalog, **but only for 15 of 119 relations.** Missing from
+every relation that hurt: `prime_awards`, `entity_awards`, `all_entities`, `mv_district_spending`,
+`state_data`, `overall_totals`.
+
+And the client **parses it and never uses it** - `catalog.py:82,233,377` and `models.py:179` carry it;
+it appears in no decision in `query.py`, `postgrest.py` or `joins.py`. The server had a signed
+authoritative answer to "is this too big to page?" in memory and sent a 192 GB query to find out
+empirically.
+
+The upstream cause is a truthiness bug at `bdp/tools/introspect.py:272`: `if reltuples:` drops the
+count when it is `0` and cannot tell "empty table" from "never analyzed". The thunkah agent is
+fixing that; I own the client side.
+
+Also: `prime_awards`, `entity_awards`, `all_entities` and the mv tables have **never been
+ANALYZEd** - no `last_analyze`, no `last_autoanalyze`, ever. Stage `07_analyze` exists and says
+"planner has no stats until this runs", so this is a pipeline that did not reach completion, not a
+missing feature. The thunkah agent is finding out why.
+
+**Manifest/commit coupling:** `etl_provenance.commit_hash` sits inside the signed payload. `SPEC.md`
+is explicit that labelling a hand-built object `derived` "would be lying about what the referenced
+commit produces". So a change is not done until it is in the ETL *and* the manifest. Currently the
+manifest records `b25eba84` while the ETL head is `3131c62` - discrepancy unverified.
+
+## Handed off to an agent on thunkah
+
+Database and ETL work is now owned by an opencode session on thunkah; the brief is
+`~/thunkah-handoff.md` and the transcript `~/benthic-publish-work/run1.jsonl`. Session
+`ses_f0bb26b79ffe0JahS4LXf1JLjb`. Check it with `~/benthic-publish-work/status.sh`.
+
+It is building `benthic-io/benthic-publish` (private) - a playbook to take any dataset from raw
+download to a fast, correctly signed, served API. The brief carries the measured numbers, the
+`CONCURRENTLY` rule, and the instruction not to touch `benthic-mcp`.
+
+**On thunkah, `/usr/local/bin/opencode` is 1.0.76 and has no `--auto`; only
+`~/.opencode/bin/opencode` (2.0.20) does. PATH picks the wrong one.** Without `--auto` an
+unattended run hangs on the first permission prompt rather than failing. Always set
+`PATH=$HOME/.opencode/bin:$PATH`.
+
+## Next steps on this side, in order
+
+1. **Use `row_count_estimate` as a pre-flight.** Refuse locally and instantly when the estimate
+   exceeds the scan limit, so a huge relation costs zero upstream queries. Contract: the second
+   identical call must refuse with no upstream request at all. Blocked on the manifest fix for
+   full coverage, but the 15 relations that have it can be used now - and it is strictly an
+   improvement to consult it where present.
+   **Open question for the user:** for the 104 relations with no estimate, refuse or proceed as
+   today? Proceeding keeps the catalog usable; refusing is safe but strands 87% of it.
+2. **Rewrite or retire the three unanswerable probes** (`join_partial` 0/8, `query_group_by` 0/8,
+   `self_report` 0/7). They are the direct cause of the upstream load, and they are questions this
+   API cannot answer, not server defects.
+3. **Check whether `rpc_*` regressed**: `rpc_box` 6/8 and `rpc_point` 7/8, from a previous 8/8.
+4. Do not chase the eleven probes that vary run to run. That is the signal already known not to
    trust.
+
+**The observe timer is currently STOPPED** (`systemctl --user start benthic-observe.timer` to
+resume). It generates real production load, and running it while diagnosing a load problem is the
+wrong order of operations.
 
 ## Files worth reading first
 
