@@ -816,3 +816,58 @@ def query_service(settings: Any, bdp_documents: dict[str, Any]) -> tuple[QuerySe
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return QueryService(settings, BdpRepository(settings, client), PostgrestTransport(settings, client)), client
+
+
+def test_a_qualified_relation_survives_a_dataset_that_is_also_given(signed_catalog: Catalog) -> None:
+    """`relation` is documented and contracted in its qualified form, and a caller who also passes
+    `dataset` gets silently unrelated relations instead.
+
+    Found by driving the live server: the model asked for `dataset=usp_cl` together with
+    `relation=usp_cl.legislator_terms` - the exact `source` string discovery had just handed it for
+    `benthic_query` - and got back `usp_cl.committee_membership`, a different relation entirely. The
+    qualified split only ran when `dataset` was absent, so with both arguments the relation kept
+    its dot, matched no bare name, and was dropped rather than rejected. The model spent a turn
+    reasoning about "a routing index" before noticing.
+
+    Dropping a filter is the one failure a caller cannot detect: the result is a well-formed answer
+    to a different question. An unknown relation must be refused instead, which the existing
+    validation already tries to do - it just never saw the value it was given.
+    """
+    qualified = "usp_cl.legislator_terms"
+    dataset, _, name = qualified.partition(".")
+
+    bare = signed_catalog.discover(relation=qualified, detail="full")
+    both = signed_catalog.discover(dataset=dataset, relation=qualified, detail="full")
+    split = signed_catalog.discover(dataset=dataset, relation=name, detail="full")
+
+    assert [relation.source for relation in bare.relations] == [qualified]
+    assert [relation.source for relation in both.relations] == [qualified], (
+        "passing dataset alongside a qualified relation must not drop the relation filter"
+    )
+    assert both.relations[0].columns == bare.relations[0].columns
+    assert [relation.source for relation in split.relations] == [qualified], (
+        "the bare and qualified spellings must select the same relation"
+    )
+
+
+def test_an_unknown_relation_is_refused_rather_than_ignored(signed_catalog: Catalog) -> None:
+    """The counterpart: a relation name that is in no signed manifest must not silently widen.
+
+    `discover` returns `dataset` matches with no relation filter once an unknown name is dropped,
+    which reads as an answer. A caller who typos a column's relation, or carries a name across
+    datasets, gets a plausible list of the wrong tables.
+    """
+    with pytest.raises(ValueError, match="legislator_termz"):
+        signed_catalog.discover(dataset="usp_cl", relation="legislator_termz", detail="full")
+
+    # `server.discover` converts this to a `ToolError`, so the calling model sees a message naming
+    # the offending relation instead of a list of the wrong tables.
+    assert "signed relations" in str(
+        pytest.raises(
+            ValueError,
+            signed_catalog.discover,
+            dataset="usp_cl",
+            relation="legislator_termz",
+            detail="full",
+        ).value
+    )

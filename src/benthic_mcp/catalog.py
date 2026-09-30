@@ -277,12 +277,28 @@ class Catalog:
         detail: str = "summary",
     ) -> DiscoverResult:
         tokens = [token for token in re.split(r"[^A-Za-z0-9_]+", query.lower()) if token and token not in _STOP_WORDS]
-        if dataset and "." in dataset and relation is None:
-            dataset, relation = dataset.split(".", 1)
-        if relation and "." in relation and dataset is None:
-            dataset, relation = relation.split(".", 1)
-        if relation and not any(name == relation for _, name in self.relations):
-            relation = None
+        # `relation` is documented, and contracted in test_contracts_catalog.py, in its qualified
+        # `dataset.relation` form, because that is the `source` string discovery hands back for
+        # benthic_query and a caller naturally passes the same string to both. Normalising only when
+        # `dataset` was absent left the two-argument call - the natural spelling - unnormalised, so
+        # the name kept its dot, matched no bare relation, and was dropped rather than rejected.
+        # Discovery then answered a different question than the one asked, in a shape the caller
+        # cannot distinguish from an answer.
+        if dataset and "." in dataset:
+            dataset, _, from_dataset = dataset.partition(".")
+            if relation is None and from_dataset:
+                relation = from_dataset
+        if relation and "." in relation:
+            qualified_dataset, _, bare = relation.partition(".")
+            if dataset is None or dataset == qualified_dataset:
+                dataset, relation = qualified_dataset, bare
+        if relation is not None and not any(name == relation for _, name in self.relations):
+            # Refuse rather than widen. Silently dropping the filter turns a typo, or a name
+            # carried across datasets, into a plausible list of the wrong relations.
+            raise ValueError(
+                f"Unknown relation {relation!r} in dataset {dataset!r}; "
+                f"call discover without a relation to see the signed relations."
+            )
         if dataset and not any(name == dataset for name, _ in self.relations):
             dataset = None
         if detail == "full":
