@@ -742,3 +742,40 @@ few minutes, and not from a model session: it is the attribution gate, which re-
 per repetition. Counting occurrences without grouping by caller attributed a harness artefact to
 the agent. Grouped by date, 374 traced errors on the 29th and 88 on the 30th, and every live one is
 now in a fixed category.
+
+### The last server-side cause: `truncated: true` with nothing else
+
+Six probes were still failing, and all of them ended the same way - every turn issued tool calls,
+no turn wrote prose. The transcripts made the reason plain. A session asking for entities in MA
+district 03 received 100 rows and reasoned:
+
+> The query returned 100 rows but source_complete is false and truncated is true. This means there
+> are more entities. [...] Let me think about what the question is really asking.
+
+It could not tell 100 rows out of 100 from 100 out of 1,416,153. With no size to reason about, a
+further call always looks worthwhile.
+
+The stop rule was **already** in the `benthic_discover` description, read on every single turn:
+
+> You have a limited number of turns, so once you have the rows you need you must stop calling
+> tools and write the final answer, because a question left unanswered scores zero even when every
+> call succeeded.
+
+It did not work. Guidance was never the missing piece - the model could not budget turns without
+knowing the size of what it was holding. And the server knew: `count_matching` had just been paid
+for, one HEAD, no row bytes. The number was used to build refusal text on the *failing* path and
+thrown away on the one that succeeded.
+
+`fetch` now counts a truncated page, `SourceMetadata` gained `matched_rows` next to the existing
+`row_count` - which is rows *returned*, and whose old name read as the total - and the result says
+what to do:
+
+> usaspending.all_entities returned 100 of 1416779 rows that match the filters. Paging cannot
+> produce an answer at this size, so answer now with the rows held and state that the result is a
+> partial view rather than a total.
+
+Verified by re-running the two stuck probes. `join_signed_both` received that warning at turn four,
+never queried `all_entities` again, and answered at turn seven reporting "33,968 rows, a partial
+view, first 100" - declining to invent a complete list. `historical_terms`, stuck in every previous
+sweep, answered correctly: Ayanna Pressley, 117th Congress, 2021-2023, having avoided the
+present-day view it was probing for.
