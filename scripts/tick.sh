@@ -95,10 +95,20 @@ say "contracts green"
 STAMP="$(date +%Y%m%dT%H%M%S)"
 if (( RUN_PROBES )); then
   say "probing (18 cases, roughly 25 minutes)"
-  .venv/bin/python eval/observer/sweep.py \
+  if ! .venv/bin/python eval/observer/sweep.py \
       --probes eval/observer/probes/core.json \
       --record "$RECORDS/${STAMP}.jsonl" \
-      --max-turns 8 >>"$LOG" 2>&1
+      --max-turns 8 >>"$LOG" 2>&1; then
+    say "PROBE SWEEP FAILED - see $LOG. Not writing findings."
+    exit 70
+  fi
+  # The exit code was not the only way this lied: a sweep that writes no record still exits zero, so
+  # the record itself is what has to be checked. This printed "probe sweep finished" and then built a
+  # survey from records that did not exist.
+  if [[ ! -s "$RECORDS/${STAMP}.jsonl" ]]; then
+    say "PROBE SWEEP PRODUCED NO RECORD - expected $RECORDS/${STAMP}.jsonl. Not writing findings."
+    exit 70
+  fi
   say "probe sweep finished -> $RECORDS/${STAMP}.jsonl"
 else
   say "probe sweep skipped (pass --probe to run one)"

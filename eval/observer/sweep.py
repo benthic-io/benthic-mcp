@@ -15,8 +15,10 @@ import argparse
 import json
 import os
 import time
+import traceback
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 BASE = os.environ.get("BENTHIC_LLAMA_URL", "http://192.168.10.222:8081")
 
@@ -32,7 +34,7 @@ def post(path: str, body: dict, timeout: float) -> dict:
         return json.loads(response.read().decode("utf-8"))
 
 
-def get(path: str, timeout: float) -> object:
+def get(path: str, timeout: float) -> Any:
     with urllib.request.urlopen(f"{BASE}{path}", timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
 
@@ -180,7 +182,18 @@ def main() -> int:
     parser.add_argument("--temperature", type=float, default=0.0)
     args = parser.parse_args()
 
-    probes = json.loads(Path(args.probes).read_text(encoding="utf-8"))["probes"]
+    # Accept either the envelope or a bare list. A bare list was once written by a script that
+    # flattened the file, and the resulting TypeError exited 0, so the tick reported a finished
+    # sweep that had produced no records.
+    document = json.loads(Path(args.probes).read_text(encoding="utf-8"))
+    raw: object = document["probes"] if isinstance(document, dict) else document
+    if not isinstance(raw, list) or not raw:
+        raise SystemExit(f"{args.probes} holds no probes; expected a list or a {{'probes': [...]}} envelope")
+    probes: list[dict[str, Any]] = []
+    for probe in raw:
+        if not isinstance(probe, dict) or not probe.get("id") or not probe.get("question"):
+            raise SystemExit(f"{args.probes} holds a probe that is not usable: {probe!r:.120}")
+        probes.append(probe)
     if args.only:
         wanted = {item.strip() for item in args.only.split(",")}
         probes = [p for p in probes if p.get("id") in wanted or p.get("cluster") in wanted]
@@ -209,4 +222,13 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # An unhandled exception must not exit 0. The tick treated a zero exit as a finished sweep and
+    # carried on to write findings from records that did not exist, which is how a crashed sweep was
+    # reported as a clean one.
+    try:
+        raise SystemExit(main())
+    except SystemExit:
+        raise
+    except BaseException:
+        traceback.print_exc()
+        raise SystemExit(70)
