@@ -555,13 +555,30 @@ def _parse_filter(expression: str) -> FilterSpec:
             raise QueryValidationError(f"Invalid in filter {expression!r}; use a JSON array")
         return FilterSpec(column=column, operator=FilterOperator.IN, value=values)
     if "." not in expression_value:
-        # The common shape: `column=value`, where the value is what should have followed the
-        # operator. `congressional_district=03` is the first thing anyone writes, and the message
-        # has to say which operators exist, because "column=operator.value" does not.
+        # Two shapes reach here, and they need different messages.
+        if ":" in expression_value:
+            # `column=eq:value` names its operator as plainly as `column=eq.value`; only the
+            # separator differs. Live transcripts show a model writing `district=eq:3` and
+            # `congressional_district=like:%MA-03%`, each refused with a message claiming no
+            # operator was present. There is exactly one reading, so it is accepted.
+            prefix, _, rest = expression_value.partition(":")
+            known = {item.value for item in FilterOperator}
+            if prefix.lower() in known:
+                operator = FilterOperator(prefix.lower())
+                if operator not in _NULL_TESTS:
+                    return FilterSpec(column=column, operator=operator, value=_parse_expression_value(rest))
+                raise _invalid_filter(expression, f"{operator.value!r} takes no value, so nothing may follow it.")
+            raise _invalid_filter(
+                expression,
+                f"{prefix!r} is not an operator; write 'column=operator.value' with a dot.",
+            )
+        # `column=value` names nothing at all, which is different: it could be a dropped operator or
+        # a dropped value and there is nothing to go on. Refused, with the reason named.
         raise _invalid_filter(
             expression,
             f"{expression_value!r} is a value, not an operator, so it has no operator before it.",
         )
+
     operator_name, value = expression_value.split(".", 1)
     try:
         # Case-insensitive for the same reason aggregate functions are: the message lists only

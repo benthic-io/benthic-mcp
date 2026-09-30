@@ -1012,3 +1012,42 @@ async def test_a_complete_result_does_not_claim_to_be_truncated(settings: Any, b
     text = " ".join(warning.message for warning in result.warnings)
     assert "all 5 rows" in text, f"a complete result must not be described as lossy: {text}"
     assert "answer now" not in text.lower()
+
+
+def test_a_filter_may_write_the_operator_separated_by_a_colon() -> None:
+    """`column=eq:value` is the same filter as `column=eq.value`, and the transcripts show a model
+    writing it repeatedly.
+
+    From an unattended probe run: `district=eq:3`, `congressional_district=like:%MA-03%`. The
+    refusal said "'eq:3' is a value, not an operator, so it has no operator before it" - which is
+    wrong about the caller's intent. An operator *is* named, and only the separator differs.
+
+    This is the same case as `column>0`, which is already accepted, and it is accepted for the same
+    reason: there is one reading. `column=value` stays refused, because that names nothing.
+
+    Recorded from an observer run rather than from the suite: no generated case writes this spelling,
+    so the suite would never have found it.
+    """
+    from benthic_mcp.models import FilterOperator
+    from benthic_mcp.query import _parse_filter
+
+    assert _parse_filter("district=eq:3") == FilterSpec(column="district", operator=FilterOperator.EQ, value=3)
+    assert _parse_filter("name=like:%MA%") == FilterSpec(column="name", operator=FilterOperator.LIKE, value="%MA%")
+    # The dotted spelling still works, and both spellings agree.
+    assert _parse_filter("district=eq.3") == _parse_filter("district=eq:3")
+
+
+def test_an_unknown_colon_operator_is_still_refused() -> None:
+    """Accepting the separator must not accept a made-up operator with it."""
+    from benthic_mcp.query import _parse_filter
+
+    with pytest.raises(QueryValidationError, match="'beside' is not an operator"):
+        _parse_filter("district=beside:3")
+
+    # The null tests take no value, so a colon after one is still wrong.
+    with pytest.raises(QueryValidationError, match="takes no value"):
+        _parse_filter("col=is.null:x")
+
+    # `in` names itself unambiguously and its value is a JSON array either way, so it is accepted
+    # with the colon too and parsed to the same list rather than refused.
+    assert _parse_filter("ids=in:[1,2]").value == [1, 2]
