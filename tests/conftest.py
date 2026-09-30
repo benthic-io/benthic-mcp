@@ -42,6 +42,17 @@ def manifests(private_key: Ed25519PrivateKey) -> dict[str, dict[str, Any]]:
             "usaspending",
             [
                 relation(
+                    "state_data", [("code", "string"), ("name", "string"), ("type", "string"), ("fips", "string")]
+                ),
+                relation(
+                    "overall_totals",
+                    [("fiscal_year", "integer"), ("total_budget_authority", "number")],
+                ),
+                relation(
+                    "vw_published_dabs_toptier_agency",
+                    [("toptier_code", "string"), ("name", "string"), ("abbreviation", "string")],
+                ),
+                relation(
                     "all_entities",
                     [
                         ("uei", "string"),
@@ -72,9 +83,19 @@ def manifests(private_key: Ed25519PrivateKey) -> dict[str, dict[str, Any]]:
                     "subawards",
                     [("subaward_id", "string"), ("recipient_name", "string"), ("subaward_amount", "number")],
                 ),
+                # Already aggregated upstream in the signed manifest. The seed guidance points a
+                # refused `group_by` here rather than leaving the caller stuck, so the fixture needs
+                # the real column set - the verifier strips guidance naming a column the catalog
+                # does not carry, which is how a wrong preferred_columns list gets caught.
                 relation(
                     "mv_district_spending",
-                    [("state", "string"), ("district", "string"), ("total_obligation", "number")],
+                    [
+                        ("state", "string"),
+                        ("district", "string"),
+                        ("fiscal_year", "integer"),
+                        ("award_count", "bigint"),
+                        ("total_obligation", "number"),
+                    ],
                 ),
                 relation("lineage", [("id", "integer")], queryable=False),
             ],

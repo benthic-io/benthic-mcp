@@ -986,3 +986,50 @@ def test_the_seed_never_asserts_a_join_the_manifest_does_not_sign() -> None:
             report = VerifyReport()
             kept = screen_prose(line, signed, known, report)
             assert kept, f"{dataset_name} guidance does not survive screening: {line} ({report.notes()})"
+
+
+def test_the_scan_limit_refusal_names_a_relation_that_answers_the_question_without_an_aggregate() -> None:
+    """A refusal the caller cannot act on is a dead end, and this one was hit 29 times in one
+    unattended probe run.
+
+    The refusal itself is correct and stays: aggregating means fetching every matching row into
+    Python, and there is no sound way around that on this API. Aggregates are disabled server-side
+    (`select=state,count()` returns PGRST123, and bare `select=count` counts rows rather than
+    distinct values), so the output size cannot be known without scanning. Paging the group key in
+    sorted order cannot establish it either - measured on `usaspending.all_entities`, 5,000 ordered
+    rows cover 38 distinct state values out of 17.9M rows, and the first 1,000 rows are 60% a single
+    value, so a bounded walk never reaches the end.
+
+    What is missing is the exit. Several signed relations are already aggregated upstream, and the
+    model was never told they exist:
+
+        mv_district_spending       16,401 rows   state, district, fiscal_year, award_count, total_obligation
+        state_data                   448 rows   state reference data
+        overall_totals               141 rows   fiscal_year, total_budget_authority
+        vw_published_dabs_toptier_agency  111 rows   toptier_code, name
+
+    So the guidance names them, and this asserts the names are real and small enough to aggregate
+    over - a claim about the manifest, not about the model.
+    """
+    import asyncio
+
+    from benthic_mcp.seed import seed_playbook
+
+    signed = asyncio.run(live_catalog())
+    if not signed.relations:
+        pytest.skip("the signed manifest cache is absent, so there is nothing to check against")
+
+    playbook = seed_playbook()
+    guide = playbook.relations.get("usaspending.mv_district_spending")
+    assert guide is not None, "the seed does not mention mv_district_spending at all"
+    assert "state" in guide.preferred_columns
+    assert "total_obligation" in guide.preferred_columns
+
+    definition = signed.relations[("usaspending", "mv_district_spending")]
+    assert "state" in definition.columns and "total_obligation" in definition.columns
+
+    # Every relation the seed offers as an aggregate-free route must exist, or the guidance sends
+    # the model to a table that is not there.
+    for source in playbook.relations:
+        dataset, _, relation = source.partition(".")
+        assert (dataset, relation) in signed.relations, f"{source} is offered but not in the manifest"

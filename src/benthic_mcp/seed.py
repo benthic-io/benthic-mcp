@@ -24,6 +24,31 @@ SEED_RELATION_HINTS: dict[str, RelationGuide] = {
         ],
         description="Federal awards; recipient and place-of-performance districts are distinct columns.",
     ),
+    # Several signed relations are already aggregated upstream, and a group_by or sum over a large
+    # base table is refused because every matching row would have to be fetched into Python. These
+    # answer the same questions without an aggregate, so a refusal can point at one. Their sizes are
+    # measured, not estimated: 16,401 / 448 / 141 / 111 rows.
+    "usaspending.mv_district_spending": RelationGuide(
+        terms={"district spending": 90, "state spending": 80, "by district": 70, "spending by state": 75},
+        preferred_columns=["state", "district", "fiscal_year", "award_count", "total_obligation"],
+        description="Award counts and total obligation already grouped by state, district and fiscal "
+        "year, 16,401 rows. Use this instead of grouping a large award table by district.",
+    ),
+    "usaspending.state_data": RelationGuide(
+        terms={"state list": 70, "state codes": 60, "fips": 70},
+        preferred_columns=["code", "name", "type", "fips"],
+        description="State reference data including territories, 448 rows.",
+    ),
+    "usaspending.overall_totals": RelationGuide(
+        terms={"total budget authority": 80, "budget totals": 70},
+        preferred_columns=["fiscal_year", "total_budget_authority"],
+        description="Total budget authority by fiscal year, 141 rows. Use rather than summing a appropriation table.",
+    ),
+    "usaspending.vw_published_dabs_toptier_agency": RelationGuide(
+        terms={"agency name": 80, "toptier code to name": 90},
+        preferred_columns=["toptier_code", "name", "abbreviation"],
+        description="Maps toptier_code to an agency name, 111 rows.",
+    ),
     "usaspending.all_entities": RelationGuide(
         terms={"organization": 40, "entity": 70, "recipient": 45, "district": 50, "representative": 20},
         preferred_columns=[
@@ -110,6 +135,9 @@ SEED_DATASETS: dict[str, DatasetSection] = {
         when_to_use=[
             "Use `usaspending.prime_awards` for individual award transactions and amounts.",
             "Use `usaspending.all_entities` to look up one organization by UEI before joining to awards.",
+            "For totals by state or district, use `usaspending.mv_district_spending`, which is already "
+            "grouped upstream. Grouping `usaspending.all_entities` by a column is refused, because "
+            "every matching row would have to be read into memory first.",
         ],
         anti_patterns=[
             "Recipient district and place-of-performance district are different columns; using the wrong "
