@@ -467,8 +467,8 @@ def _parse_filter(expression: str) -> FilterSpec:
     column = column.strip()
     if not column:
         raise _invalid_filter(expression, "there is no column before the '='.")
-    if expression_value in {FilterOperator.IS_NULL.value, FilterOperator.NOT_IS_NULL.value}:
-        operator = FilterOperator(expression_value)
+    if expression_value.lower() in {FilterOperator.IS_NULL.value, FilterOperator.NOT_IS_NULL.value}:
+        operator = FilterOperator(expression_value.lower())
         return FilterSpec(column=column, operator=operator)
     if expression_value.startswith(f"{FilterOperator.IN.value}."):
         raw = expression_value.split(".", 1)[1]
@@ -489,11 +489,31 @@ def _parse_filter(expression: str) -> FilterSpec:
         )
     operator_name, value = expression_value.split(".", 1)
     try:
-        operator = FilterOperator(operator_name)
+        # Case-insensitive for the same reason aggregate functions are: the message lists only
+        # lowercase, and a caller who reads it and re-sends the spelling it was shown must not fail.
+        operator = FilterOperator(operator_name.lower())
     except ValueError as exc:
-        raise QueryValidationError(f"Unknown filter operator {operator_name!r}") from exc
+        # `is.null` and `not.is.null` are the two operators that contain a dot, so a value appended
+        # to one arrives here with the null test already split in half. Name the whole thing rather
+        # than the fragment, which is what the caller actually wrote.
+        prefixed = f"{operator_name}.{value}"
+        for null_test in _NULL_TESTS:
+            if prefixed.startswith(null_test.value):
+                raise _invalid_filter(
+                    expression,
+                    f"{null_test.value!r} takes no value, so nothing may follow it.",
+                ) from exc
+        raise _invalid_filter(
+            expression,
+            f"{operator_name!r} is not an operator.",
+        ) from exc
     if operator in {FilterOperator.IS_NULL, FilterOperator.NOT_IS_NULL}:
-        raise QueryValidationError(f"Invalid filter {expression!r}")
+        # These take no value, so `column=is.null.something` cannot mean anything. Saying only
+        # "Invalid filter" left the model guessing at the shape; it was passing a value.
+        raise _invalid_filter(
+            expression,
+            f"{operator.value!r} takes no value, so nothing may follow it.",
+        )
     return FilterSpec(column=column, operator=operator, value=_parse_expression_value(value))
 
 
@@ -571,7 +591,11 @@ def _parse_metric(expression: str) -> AggregateSpec:
     if not column:
         raise _invalid_syntax(expression, "metric", _METRIC_SYNTAX, _MISSING_METRIC_COLUMN)
     try:
-        function_value = AggregateFunction(function)
+        # Case-insensitive on purpose. The error listed only lowercase spellings, and a model read it,
+        # concluded "the function should be lowercase", and then sent the uppercase spelling anyway -
+        # twice, on consecutive turns, with the same wrong call. Accepting `MAX` costs nothing and
+        # ends that loop; the function name is not something a caller should have to case-match.
+        function_value = AggregateFunction(function.lower())
     except ValueError as exc:
         raise QueryValidationError(f"Unknown aggregate function {function!r}; use {_AGGREGATE_FUNCTIONS}") from exc
     if column == "*" and function_value != AggregateFunction.COUNT:

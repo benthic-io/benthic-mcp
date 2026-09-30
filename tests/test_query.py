@@ -837,3 +837,52 @@ def test_every_filter_rejection_shares_one_message() -> None:
 
     for expression in ("no_operator_here", "=novalue", "col=eq.a", "col=eq.a", "col=bogus.v"):
         assert "column=operator.value" in str(_invalid_filter(expression)), expression
+
+
+def test_operator_and_function_names_are_case_insensitive() -> None:
+    """A rejection that lists only lowercase spellings teaches a model the wrong thing.
+
+    Found in a live transcript: the model wrote `alias=MAX:total_dollars_obligated_gtas`, was told
+    `Unknown aggregate function 'MAX'; use count, sum, avg, min, max`, concluded in its reasoning
+    "The aggregate function should be lowercase max", and then sent the uppercase spelling twice
+    more - the same rejected call on consecutive turns. It had correctly identified the fix and
+    re-sent the bug.
+
+    A caller who reads a message and re-sends the spelling shown must not fail. Case is not
+    information the server is protecting.
+    """
+    from benthic_mcp.models import AggregateFunction, FilterOperator
+    from benthic_mcp.query import _parse_filter, _parse_metric
+
+    for function in AggregateFunction:
+        lower = _parse_metric(f"out={function.value}:col")
+        upper = _parse_metric(f"out={function.value.upper()}:col")
+        assert lower.function is upper.function, function
+
+    for operator in FilterOperator:
+        if operator.value in {"is.null", "not.is.null"}:
+            # Compared whole, so case has to match on both halves at once.
+            assert _parse_filter(f"c={operator.value.upper()}").operator is operator
+            assert _parse_filter(f"c={operator.value.lower()}").operator is operator
+            continue
+        # `in` takes a JSON array; every other operator takes a scalar.
+        value = '["a"]' if operator is FilterOperator.IN else "x"
+        assert _parse_filter(f"c={operator.value.upper()}.{value}").operator is operator
+        assert _parse_filter(f"c={operator.value.lower()}.{value}").operator is operator
+
+
+def test_a_value_appended_to_a_null_test_names_the_whole_operator() -> None:
+    """`is.null` and `not.is.null` are the only operators containing a dot, so `column=is.null.x`
+    arrives at the unknown-operator branch already split in half. Reporting the fragment tells the
+    caller nothing about what they wrote."""
+    from benthic_mcp.query import _parse_filter
+
+    for expression, expected in (
+        ("col=is.null.x", "'is.null'"),
+        ("col=not.is.null.y", "'not.is.null'"),
+    ):
+        with pytest.raises(QueryValidationError) as caught:
+            _parse_filter(expression)
+        message = str(caught.value)
+        assert expected in message, f"{expression} -> {message}"
+        assert "takes no value" in message
