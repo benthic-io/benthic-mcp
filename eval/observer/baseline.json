@@ -1,0 +1,16 @@
+{
+  "hallucinated": [
+    "congress",
+    "expiration_date",
+    "legislator_term",
+    "registration_date",
+    "registrations",
+    "sam",
+    "state_count",
+    "terms"
+  ],
+  "walls": [
+    "no primary key",
+    "rows match the filters"
+  ]
+}

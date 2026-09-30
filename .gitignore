@@ -24,3 +24,7 @@ eval/arms*/
 eval/attrib*/
 eval/validate*/
 eval/attrib-suite*/
+BENTHIC_AUDIT_DIR=/tmp/opencode/audit
+
+eval/observer/records/
+eval/observer/findings.json
