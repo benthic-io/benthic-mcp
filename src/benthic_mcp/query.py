@@ -24,6 +24,7 @@ from benthic_mcp.models import (
     RelationSource,
     Reliability,
     SourceErrorPolicy,
+    SourceMetadata,
 )
 from benthic_mcp.postgrest import FetchedSource, PostgrestTransport
 
@@ -47,6 +48,11 @@ class QueryService:
                 raise QueryValidationError(
                     f"Complete aggregation and joins do not allow source offsets: {', '.join(offset_sources)}"
                 )
+
+        if requires_complete:
+            counted = await self._server_count(request, catalog, warnings)
+            if counted is not None:
+                return counted
 
         for source in request.sources:
             try:
@@ -124,6 +130,77 @@ class QueryService:
             next_offset=request.offset + len(page) if has_more else None,
             sources=build_source_metadata(fetched),
             joins=join_result.metadata,
+            warnings=warnings,
+        )
+
+    async def _server_count(
+        self,
+        request: QueryRequest,
+        catalog: Catalog,
+        warnings: list[QueryWarning],
+    ) -> QueryResult | None:
+        """Answer `count(*)` from the count HEAD, for the one shape that always fits.
+
+        A bare count has exactly one output row however wide the source is, so the complete-scan
+        limit does not apply to it. It was being refused anyway: `count(*)` on
+        usaspending.reporting_agency_overview was refused at 10,545 rows against a 10,000 limit,
+        and on usaspending.all_entities filtered to district 03 at 1,416,153. Neither has a filter
+        that makes it fit, so both were dead ends, and a model with a turn budget spends the rest of
+        it re-issuing the same call.
+
+        PostgREST answers it without a scan. Bare `select=count` is not gated by this server's
+        db-aggregates-enabled setting - every aggregate-function spelling returns PGRST123 - and the
+        count HEAD this path already sends carries the exact total in Content-Range. Verified
+        live: 1,416,153 for the district filter in 1.23s against a 17,884,243-row table.
+
+        Deliberately narrow. A group_by, a second aggregate, a `count(column)`, a join, or an order
+        on anything other than the alias all fall through to the scan, because there the output
+        size depends on the data rather than on the source width and the count cannot answer it.
+        None means "not this shape" or "the count did not come back" - never a number.
+        """
+        if request.joins or request.group_by or len(request.sources) != 1 or len(request.aggregates) != 1:
+            return None
+        only = request.aggregates[0]
+        if only.function != AggregateFunction.COUNT or only.column is not None:
+            return None
+        if request.having or any(item.column != only.alias for item in request.order):
+            return None
+
+        source = request.sources[0]
+        try:
+            definition = catalog.resolve_relation(source.dataset, source.relation)
+            catalog.validate_columns(
+                definition,
+                [*(item.column for item in source.filters), *(item.column for item in source.order)],
+            )
+            count = await self.transport.count_matching(source, definition)
+        except (QueryValidationError, UpstreamError):
+            return None
+        if count is None:
+            return None
+
+        rows = _apply_having([{only.alias: count.total}], request.having)
+        rows = _order_rows(rows, request, [only.alias])
+        columns = [only.alias]
+        return QueryResult(
+            columns=columns,
+            rows=rows,
+            row_count=len(rows),
+            # The count is exact by construction, which is the whole point: it did not come from a
+            # scan that ran out of budget.
+            source_complete=True,
+            truncated=False,
+            next_offset=None,
+            sources=[
+                SourceMetadata(
+                    alias=source.alias,
+                    source=f"{definition.dataset}.{definition.name}",
+                    manifest_hash=definition.manifest_hash,
+                    row_count=count.total,
+                    complete=True,
+                )
+            ],
+            joins=[],
             warnings=warnings,
         )
 

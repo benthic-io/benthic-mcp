@@ -583,3 +583,219 @@ def test_the_having_example_the_message_gives_parses() -> None:
         HavingSpec(column="total_sum", operator=FilterOperator.GT, value=100000),
         HavingSpec(column="total_sum", operator=FilterOperator.GT, value=100000),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_bare_count_is_answered_from_the_count_head_rather_than_refused(
+    settings: Any,
+    bdp_documents: dict[str, Any],
+) -> None:
+    """A `count(*)` with no group_by produces one row whatever the source width, so the scan limit
+    does not apply to it - but it was being refused anyway, and a model cannot narrow a count.
+
+    Found by driving the live interface: `count(*)` on usaspending.reporting_agency_overview was
+    refused at 10,545 rows against a 10,000 limit, and `count(*)` on usaspending.all_entities
+    filtered to district 03 was refused at 1,416,153. There is no filter that makes either
+    succeed, so both were dead ends, and the model burned its whole turn budget re-issuing them.
+
+    PostgREST answers it without a scan. `select=count` is not gated by the server's
+    db-aggregates-enabled setting (every `count()` and `col.sum()` spelling returns PGRST123), and
+    the count HEAD this path already sends carries the exact total in Content-Range: verified
+    `[{"count": 1416153}]` in 1.23s against a 17,884,243-row table. The scan is pure waste here.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-1416152/1416153"})
+        # Any GET here would be the scan the count makes unnecessary.
+        return httpx.Response(200, json=[])
+
+    capped = replace(settings, max_rows=2, aggregate_scan_limit=3)
+    request = QueryRequest(
+        question="Count recipients in district 03",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities")],
+        aggregates=[AggregateSpec(function=AggregateFunction.COUNT, column=None, alias="n")],
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    assert result.rows == [{"n": 1416153}], f"expected the exact count, got {result.rows}"
+    assert not [r for r in requests if r.method == "GET" and r.url.params.get("limit")], (
+        "a bare count must not page the source"
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_bare_count_falls_back_to_the_scan_when_the_count_head_answers_nothing(
+    settings: Any,
+    bdp_documents: dict[str, Any],
+) -> None:
+    """The count HEAD is load-bearing for this shape now, so a silent failure must never produce a
+    number. `count_matching` returns None on any failure by design; that has to mean "scan instead",
+    not "answer zero"."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(405)  # count not supported here
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        # Bounded, so the scan terminates under the cap and the assertion is about which path
+        # produced the number rather than about the guard.
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(offset, min(offset + limit, 5))])
+
+    capped = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    request = QueryRequest(
+        question="Count recipients",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities")],
+        aggregates=[AggregateSpec(function=AggregateFunction.COUNT, column=None, alias="n")],
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    assert result.rows == [{"n": 5}], f"must fall back to the scan and count it, got {result.rows}"
+
+
+@pytest.mark.asyncio
+async def test_a_grouped_count_still_uses_the_scan(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """The fast path is deliberately narrow. A grouped count has one output row per distinct group
+    value, so its size depends on the data rather than on the source width, and the count HEAD
+    cannot answer it - it would silently return the ungrouped total, which is a different number."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            # No count available, so neither the fast path nor the guard can fire and the only way
+            # to answer is to scan and group. If the fast path were reachable for a grouped count it
+            # would either refuse (a count of "everything" over the cap) or answer one row with the
+            # ungrouped total; both fail the assertions below.
+            return httpx.Response(200)
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        rows = [
+            {"uei": str(index), "state": "MA" if index % 2 else "VT"} for index in range(offset, min(offset + limit, 8))
+        ]
+        return httpx.Response(200, json=rows)
+
+    capped = replace(settings, max_rows=4, aggregate_scan_limit=10)
+    request = QueryRequest(
+        question="Count recipients by state",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities", select=["uei", "state"])],
+        aggregates=[AggregateSpec(function=AggregateFunction.COUNT, column=None, alias="n")],
+        group_by=["s.state"],
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    assert len(result.rows) == 2, f"a grouped count must produce one row per group, got {result.rows}"
+    assert {row["s.state"] for row in result.rows} == {"MA", "VT"}
+    assert sorted(row["n"] for row in result.rows) == [4, 4], f"expected an even split of 8, got {result.rows}"
+
+
+@pytest.mark.asyncio
+async def test_the_bare_count_fast_path_is_not_reachable_when_the_count_would_overflow_the_guard(
+    settings: Any,
+    bdp_documents: dict[str, Any],
+) -> None:
+    """The fast path must be refused by shape, not merely be unreachable because of the cap.
+
+    With a `group_by`, the count HEAD answers the number of matching *source* rows, which is not the
+    number of output rows. Taking that path would answer `count(*)` over the whole filter and label
+    it as a grouped result - a confidently wrong number rather than a refusal. The grouped contract
+    above only passes today because the scan cap happens to stop it first, so it does not prove the
+    shape is excluded. This one makes the cap irrelevant: the count is small enough to scan, and a
+    fast path that had accepted the group_by would answer one row instead of one row per group.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-7/8"})
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(
+            200,
+            json=[
+                {"uei": str(index), "state": "MA" if index % 2 else "VT"}
+                for index in range(offset, min(offset + limit, 8))
+            ],
+        )
+
+    capped = replace(settings, max_rows=10, aggregate_scan_limit=100)
+    request = QueryRequest(
+        question="Count recipients by state",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities", select=["uei", "state"])],
+        aggregates=[AggregateSpec(function=AggregateFunction.COUNT, column=None, alias="n")],
+        group_by=["s.state"],
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    # A fast path that ignored the group_by would have returned [{"n": 8}] - one row, the ungrouped
+    # total. Grouping 8 rows on a two-valued column has to give two rows.
+    assert len(result.rows) == 2, f"the grouped shape was answered without grouping: {result.rows}"
+    assert sorted(row["n"] for row in result.rows) == [4, 4]
+
+
+@pytest.mark.asyncio
+async def test_a_count_of_a_column_does_not_take_the_row_count(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """`count(column)` counts non-null values and `count(*)` counts rows. They are different
+    numbers whenever the column has nulls, and the count HEAD only knows the row count.
+
+    Letting `count(column)` onto the fast path answers the row count under the column's alias, which
+    is a confidently wrong total rather than a refusal - and IRS organization tables are exactly the
+    shape where `f990_total_assets_recent` is null for most rows. The scan is required.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-7/8"})
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        # Four of eight rows have the column; the rest are null.
+        rows = [
+            {"uei": str(index), "duns": str(index) if index % 2 == 0 else None}
+            for index in range(offset, min(offset + limit, 8))
+        ]
+        return httpx.Response(200, json=rows)
+
+    capped = replace(settings, max_rows=10, aggregate_scan_limit=100)
+    request = QueryRequest(
+        question="How many entities have a DUNS recorded",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities", select=["uei", "duns"])],
+        output_columns=["n"],
+        aggregates=[AggregateSpec(function=AggregateFunction.COUNT, column="s.duns", alias="n")],
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    assert result.rows == [{"n": 4}], f"count of a column must count non-null values, not rows; got {result.rows}"
