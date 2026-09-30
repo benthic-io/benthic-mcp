@@ -119,6 +119,21 @@ def manifests(private_key: Ed25519PrivateKey) -> dict[str, dict[str, Any]]:
             private_key,
             "usp_cl",
             [
+                # A person registry keyed by bioguide_id, with no `name`, `state` or `district`
+                # column. The seed guidance names exactly those absences, and the verifier strips
+                # guidance for relations the catalog does not carry, so the fixture has to model it.
+                relation(
+                    "legislators",
+                    [
+                        ("bioguide_id", "string"),
+                        ("official_full", "string"),
+                        ("first_name", "string"),
+                        ("last_name", "string"),
+                        ("is_current", "boolean"),
+                        ("first_term_start", "date"),
+                        ("last_term_end", "date"),
+                    ],
+                ),
                 relation(
                     "legislator_terms",
                     [

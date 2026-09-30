@@ -20,6 +20,7 @@ unknown output column raised without a near miss, and a spatial edge was told to
 explicitly into a refusal. If a future contract arrives already green, it is asserting nothing.
 """
 
+import asyncio
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -49,7 +50,7 @@ from benthic_mcp.models import (
     RelationSource,
     Reliability,
 )
-from benthic_mcp.playbook import relation_hints
+from benthic_mcp.playbook import VerifyReport, known_identifiers, relation_hints, screen_prose
 from benthic_mcp.postgrest import FetchedSource, PostgrestTransport
 from benthic_mcp.query import QueryService
 from benthic_mcp.seed import seed_playbook
@@ -871,3 +872,110 @@ def test_an_unknown_relation_is_refused_rather_than_ignored(signed_catalog: Cata
             detail="full",
         ).value
     )
+
+
+def test_every_preferred_column_the_seed_names_exists_in_the_signed_manifest() -> None:
+    """The seed playbook tells the model which columns to reach for, and a wrong one costs a turn.
+
+    Guidance is prose that names real columns, so it rots the moment the catalog changes underneath
+    it. There is no other check: a stale `preferred_columns` entry is served to the model on every
+    `benthic_discover` call and produces exactly the wrong-column error the guidance was meant to
+    prevent.
+    """
+    from benthic_mcp.seed import seed_playbook
+
+    playbook = seed_playbook()
+    signed = asyncio.run(live_catalog())
+    if not signed:
+        pytest.skip("the signed manifest cache is absent, so there is nothing to check against")
+    missing: list[str] = []
+    for source, guide in playbook.relations.items():
+        dataset, _, relation = source.partition(".")
+        definition = signed.relations.get((dataset, relation))
+        if definition is None:
+            missing.append(f"{source}: not in the signed manifest")
+            continue
+        for column in guide.preferred_columns:
+            if column not in definition.columns:
+                missing.append(f"{source}.{column}: no such column")
+    assert not missing, "seed guidance names columns that do not exist: " + "; ".join(missing)
+
+
+async def live_catalog() -> Catalog:
+    """The real signed manifest, read from the repository cache rather than the network.
+
+    `load` prefers a fresh cache, so this checks the guidance against what the server would
+    actually serve. Returns an empty catalog when the cache is absent, which the caller treats as
+    "nothing to check" rather than as a pass.
+    """
+    from benthic_mcp.config import Settings
+
+    settings = Settings.from_env()
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            return Catalog(await BdpRepository(settings, client).load())
+    except Exception:  # noqa: BLE001 - an absent or unreadable cache means no comparison is possible
+        return Catalog(CatalogSnapshot(collections={}, manifests={}))
+
+
+def test_the_legislator_relations_name_the_legislator_joins() -> None:
+    """The model re-derived this on every run, so it belongs in the standing guidance.
+
+    From the transcripts: "The lawmakers table has bioguide_id as primary key" - the relation is
+    called `legislators`, not `lawmakers` - and "The legislator_terms table presumably also has
+    bioguide_id." Presumably. It guessed the join, guessed the relation name, and then guessed again
+    from memory that a column called `name` existed, when `usp_cl.legislators` has no such column
+    and the display value is `official_full`.
+
+    A `RelationGuide` for `usp_cl.legislators` is the fix, and this asserts the two facts that make
+    it useful: the relation is named in the dataset guidance at all, and the guidance names a
+    column that exists.
+    """
+    from benthic_mcp.seed import seed_playbook
+
+    playbook = seed_playbook()
+    guide = playbook.relations.get("usp_cl.legislators")
+    assert guide is not None, "usp_cl.legislators has no RelationGuide, so discovery returns it bare"
+    assert "official_full" in guide.preferred_columns, (
+        "official_full is the display column; there is no 'name' column on this relation"
+    )
+    assert "bioguide_id" in guide.preferred_columns, "it is the primary key and the join from terms"
+
+    signed = asyncio.run(live_catalog())
+    if not signed.relations:
+        pytest.skip("the signed manifest cache is absent, so there is nothing to check against")
+    definition = signed.relations[("usp_cl", "legislators")]
+    assert "name" not in definition.columns, "the signed manifest has no 'name' column to recommend"
+    assert "official_full" in definition.columns
+
+    dataset = playbook.datasets["usp_cl"]
+    assert any("bioguide_id" in line for line in dataset.when_to_use), (
+        "the bioguide_id path between terms and legislators is not stated anywhere"
+    )
+
+
+def test_the_seed_never_asserts_a_join_the_manifest_does_not_sign() -> None:
+    """A guidance line that tells the model to join two relations with no signed edge is worse than
+    no guidance at all: the model follows it, `benthic_join` refuses, and the turn is spent on
+    advice the server issued.
+
+    This is not hypothetical. The first version of the `usp_cl.legislators` guidance said "Join
+    `usp_cl.legislator_terms` to `usp_cl.legislators` on `bioguide_id`", and none of the six signed
+    edges touches `legislators` - the model cannot do it. The prose screener dropped the line, which
+    is how it was caught, and the guidance was rewritten to describe the two separate queries the
+    model can actually make.
+
+    Asserted here so the next piece of guidance cannot reintroduce it silently.
+    """
+    import asyncio
+
+    signed = asyncio.run(live_catalog())
+    if not signed.relations:
+        pytest.skip("the signed manifest cache is absent, so there is nothing to check against")
+    playbook = seed_playbook()
+    known = known_identifiers(signed)
+
+    for dataset_name, section in playbook.datasets.items():
+        report = VerifyReport()
+        dropped = screen_prose(" ".join(section.when_to_use), signed, known, report)
+        assert dropped == [], f"{dataset_name} guidance asserts an unsigned join: {dropped}"

@@ -40,6 +40,25 @@ SEED_RELATION_HINTS: dict[str, RelationGuide] = {
         preferred_columns=["bioguide_id", "state", "district", "term_start", "term_end", "party", "url"],
         description="Historical legislator terms; query term_start and term_end to avoid current-office mistakes.",
     ),
+    "usp_cl.legislators": RelationGuide(
+        terms={"legislator": 70, "congress": 50, "member": 60, "bioguide": 80, "representative": 40},
+        # This relation has no `name` column. A model that assumes it does gets an unknown-column
+        # error naming `name -> first_name, last_name, middle_name` and has to spend a turn reading
+        # it, so the display column is named here instead.
+        preferred_columns=[
+            "bioguide_id",
+            "official_full",
+            "first_name",
+            "last_name",
+            "is_current",
+            "first_term_start",
+            "last_term_end",
+        ],
+        description="One row per legislator, keyed by bioguide_id. There is no `name` column: use "
+        "`official_full` for a display name, or `first_name` and `last_name`. There is also no "
+        "`state` or `district` - this relation is a person registry, and the seat lives on "
+        "`usp_cl.legislator_terms`. Reach it through `legislator_terms.bioguide_id`.",
+    ),
     "usp_cl.mv_current_lawmakers": RelationGuide(
         terms={"representative": 35, "current": 80, "lawmaker": 70},
         preferred_columns=[
@@ -75,6 +94,8 @@ SEED_DATASETS: dict[str, DatasetSection] = {
         when_to_use=[
             "Use `usp_cl.legislator_terms` for any question about who held an office at a past date.",
             "Use `usp_cl.mv_current_lawmakers` only when the question is about the current member.",
+            "`usp_cl.legislators` has no signed join into it, so to name a term query it separately "
+            "with `bioguide_id=eq.<id>` and select `official_full`; it has no `name` column.",
         ],
         anti_patterns=[
             "`usp_cl.mv_current_lawmakers` returns the sitting member only, so it cannot answer "
