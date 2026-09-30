@@ -13,13 +13,38 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import os
 import time
+import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+BASE = os.environ.get("BENTHIC_LLAMA_URL", "http://192.168.10.222:8081")
 
-from drive import call_tool, get, post  # noqa: E402
+
+def post(path: str, body: dict, timeout: float) -> dict:
+    request = urllib.request.Request(
+        f"{BASE}{path}",
+        data=json.dumps(body).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def get(path: str, timeout: float) -> object:
+    with urllib.request.urlopen(f"{BASE}{path}", timeout=timeout) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def call_tool(name: str, arguments: dict, timeout: float) -> dict:
+    """Execute one tool. llama-server normalises the MCP result to plain_text_response."""
+    raw = post("/tools", {"tool": name, "params": arguments}, timeout)
+    text = raw.get("plain_text_response")
+    if text is None:
+        return {"ok": False, "text": json.dumps(raw)}
+    return {"ok": True, "text": text}
+
 
 TOOLS_CACHE: list | None = None
 
