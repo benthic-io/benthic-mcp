@@ -1,113 +1,145 @@
 # benthic-mcp: working memory
 
 ## The goal
-A mechanism that works and gives accurate results. The original goal was an MCP server that improves
-its own guidance; the evidence says that specific loop cannot work, and what replaced it is recorded
-below.
 
-## Current state (2026-09-29)
+A working MCP: accurate answers to complex questions, improving as new datasets arrive. A
+self-improving guidance loop was the original goal. The evidence says that specific loop cannot work;
+what replaced it is below. The mechanism that does work is contracts plus a reviewer, plus an
+observer that watches real use and turns recurring stumbles into standing guidance.
 
-**Repo:** `github.com/benthic-io/benthic-mcp`, public, MIT, 24 commits, CI green, 394 tests.
-llama-server is on port 8081, benthic-mcp HTTP on 8082. Both registered in
-`~/.config/systemd/user/`. MCP config at `~/.config/llama.cpp/mcp-servers.json`.
+## Current state (2026-09-30, end of session 2)
 
-**Headline, measured over 2 reps at 6 turns with thinking off:** 32/33 both reps, holdout 8/8 and
-7/8, 31 of 33 cases passing both reps. Golden 8/8. This is a count of cases answered correctly, NOT a
-measurement - the suite's MDE is larger than the whole remaining failure set.
+**Repo** `github.com/benthic-io/benthic-mcp`, public, MIT. HEAD `a1882c5`, CI green, **460 tests**.
 
-## The three findings that changed the design
+**Running on 192.168.10.222**, all under systemd user units:
+- `llama-server.service` - 8081, `-np 2`, spawns the MCP as a **stdio child**; restart it to make
+  the chat path pick up new code
+- `benthic-mcp.service` - 8082 HTTP
+- `benthic-observe.timer` - one observation cycle every 30 min, `Type=oneshot` + `OnUnitInactiveSec`
 
-**1. The statistical gate could never confirm anything.** MDE 7.81 cases; total headroom for any
-guidance is 4.5 cases. A gate with an MDE larger than the maximum achievable effect can only detect
-harm, which is why it kept reporting that nothing worked. Do not build on suite-level A/B for
-small effects. `llama-server` runs with `-np 1`, so concurrency buys 1.00x (measured, not assumed).
+MCP config `~/.config/llama.cpp/mcp-servers.json`; env `~/.config/benthic-mcp/env`.
 
-**2. The prose self-improvement loop cannot express a code change, and no claim about it was ever
-measured.** The reflector produced exactly 8 distinct lessons over 6 rounds (48 reflections
-attempted, 30 recorded, merging to 8). Measured against the always-on core by token overlap, **3 of
-8** restate it - not 8 of 8. The earlier figure was written down before the store recorded which
-channel a lesson arrived by, so it could not be checked either way. The mechanism behind it is real
-and verified: `eval/reflect.py:build_prompt` never shows the reflector the core, and the pipeline
-deletes any sentence naming a non-manifest identifier, so "add a type coercion" has nowhere to go.
+**Scripts:** `scripts/deploy.sh` (push-target-independent deploy: daemon-reload, restart both
+services, health check, canary, roll back on red), `scripts/tick.sh` (one observe cycle, with a
+`flock`), `scripts/observe-once.sh` (what the timer runs).
 
-What actually blocks the loop is colder than restatement: **0 of 12 lessons had ever been
-attributed.** `source_case()` reads `record.source_ref`, the field was added after all 12 were
-written, and `classify()` therefore had never run. Provenance was reconstructed from
-`eval/harness/rounds.json`, which logs `lesson_id` and `case_id` per reflection: 8 reflector lessons
-now carry a source case, of which 2 are on holdout and correctly refused, leaving **6 measurable**.
-The 4 `benthic_report` lessons match the 4 report calls across the same rounds exactly, so the
-8 + 4 = 12 split is arithmetic, not inference. Every change that ever worked here was a code change.
-Struggle detection reflected on 62.5% of passing cases and never once selected the 0/94 case.
+**Observer:** `eval/observer/sweep.py` drives probes through the same loop the web UI implements
+and records every turn **including reasoning**. `eval/observer/findings.py` reads the **server's own
+refusals** - not the model's prose - pairs each refused call with its error, and checks every
+identifier against the live signed manifest. 146 recorded case-runs over 11 cycles.
 
-**3. The scorer checked the route, not the result.** It read 6 of 22 expected-value fields, so a
-wrong answer delivered confidently along the right path passed. This hid three real defects.
+## Resuming an agent automatically
 
-## Real defects found (all invisible to the model-in-the-loop apparatus)
+**Background shell commands notify on completion.** That is the only thing that starts a turn
+without a human. `/tmp/opencode/wait_for_tick.sh` blocks until a sweep writes a new record file and
+exits, which resumes the session. Watch record files, not logs - a log written by a *later* cycle
+never contains your marker.
 
-- A signed join between `congressional_district` (string, `'03'`) and `legislator_terms.district`
-  (integer, `3`) compared them in Python, matched nothing, and returned 0 rows where 127 exist.
-  55 of 55 observed calls. The two cases scored as PASSES for 51 stored runs. A `benthic_report` had
-  diagnosed it correctly while the harness could not see it. Fixed by `_type_coercion` /
-  `_coerce_token` in `src/benthic_mcp/joins.py`.
-- `context_conditions` columns were parsed AFTER the `select` lists were built, so no partial signed
-  join could ever match a row, for any input. Fixed in `src/benthic_mcp/query.py`.
-- `number` was missing from the numeric type set. It is the catalog's own name for a decimal and the
-  second most common declaration in the manifest (427 of 3419 columns).
-- `order=` raises a bare `TypeError` on mixed-type columns, not caught by the tool wrapper. Still
-  open.
+## How to drive the MCP by hand
 
-## What replaced the gate
+```bash
+curl -s http://192.168.10.222:8081/tools            # 6 MCP tools, namespaced benthic_benthic_*
+curl -s http://192.168.10.222:8081/v1/chat/completions -H 'Content-Type: application/json' \
+  -d '{"model":"local","messages":[...],"tools":[...],"max_tokens":4000}'
+curl -s -X POST http://192.168.10.222:8081/tools -H 'Content-Type: application/json' \
+  -d '{"tool":"benthic_benthic_query","params":{...}}'
+```
 
-- **Contracts:** `tests/test_contracts_catalog.py`, 26 falsifiable properties over catalog and joins,
-  no model, no network. Five arrived violated and are now fixed. Zero xfails remain.
-- **Answer checking:** the scorer now reads `right_count`, distinct `right_keys` and signed
-  `reliability` off the server's structured output. Rescoring 607 stored case-runs turned 51 red
-  (server was wrong) and 8 green (suite was wrong).
-- **Left-join counting:** a left join keeps every left row with a null right, so "the right side is
-  empty" returns 1 row. Counting returned rows made a correct answer read as wrong.
+llama-server has **no agent loop**: it emits `tool_calls` and stops. The caller executes them and
+feeds results back as `tool` messages. The server runs `--reasoning-preserve`, so thinking turns
+put output in **`reasoning_content`** and leave `content` empty - read both or 61% of turns look
+blank. Tools are not auto-injected; pass them. Results arrive as `plain_text_response`, JSON
+encoded as a string. `max_tokens` must budget for thinking: at 1400 one turn spent all of it
+reasoning and emitted nothing, which is indistinguishable from a refusal.
 
-## Case suite: two cases were unanswerable
+## Seven server defects found by driving it, and fixed
 
-`multi_step_0_0` and `multi_step_0_1` asked the agent to walk a chain whose first hop is provably
-empty (`samer.sam_registrations` has no row for `uei=ESELKUJSAM45`). The scorer demanded two
-successful hops, so a truthful dead end was a failure. They now ask where the chain terminates and
-pass 4/4. Marked `unanswerable: true` in `eval/generated/questions.json`.
+| Defect | Was | Now |
+|---|---|---|
+| `discover` dropped a relation filter | `dataset` + qualified `relation` returned an unrelated relation | returns what was asked for |
+| paging with no stable order | 63/99 relations page with no `ORDER BY`; aggregates silently dropped and duplicated rows | refused; single-page still works |
+| bare `count(*)` refused | 10,545 rows against a 10,000 limit, and no filter fixes a count | answered exactly from the count HEAD |
+| scan-limit refusal | "Narrow the filters", to a caller that had narrowed | names the real count |
+| metric/filter rejection | named a shape, never an operator; `name=` vs `alias=` | operator list, worked example, case-insensitive |
+| operators case-sensitive | message showed lowercase, parser demanded it | both cases accepted |
+| truncated result had no size | `truncated: true` only; model looped | names rows returned of rows matching, and says what to do |
 
-Still failing: the `relation_trap` pair, which asks for an underspecified office and date. The scorer
-has no way to reward asking for the missing parameter.
+The last one mattered most. The stop rule was **already** in the `benthic_discover` description on
+every turn and did not help, because a model cannot budget turns without knowing the size of what
+it holds. The server had just paid for a HEAD to learn it and discarded the number on the path that
+succeeded.
+
+Measured over 18 identical probes: turn-exhaustion 7/18 -> 4/18. Pass rate is **not** a reliable
+signal - six probes flip between runs on identical input.
+
+## The three probes that never answer are not server bugs
+
+`join_partial` 0/8, `query_group_by` 0/8, `self_report` 0/7. The model's reasoning is correct:
+
+> The join on UEI is too wide because those UEIs match 2.6M rows.
+
+They ask for answers this API cannot produce: 1.4M entities joined to 2.6M registrations, 866K
+rows grouped, 10M+ awards summed. **Retire or rewrite them.** Making the server more permissive to
+satisfy them means shipping an expensive operation as if it were cheap.
+
+Aggregates are disabled server-side: `select=state,count()` returns PGRST123, and bare
+`select=count` counts rows, not distinct values. A bounded walk of the sorted group key cannot
+establish output size either - measured: 5,000 ordered rows on a 17.9M-row table cover 38 distinct
+states and the first 1,000 rows are 60% one value. **The refusal is correct.** The fix was naming
+the aggregate-free relations the model was never told about: `mv_district_spending` (16,401),
+`state_data` (448), `overall_totals` (141), `vw_published_dabs_toptier_agency` (111).
+
+## False greens: the recurring failure mode
+
+Seven cases of an instrument reporting success while measuring nothing:
+- 6 contracts arrived violated and were silently green
+- the scorer checked the route, not the result; 55 stored runs rescored red
+- a mutation experiment reported 12/12 because the mutation never loaded (symlinked venv, plus a
+  syntax error nothing caught because nothing imported it)
+- `promote_candidate` printed `served_lessons: 0` while serving 12
+- the observer's sweep died on `ModuleNotFoundError` and the tick printed "probe sweep finished"
+- `grep -c` on single-line JSON answered 1 for any payload, so a healthy server read as "only 1
+  MCP tool registered"
+- `NEXT: -` on the timer meant "running", where the previous design's meant "broken"
+
+**Check the instrument before believing the number.** Health checks read `ActiveState`, never `NEXT`.
 
 ## Rules learned the hard way
 
-- **A null from an instrument that discards data is not evidence of absence.** I removed the
-  answer-delivery core rule on a 2-rep A/B that read 23/50 both arms; `attribute_suite` keyed results
-  by case instead of case-and-repetition, so half the data was thrown away. Over all reps it reads
-  44/50 vs 46/50, which clears `min_delta` and reads `fixes`. The rule was restored. Repetitions are
-  the only thing that buys power in this instrument.
-- **Check the exit code's *meaning*, not that it passed.** I ran local `ruff check` after already
-  having edited the offending file, so a lint error introduced in `bb18167` sat through three commits.
-  CI caught it.
-- **Run the gate against the real data early.** Four holes in the attribution gate were found by
-  running it, not reading it: `untested()` only looked at pending, consolidation was
-  self-perpetuating, `promote_candidate` resurrected quarantined lessons, and the arm under test was
-  built by removing a lesson that is correctly absent from the document.
-- **One delivery problem can look like many.** `detail='full'` once turned 1 discover call into 3 and
-  blew a 5-turn budget.
-- **Verify second-hand claims.** The handoff notes on the MCP config were half right: the file was not
-  malformed, it was the Web UI config passed to llama-server's stdio-only flag.
+- A contract must fail before the fix. Three of mine shipped green because they asserted the wrong
+  thing - `screen_prose` returns what it **kept**, I named it `dropped`.
+- A test reading `eval/harness/cache` fails in CI; that directory is gitignored. Contracts must be
+  self-contained.
+- `pkill` on the MCP binary kills the stdio child and llama-server does not always respawn it. Use
+  systemd. Restart `llama-server` to make the chat path pick up code; restarting `benthic-mcp` does
+  not.
+- `systemctl --user daemon-reload` before restarting, or systemd reuses its cached command line and
+  a unit edit silently does nothing. This hid a `--ctx-size`/`-np` change for a full restart.
+- The verifier strips guidance naming a relation the manifest lacks, a column that does not exist,
+  or an **unsigned join**. Guidance that tells the model to do something the trust boundary forbids
+  is worse than none - the first version of the `usp_cl.legislators` guidance said "join on
+  bioguide_id" and no signed edge touches `legislators`.
+- Backticking a parameter name (`group_by`) makes the prose screener read it as a column reference.
+- `pgrep -f` matches the shell running the command; use a self-excluding pattern.
+- The model is confidently wrong about the catalog. It reasoned toptier_code `020` was the
+  Department of Veterans Affairs; it is the **Department of the Treasury**. Every candidate finding
+  is checked against the manifest before it becomes guidance.
 
 ## Next steps, in order
 
-1. `order=` TypeError on mixed-type columns - the last contract-10 violation, still open.
-2. Delete the reflector-to-prose path, or repoint it at code changes with a human reviewer. Do not
-   call it a loop; it is a triage queue.
-3. `relation_trap` cases: fix or retire on principle, not to make numbers look better.
-4. Re-scope the suite to the ~9 cases that discriminate server capability; the rest measure the
-   model's turn discipline.
+1. **Rewrite or retire the three unanswerable probes** so the failure count means something.
+2. **Check whether `rpc_*` regressed**: `rpc_box` 6/8 and `rpc_point` 7/8, from a previous 8/8.
+   Either new guidance hurt or it is variance; cheap to test and a real regression matters.
+3. The scan wall is x47. The refusal stays; only guidance naming aggregate-free routes remains.
+4. Investigate the recurring hallucinations: `legislator_term` x9, `count` x8 (an aggregate alias
+   put into `select` - the server is right), `registrations` x7, `terms` x5.
+5. Do not chase the eleven probes that vary run to run. That is the signal already known not to
+   trust.
 
 ## Files worth reading first
 
-- `src/benthic_mcp/joins.py` - `_type_coercion`, `_coerce_token`, `_join_key`
-- `src/benthic_mcp/query.py` - `build_single_join` (context columns), `_validate_output_columns`
-- `eval/run_eval.py` - `_join_answer_ok`, `_matched_row_count`, `_count_matches`
-- `tests/test_contracts_catalog.py` - the 26 contracts
-- `docs/findings.md` - the research log, including the wrong numbers next to the right ones
+- `docs/findings.md` - the research log, including the negative results and the invalid experiments
+- `eval/observer/findings.py` - how a candidate finding is extracted and verified
+- `scripts/deploy.sh` - the deploy contract, and its rollback
+- `scripts/tick.sh` - what an observation cycle does and refuses to do
+- `tests/test_contracts_catalog.py` - the property contracts, including seed-vs-manifest checks
