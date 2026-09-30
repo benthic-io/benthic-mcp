@@ -42,6 +42,17 @@ while (( $# )); do
 done
 
 mkdir -p "$RECORDS" "$AUDIT"
+
+# One cycle at a time. A sweep takes ~25-40 minutes and the timer fires every 30, so without this
+# two sweeps end up sharing two model slots and each records the other's latency as its own. That
+# happened on the first unattended cycle: the 13:10 sweep was still running when the 13:47 one
+# started.
+LOCK="$OBS/.tick.lock"
+exec 9>"$LOCK"
+if ! flock -n 9; then
+  echo "another tick is already running; skipping this cycle"
+  exit 75
+fi
 LOG="$AUDIT/tick-$(date +%H%M%S).log"
 say() { printf '%s  %s\n' "$(date +%H:%M:%S)" "$*" | tee -a "$LOG"; }
 
