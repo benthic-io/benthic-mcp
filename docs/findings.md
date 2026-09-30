@@ -688,3 +688,57 @@ touches it. The name lives in `usaspending.toptier_agency`, which discovery rank
 "agency name for toptier code" - the model asked about the relation it already had instead. That is
 model behaviour, not a server defect. The server's own answer is honest: `benthic_playbook` reports
 "No signed join touches usaspending.reporting_agency_overview, so it cannot reach anything."
+
+### The instrument failed twice, and both times it looked like the server
+
+**Once:** the driver recorded only `content`, but the server runs `--reasoning-preserve`, so a
+thinking turn puts its output in `reasoning_content`. 61% of recorded turns were blank and
+sessions that ran out of budget mid-thought read as empty refusals.
+
+**Twice:** the driver sent `max_tokens: 1400`. This model reasons before it answers, and one turn
+spent all 1,400 tokens on reasoning (6,210 characters) and emitted nothing - a `finish_reason:
+length` indistinguishable from a refusal. The probe had enough turn budget left; it ran out of
+tokens. Two probes read as regressions because of it, and neither was the server's fault:
+
+| probe | appeared to | actually |
+| --- | --- | --- |
+| `join_wrong_edge` | regressed | 3 of 8 turns used; one turn's reasoning exceeded the token budget |
+| `join_signed_both` | regressed | same, plus a tool call emitted with empty `{}` params mid-truncation |
+
+The empty-params case also exposed a driver bug worth recording: on a `JSONDecodeError` the driver
+fell back to `arguments = {}` and then sent the *raw truncated string* as params, which the server
+correctly rejected - but the transcript recorded a validation error about missing fields rather
+than "the model emitted unparseable arguments". Broken calls are now recorded as such.
+
+Both failures shared a shape. The instrument was not measuring what the question was about, and the
+error it produced pointed confidently at the system under test. Neither was visible from the pass
+rate: the suite would have shown two probes getting worse and the natural reading would have been
+a regression.
+
+### A capability gap, verified rather than assumed
+
+`reporting_agency_overview` carries no agency-name column, only `toptier_code`, and `benthic_playbook`
+correctly reports "No signed join touches usaspending.reporting_agency_overview, so it cannot reach
+anything." The name lives in `usaspending.toptier_agency`, which discovery already ranks first for
+"agency name for toptier code".
+
+The model reasoned that toptier_code `020` was "the Department of Veterans Affairs". It is
+**the Department of the Treasury** - verified live:
+
+```
+toptier_code=eq.020  ->  {"toptier_code": "020", "name": "Department of the Treasury"}
+```
+
+So the failure mode here is not a refusal, it is a plausible wrong answer from a model reasoning
+about a code it cannot look up. That is an argument for making `toptier_agency` reachable from the
+relation the model is already holding, which is a trust-boundary question and not one to settle
+by adding a join edge.
+
+### Error volume, read properly
+
+The trace store's most frequent error is 102 occurrences of one unsigned-join refusal
+(`usaspending.agency` -> `usaspending.agency_lookup`). Timestamped 2026-09-29T14:35, all within a
+few minutes, and not from a model session: it is the attribution gate, which re-runs a case once
+per repetition. Counting occurrences without grouping by caller attributed a harness artefact to
+the agent. Grouped by date, 374 traced errors on the 29th and 88 on the 30th, and every live one is
+now in a fixed category.
