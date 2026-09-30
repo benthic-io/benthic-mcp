@@ -976,6 +976,13 @@ def test_the_seed_never_asserts_a_join_the_manifest_does_not_sign() -> None:
     known = known_identifiers(signed)
 
     for dataset_name, section in playbook.datasets.items():
-        report = VerifyReport()
-        dropped = screen_prose(" ".join(section.when_to_use), signed, known, report)
-        assert dropped == [], f"{dataset_name} guidance asserts an unsigned join: {dropped}"
+        # Line by line, the way `verify` applies it: concatenated, every rule reads as one sentence
+        # and unrelated lines get screened out for each other's references.
+        #
+        # `screen_prose` returns what it KEPT, so the assertion is that every line survives. A line
+        # that does not is one the server would refuse to serve, which for guidance naming a join
+        # means it is telling the model to do something no signed edge permits.
+        for line in section.when_to_use:
+            report = VerifyReport()
+            kept = screen_prose(line, signed, known, report)
+            assert kept, f"{dataset_name} guidance does not survive screening: {line} ({report.notes()})"
