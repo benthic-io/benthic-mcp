@@ -799,3 +799,41 @@ async def test_a_count_of_a_column_does_not_take_the_row_count(settings: Any, bd
         )
 
     assert result.rows == [{"n": 4}], f"count of a column must count non-null values, not rows; got {result.rows}"
+
+
+def test_a_rejected_filter_names_the_operators_and_shows_one() -> None:
+    """`column=value` is the first filter anyone writes, and the message used to say only
+    "column=operator.value" without saying which operators exist.
+
+    Four rejections in eighteen live probes were this shape - `congressional_district=ZZ`,
+    `district_id=ZZ`, `congress_start=117` - and each one cost a turn for a spelling the model had
+    no way to guess correctly from the message alone. The list is derived from FilterOperator so it
+    cannot drift from the parser, and the null tests are listed separately because they are the two
+    operators that take no value.
+    """
+    from benthic_mcp.models import FilterOperator
+    from benthic_mcp.query import _parse_filter
+
+    # The real path: `_parse_filter` supplies the reason, which is what makes the message specific.
+    with pytest.raises(QueryValidationError) as caught:
+        _parse_filter("congressional_district=ZZ")
+    message = str(caught.value)
+
+    for operator in FilterOperator:
+        if operator in (FilterOperator.IS_NULL, FilterOperator.NOT_IS_NULL):
+            continue
+        assert operator.value in message, f"{operator.value} is accepted by the parser but absent from the message"
+    assert "is.null" in message and "not.is.null" in message
+    # A worked example, not just a template.
+    assert "congressional_district=eq.03" in message
+    # And the specific reason, so the model can see its own mistake rather than guess.
+    assert "is a value, not an operator" in message
+
+
+def test_every_filter_rejection_shares_one_message() -> None:
+    """The two rejection sites drifted once already: the metric parser said `name=` while its own
+    docstring said `alias=`. One builder means they cannot disagree again."""
+    from benthic_mcp.query import _invalid_filter
+
+    for expression in ("no_operator_here", "=novalue", "col=eq.a", "col=eq.a", "col=bogus.v"):
+        assert "column=operator.value" in str(_invalid_filter(expression)), expression

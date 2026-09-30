@@ -445,13 +445,28 @@ def unqualify_result(result: QueryResult) -> QueryResult:
     )
 
 
+_NULL_TESTS = (FilterOperator.IS_NULL, FilterOperator.NOT_IS_NULL)
+
+_FILTER_OPERATORS = ", ".join(operator.value for operator in FilterOperator if operator not in _NULL_TESTS)
+_FILTER_SYNTAX = (
+    "use 'column=operator.value'. Example: 'congressional_district=eq.03'. "
+    f"Operators are {_FILTER_OPERATORS}. Values are unquoted; "
+    "'column=in.\"a\",\"b\"' takes a JSON array, and 'column=is.null' or 'column=not.is.null' takes no value."
+)
+
+
+def _invalid_filter(expression: str, reason: str = "") -> QueryValidationError:
+    detail = f" {reason}" if reason else ""
+    return QueryValidationError(f"Invalid filter {expression!r};{detail} {_FILTER_SYNTAX}")
+
+
 def _parse_filter(expression: str) -> FilterSpec:
     if "=" not in expression:
-        raise QueryValidationError(f"Invalid filter {expression!r}; use column=operator.value")
+        raise _invalid_filter(expression)
     column, expression_value = expression.split("=", 1)
     column = column.strip()
     if not column:
-        raise QueryValidationError(f"Invalid filter {expression!r}")
+        raise _invalid_filter(expression, "there is no column before the '='.")
     if expression_value in {FilterOperator.IS_NULL.value, FilterOperator.NOT_IS_NULL.value}:
         operator = FilterOperator(expression_value)
         return FilterSpec(column=column, operator=operator)
@@ -465,7 +480,13 @@ def _parse_filter(expression: str) -> FilterSpec:
             raise QueryValidationError(f"Invalid in filter {expression!r}; use a JSON array")
         return FilterSpec(column=column, operator=FilterOperator.IN, value=values)
     if "." not in expression_value:
-        raise QueryValidationError(f"Invalid filter {expression!r}; use column=operator.value")
+        # The common shape: `column=value`, where the value is what should have followed the
+        # operator. `congressional_district=03` is the first thing anyone writes, and the message
+        # has to say which operators exist, because "column=operator.value" does not.
+        raise _invalid_filter(
+            expression,
+            f"{expression_value!r} is a value, not an operator, so it has no operator before it.",
+        )
     operator_name, value = expression_value.split(".", 1)
     try:
         operator = FilterOperator(operator_name)
