@@ -74,6 +74,19 @@ class PostgrestTransport:
         )
         stable_order = bool(scan_source.order)
 
+        estimate = definition.row_count_estimate
+        if estimate is not None and estimate > 0 and not source.filters and estimate - offset > remaining:
+            # With no filter, the rows that match are the rows the table has, so an estimate above
+            # the cap settles the question the count HEAD would be sent to answer. Only sound
+            # unfiltered: an estimate bounds the filtered count from above, so with a filter it
+            # cannot show the cap is exceeded, and a filter that brings a 183M-row relation under
+            # the cap has to keep working. `estimate > 0` because reltuples is -1 for a table that
+            # was never ANALYZEd, and -1 is not a count of anything.
+            url = self._relation_url(definition)
+            self._validate_endpoint(url)
+            params = self._build_params(scan_source, definition, None, 0)
+            return FetchedSource(source, definition, [], str(httpx.URL(url, params=params)), True, estimate)
+
         count = await self.count_matching(scan_source, definition)
         if count is not None and count.total - offset > remaining:
             return FetchedSource(source, definition, [], count.request_url, True, count.total)

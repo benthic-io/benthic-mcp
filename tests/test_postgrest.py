@@ -335,6 +335,137 @@ async def test_fetch_complete_refuses_on_the_count_alone(settings: Any, catalog:
 
 
 @pytest.mark.asyncio
+async def test_fetch_complete_refuses_from_the_manifest_estimate_without_asking(
+    settings: Any, catalog: Catalog
+) -> None:
+    """The manifest already carries the row count, so an unfiltered scan over the cap must not be
+    spent finding out.
+
+    usaspending.prime_awards is 183M rows across 192GB and declares `row_count_estimate`. An
+    aggregate over it with no filter is over the cap by a factor of 18000, and the count HEAD that
+    discovers this cost 26s once, then 74s on a filtered sibling. The estimate is a different kind
+    of evidence: it is in the signed catalog, costs nothing to read, and is already larger than the
+    cap before a socket is opened.
+
+    Only sound with no filters. An estimate bounds the filtered count from above, so with a filter
+    present it cannot establish that the cap is exceeded - that is what
+    `test_fetch_complete_still_counts_when_a_filter_could_beat_the_estimate` covers.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        raise AssertionError(f"the manifest already answers this, but {request.method} was sent")
+
+    huge = replace(catalog.resolve_relation("usaspending", "all_entities"), row_count_estimate=182995664)
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            huge,
+        )
+
+    assert requests == [], "a refusal known from the manifest must cost no upstream request"
+    assert result.truncated
+    assert result.rows == []
+    assert result.matched_rows == 182995664
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_still_counts_when_a_filter_could_beat_the_estimate(
+    settings: Any, catalog: Catalog
+) -> None:
+    """The estimate is an upper bound, so a filter has to be measured rather than assumed away.
+
+    A 183M-row relation filtered to one congressional district can match 1,416,153 rows, and some
+    filters match fewer than the cap. Refusing on the unfiltered estimate would strand those, and
+    the estimate cannot say which is which - that is the same reason the sorted-key walk cannot
+    establish output size.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-4/5"})
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(5)][offset : offset + limit])
+
+    huge = replace(catalog.resolve_relation("usaspending", "all_entities"), row_count_estimate=182995664)
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(
+                alias="awards",
+                dataset="usaspending",
+                relation="all_entities",
+                filters=[FilterSpec(column="congressional_district", operator=FilterOperator.EQ, value="03")],
+            ),
+            huge,
+        )
+
+    assert [request.method for request in requests][0] == "HEAD", "a filter has to be measured"
+    assert result.rows != [], "a filter that brings 183M rows under the cap must still be answered"
+    assert result.matched_rows == 5
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_ignores_an_estimate_under_the_cap(settings: Any, catalog: Catalog) -> None:
+    """An estimate below the cap says nothing about whether the filters pass, so nothing changes."""
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-4/5"})
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(5)][offset : offset + limit])
+
+    modest = replace(catalog.resolve_relation("usaspending", "all_entities"), row_count_estimate=8)
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            modest,
+        )
+
+    assert result.rows != []
+    assert result.matched_rows == 5
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_ignores_a_never_analyzed_estimate(settings: Any, catalog: Catalog) -> None:
+    """reltuples is -1 for a table that has never been ANALYZEd, and -1 is not a row count.
+
+    bdp/tools/introspect.py drops the estimate when reltuples is 0, so a negative one can reach here
+    after that fix. -1 is below any cap, so it refuses to short-circuit - but it must not be
+    reported as a matched count either, or a caller would be told the scan matched -1 rows.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-4/5"})
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(5)][offset : offset + limit])
+
+    unanalyzed = replace(catalog.resolve_relation("usaspending", "all_entities"), row_count_estimate=-1)
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            unanalyzed,
+        )
+
+    assert result.matched_rows == 5, "the count is measured, not taken from the estimate"
+    assert result.rows != []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("status", [405, 500, 404])
 async def test_fetch_complete_pages_when_the_count_fails(settings: Any, catalog: Catalog, status: int) -> None:
     """The count is an optimisation, so it can fail without the query failing with it.
