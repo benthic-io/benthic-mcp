@@ -1,5 +1,6 @@
 import json
 import math
+import re
 from collections import defaultdict
 from typing import Any
 
@@ -451,7 +452,8 @@ _FILTER_OPERATORS = ", ".join(operator.value for operator in FilterOperator if o
 _FILTER_SYNTAX = (
     "use 'column=operator.value'. Example: 'congressional_district=eq.03'. "
     f"Operators are {_FILTER_OPERATORS}. Values are unquoted; "
-    "'column=in.\"a\",\"b\"' takes a JSON array, and 'column=is.null' or 'column=not.is.null' takes no value."
+    "'column=in.\"a\",\"b\"' takes a JSON array, and 'column=is.null' or 'column=not.is.null' takes no value. "
+    "'column>0' is also accepted for the comparison operators."
 )
 
 
@@ -461,6 +463,20 @@ def _invalid_filter(expression: str, reason: str = "") -> QueryValidationError:
 
 
 def _parse_filter(expression: str) -> FilterSpec:
+    # `column>0` and `column<0` carry the operator without the dot, which is the next thing a caller
+    # writes after `column=value` and is what appeared twice in the live transcripts. Unlike a bare
+    # `column=value` there is no ambiguity - nothing else reads as greater-than - so it is mapped
+    # rather than refused.
+    comparison = re.match(r"^([A-Za-z_][A-Za-z0-9_.]*)\s*(>=|<=|>|<)\s*(.+)$", expression)
+    if comparison:
+        column, symbol, value = comparison.groups()
+        operator = {
+            ">": FilterOperator.GT,
+            ">=": FilterOperator.GTE,
+            "<": FilterOperator.LT,
+            "<=": FilterOperator.LTE,
+        }[symbol]
+        return FilterSpec(column=column.strip(), operator=operator, value=_parse_expression_value(value.strip()))
     if "=" not in expression:
         raise _invalid_filter(expression)
     column, expression_value = expression.split("=", 1)

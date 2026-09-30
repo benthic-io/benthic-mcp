@@ -886,3 +886,47 @@ def test_a_value_appended_to_a_null_test_names_the_whole_operator() -> None:
         message = str(caught.value)
         assert expected in message, f"{expression} -> {message}"
         assert "takes no value" in message
+
+
+def test_a_filter_may_write_gt_and_lt_without_the_dot() -> None:
+    """`col>0` is the first filter anyone writes after `col=value`, and the transcripts contain
+    `total_dollars_obligated_gtas>0` and `total_obligation>0` from a model that had just been told
+    the dot syntax and had not applied it.
+
+    An embedded comparison operator is unambiguous - there is no reading of `col>0` other than
+    greater-than zero - so it is accepted and mapped. That is a narrower change than accepting bare
+    `col=value`, which this file deliberately keeps refusing: `is_current=true` could equally be
+    meant as `eq.true` or be a typo for something else, and guessing turns a typo into a silently
+    wrong result set instead of an error the model can read.
+    """
+    from benthic_mcp.query import _parse_filter
+
+    assert _parse_filter("total_obligation>0") == FilterSpec(
+        column="total_obligation", operator=FilterOperator.GT, value=0
+    )
+    assert _parse_filter("total_obligation>=100") == FilterSpec(
+        column="total_obligation", operator=FilterOperator.GTE, value=100
+    )
+    assert _parse_filter("total_obligation<0") == FilterSpec(
+        column="total_obligation", operator=FilterOperator.LT, value=0
+    )
+    assert _parse_filter("total_obligation<=0") == FilterSpec(
+        column="total_obligation", operator=FilterOperator.LTE, value=0
+    )
+    assert _parse_filter("fiscal_year>=2020") == FilterSpec(
+        column="fiscal_year", operator=FilterOperator.GTE, value=2020
+    )
+
+
+def test_a_bare_column_equals_value_is_still_refused() -> None:
+    """The counterpart, and the reason the above is safe.
+
+    `is_current=true` is what a model actually wrote. It could be meant as `eq.true`, or it could
+    be `is_current=is.true` mistyped, or the value could belong after a different operator.
+    Nothing in the expression distinguishes them, so it stays an error that names the problem
+    rather than a guess that returns the wrong rows.
+    """
+    from benthic_mcp.query import _parse_filter
+
+    with pytest.raises(QueryValidationError, match="is a value, not an operator"):
+        _parse_filter("is_current=true")
