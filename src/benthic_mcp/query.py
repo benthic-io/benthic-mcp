@@ -97,8 +97,7 @@ class QueryService:
         by_alias = {item.source.alias: item.definition for item in fetched}
         if requires_complete and (any(item.truncated for item in fetched) or join_result.truncated):
             raise QueryValidationError(
-                "The query exceeds the complete-scan limit and cannot produce reliable aggregates or joins. "
-                "Narrow the filters or raise BENTHIC_AGGREGATE_SCAN_LIMIT."
+                _scan_refusal(fetched, self.settings.aggregate_scan_limit, self.settings.max_rows)
             )
         rows = _aggregate_rows(join_result.rows, request)
         available_columns = _available_source_columns(fetched)
@@ -127,6 +126,42 @@ class QueryService:
             joins=join_result.metadata,
             warnings=warnings,
         )
+
+
+def _scan_refusal(fetched: list[FetchedSource], scan_limit: int, max_rows: int) -> str:
+    """Refuses a complete scan that cannot be made exact, naming what put it over.
+
+    "Narrow the filters" is not an instruction a caller can act on. A filter already narrowed to a
+    single congressional district is told exactly what an unfiltered scan is told, and has no way to
+    see whether it is 10 percent or 1400 percent over, so it can neither tighten the filter nor
+    conclude that filtering cannot help and a pre-aggregated relation is the way.
+    """
+    over = [item for item in fetched if item.truncated]
+    if not over:
+        return (
+            f"Every source was scanned in full, so the join itself exceeds the row limit of {max_rows}. "
+            f"Raise BENTHIC_MAX_ROWS, join fewer relations at a time, or aggregate one source at a time."
+        )
+
+    widest = max(over, key=lambda item: item.matched_rows or 0)
+    source_name = f"{widest.definition.dataset}.{widest.definition.name}"
+    if widest.matched_rows is None:
+        # The count did not come back, so the cap is the only size known. Naming it is still worth
+        # more than silence: the caller can see that a gap exists even if not how wide it is.
+        magnitude = (
+            f"More than {scan_limit} rows match the filters in {source_name}, "
+            f"past the complete-scan limit of {scan_limit}"
+        )
+    else:
+        magnitude = (
+            f"{widest.matched_rows} rows match the filters in {source_name}, "
+            f"{widest.matched_rows - scan_limit} more than the complete-scan limit of {scan_limit}"
+        )
+    others = f", the widest of the {len(over)} sources over it" if len(over) > 1 else ""
+    return (
+        f"{magnitude}{others}. Aggregating or joining needs every source scanned in full, so narrow the "
+        f"filters until each source matches at most {scan_limit} rows, or raise BENTHIC_AGGREGATE_SCAN_LIMIT."
+    )
 
 
 def _unique_strings(values: list[str]) -> list[str]:
@@ -364,34 +399,89 @@ def _parse_filter(expression: str) -> FilterSpec:
     return FilterSpec(column=column, operator=operator, value=_parse_expression_value(value))
 
 
+# Derived from the enums so a name can never be listed here that the parser does not accept.
+_AGGREGATE_FUNCTIONS = ", ".join(function.value for function in AggregateFunction)
+
+# is.null and not.is.null are absent on purpose: HavingSpec refuses a value for them and the ':'
+# form always carries one, so in a having they can only fail.
+_HAVING_OPERATORS = ", ".join(
+    operator.value
+    for operator in FilterOperator
+    if operator not in {FilterOperator.IS_NULL, FilterOperator.NOT_IS_NULL}
+)
+
+# One wording for every rejected metric, so whichever shape a caller got wrong, the message names
+# the accepted forms, gives a working example, and says which of the two columns the name is. It
+# said "name=function:column" while the tool docstring said "alias=function:column" for the same
+# slot, and a caller read "name" as the source column, retried with it on the left, and got a valid
+# result under a new output name - so the correction it had made was never confirmed.
+_METRIC_SYNTAX = (
+    "use '<output_name>=<function>:<column>', e.g. 'total_sum=sum:total_obligation', or "
+    "'<output_name>:<function>:<column>' with the same three parts. The name before the first "
+    "separator is the OUTPUT column the aggregate is returned under, not the source column. "
+    f"Functions are {_AGGREGATE_FUNCTIONS}; '<output_name>=count:*' counts rows."
+)
+
+_MISSING_METRIC_NAME = "The output name is missing: it goes before the first '=' or ':'."
+_COLON_IN_COLUMN = "A column cannot contain ':'."
+_MISSING_METRIC_COLUMN = "The source column is empty."
+
+_HAVING_SYNTAX = (
+    "use '<output_name><op><value>' with <op> one of >=, <=, !=, >, <, =, e.g. 'total_sum>100000', "
+    "or '<output_name>:<operator>:<value>', e.g. 'total_sum:gt:100000'. The name is a metrics "
+    f"output_name or a group_by column, not a source column. ':' operators are {_HAVING_OPERATORS}."
+)
+
+
+def _invalid_syntax(expression: str, kind: str, syntax: str, reason: str = "") -> QueryValidationError:
+    """Build the error a malformed expression gets, with the reason only when there is a specific one.
+
+    Every rejected shape of one slot has to end here, or a caller that hit an untested shape gets a
+    bare restatement of the form and spends a turn on it.
+    """
+    message = f"Invalid {kind} {expression!r}; {syntax}"
+    if reason:
+        message = f"{message} {reason}"
+    return QueryValidationError(message)
+
+
 def _parse_metric(expression: str) -> AggregateSpec:
-    alias = ""
-    function = ""
-    column = ""
+    # Every split is uncapped, so an extra ':' is seen here. The capped split took 'total:sum:col:extra'
+    # as a column of 'col:extra', which the caller only heard about once the fetched relation turned
+    # out to have no such column, long after the metric was built.
     if "=" in expression:
         alias, definition = expression.split("=", 1)
-        parts = definition.split(":", 1)
+        parts = definition.split(":")
         if len(parts) != 2:
-            raise QueryValidationError(f"Invalid metric {expression!r}; use name=function:column")
+            raise _invalid_syntax(expression, "metric", _METRIC_SYNTAX, _COLON_IN_COLUMN if len(parts) > 2 else "")
         function, column = parts
-    elif ":" in expression:
-        parts = expression.split(":", 2)
-        if len(parts) == 3:
-            alias, function, column = parts
-        else:
-            raise QueryValidationError(f"Invalid metric {expression!r}; use name=function:column")
     else:
-        raise QueryValidationError(f"Invalid metric {expression!r}; use name=function:column")
+        parts = expression.split(":")
+        if len(parts) != 3:
+            # Two parts is a bare 'function:column', which has no slot for an output name at all.
+            reason = _MISSING_METRIC_NAME if len(parts) == 2 else _COLON_IN_COLUMN
+            raise _invalid_syntax(expression, "metric", _METRIC_SYNTAX, reason)
+        alias, function, column = parts
+    # Every part is stripped: only the name was, so 'n = sum : col' read as an unknown function.
+    alias = alias.strip()
+    function = function.strip()
+    column = column.strip()
+    if not alias:
+        # Caught here rather than by AggregateSpec, whose pattern failure is a pydantic message
+        # rather than one naming the form.
+        raise _invalid_syntax(expression, "metric", _METRIC_SYNTAX, _MISSING_METRIC_NAME)
+    if not column:
+        raise _invalid_syntax(expression, "metric", _METRIC_SYNTAX, _MISSING_METRIC_COLUMN)
     try:
         function_value = AggregateFunction(function)
     except ValueError as exc:
-        raise QueryValidationError(f"Unknown aggregate function {function!r}") from exc
+        raise QueryValidationError(f"Unknown aggregate function {function!r}; use {_AGGREGATE_FUNCTIONS}") from exc
     if column == "*" and function_value != AggregateFunction.COUNT:
         raise QueryValidationError(f"{function_value.value} requires a column")
     return AggregateSpec(
         function=function_value,
         column=None if column == "*" else column,
-        alias=alias.strip(),
+        alias=alias,
     )
 
 
@@ -410,15 +500,20 @@ def _parse_having(expression: str) -> HavingSpec:
     elif ":" in expression:
         parts = expression.split(":", 2)
         if len(parts) != 3:
-            raise QueryValidationError(f"Invalid having expression {expression!r}")
+            raise _invalid_syntax(expression, "having expression", _HAVING_SYNTAX)
         column, operator_name, value = parts
         try:
             operator = FilterOperator(operator_name)
         except ValueError as exc:
-            raise QueryValidationError(f"Unknown having operator {operator_name!r}") from exc
+            raise QueryValidationError(f"Unknown having operator {operator_name!r}; use {_HAVING_OPERATORS}") from exc
     else:
-        raise QueryValidationError(f"Invalid having expression {expression!r}")
-    return HavingSpec(column=column.strip(), operator=operator, value=_parse_expression_value(value))
+        raise _invalid_syntax(expression, "having expression", _HAVING_SYNTAX)
+    column = column.strip()
+    if not column:
+        # Same reason as an empty metric name: HavingSpec would refuse it with the pydantic pattern
+        # text, which names neither the form nor an example.
+        raise _invalid_syntax(expression, "having expression", _HAVING_SYNTAX, "The compared name is empty.")
+    return HavingSpec(column=column, operator=operator, value=_parse_expression_value(value))
 
 
 def _parse_order(expression: str) -> tuple[str, bool]:

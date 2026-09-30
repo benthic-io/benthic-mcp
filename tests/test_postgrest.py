@@ -1,3 +1,4 @@
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from typing import Any
 
@@ -90,6 +91,8 @@ async def test_fetch_complete_pages_until_complete(settings: Any, catalog: Catal
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-4/5"})
         offset = int(request.url.params.get("offset", 0))
         limit = int(request.url.params["limit"])
         return httpx.Response(200, json=source_rows[offset : offset + limit])
@@ -103,12 +106,17 @@ async def test_fetch_complete_pages_until_complete(settings: Any, catalog: Catal
 
     assert result.rows == source_rows
     assert not result.truncated
-    assert [int(request.url.params.get("offset", 0)) for request in requests] == [0, 2, 4]
+    assert result.matched_rows == 5
+    assert [int(request.url.params.get("offset", 0)) for request in requests if request.method == "GET"] == [0, 2, 4]
 
 
 @pytest.mark.asyncio
 async def test_fetch_complete_rejects_scan_over_cap(settings: Any, catalog: Catalog) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            # No count, so this is the path where the scan has to discover the cap by running out
+            # of it. `test_fetch_complete_refuses_on_the_count_alone` covers the other one.
+            return httpx.Response(200)
         offset = int(request.url.params.get("offset", 0))
         limit = int(request.url.params["limit"])
         return httpx.Response(200, json=[{"uei": str(index)} for index in range(offset, offset + limit)])
@@ -122,6 +130,7 @@ async def test_fetch_complete_rejects_scan_over_cap(settings: Any, catalog: Cata
 
     assert len(result.rows) == 3
     assert result.truncated
+    assert result.matched_rows is None
 
 
 @pytest.mark.asyncio
@@ -192,6 +201,8 @@ async def test_fetch_complete_refuses_to_page_a_relation_with_no_stable_order(se
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200)
         offset = int(request.url.params.get("offset", 0))
         limit = int(request.url.params["limit"])
         return httpx.Response(200, json=[{"uei": str(index)} for index in range(offset, offset + limit)])
@@ -205,8 +216,9 @@ async def test_fetch_complete_refuses_to_page_a_relation_with_no_stable_order(se
             )
 
     # Refused after one full page, so it never issued the unsafe second request.
-    assert len(requests) == 1, f"issued {len(requests)} requests; the unsafe one should never be sent"
-    assert "order" not in requests[0].url.params, "paging without ORDER BY is the defect, so it must not happen"
+    pages = [request for request in requests if request.method == "GET"]
+    assert len(pages) == 1, f"issued {len(pages)} page requests; the unsafe one should never be sent"
+    assert "order" not in pages[0].url.params, "paging without ORDER BY is the defect, so it must not happen"
 
 
 @pytest.mark.asyncio
@@ -220,6 +232,8 @@ async def test_fetch_complete_allows_a_single_page_when_no_stable_order_exists(s
     total = 5
 
     def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": f"0-{total - 1}/{total}"})
         limit = int(request.url.params["limit"])
         offset = int(request.url.params.get("offset", 0))
         return httpx.Response(200, json=[{"uei": str(index)} for index in range(offset, min(offset + limit, total))])
@@ -233,3 +247,243 @@ async def test_fetch_complete_allows_a_single_page_when_no_stable_order_exists(s
 
     assert len(result.rows) == 5
     assert not result.truncated
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_asks_for_the_count_without_transferring_a_row(settings: Any, catalog: Catalog) -> None:
+    """A refusal used to cost the whole page budget to find out it was going to refuse.
+
+    Ten sequential pages and 1.6MB were pulled across the wire, aggregated nowhere, and dropped, so
+    the caller was told the query was too big only after paying for the rows that proved it. The
+    count that answers the same question is one HEAD and a header, so the request has to be a HEAD
+    and it has to carry no `limit`, or the saving is only half of what it looks like.
+    """
+    requests: list[httpx.Request] = []
+    source_rows = [{"uei": str(index)} for index in range(5)]
+    count_body_reads: list[bytes] = []
+
+    class _CountBody(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            for chunk in (b"[", b"row", b"]"):
+                count_body_reads.append(chunk)
+                yield chunk
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            # The count arrives in a header, so the rows that would follow it are never read. A
+            # streamed body records its own consumption, which is what makes that checkable.
+            return httpx.Response(200, headers={"Content-Range": "0-4/5"}, stream=_CountBody())
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=source_rows[offset : offset + limit])
+
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(
+                alias="awards",
+                dataset="usaspending",
+                relation="all_entities",
+                select=["uei"],
+                filters=[FilterSpec(column="state", operator=FilterOperator.EQ, value="ME")],
+            ),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert result.rows == source_rows
+    assert result.matched_rows == 5
+    assert count_body_reads == [], "the count is a header; the rows behind it are never transferred"
+    count = requests[0]
+    assert count.method == "HEAD", "a GET would transfer the rows it is trying not to read"
+    assert count.headers["prefer"] == "count=exact"
+    assert count.headers["range"] == "0-0"
+    assert "limit" not in count.url.params, "a count over 0 rows is not a 0-row request"
+    # The count has to describe the rows the scan would page, so it carries the scan's own filters.
+    assert count.url.params["state"] == "eq.ME"
+    assert count.url.params["select"] == "uei"
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_refuses_on_the_count_alone(settings: Any, catalog: Catalog) -> None:
+    """A count above the cap is the answer, so no page of it needs to be fetched to be believed.
+
+    `congressional_district=eq.03` matches 1416153 rows of usaspending.all_entities against a limit
+    of 10000. Paging that to find out costs 10 requests and about 1.6MB for a number the caller then
+    has to be told anyway, and the rows it fetched are never read.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-1416152/1416153"})
+        raise AssertionError(f"a scan over the cap must not be paged, but {request.method} was sent")
+
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert result.truncated
+    assert result.matched_rows == 1416153
+    assert result.rows == []
+    assert [request.method for request in requests] == ["HEAD"]
+    assert result.request_url.startswith("https://benthic.io/ngopen/usaspending/all_entities")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [405, 500, 404])
+async def test_fetch_complete_pages_when_the_count_fails(settings: Any, catalog: Catalog, status: int) -> None:
+    """The count is an optimisation, so it can fail without the query failing with it.
+
+    A PostgREST build that does not answer HEAD, a 500 from the count, or a row count it declines to
+    report all have to leave the scan working exactly as it was, because the alternative is a
+    version of this server that cannot run any aggregate against any relation.
+    """
+    requests: list[httpx.Request] = []
+    source_rows = [{"uei": str(index)} for index in range(5)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(status, json={"message": "no count here"})
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=source_rows[offset : offset + limit])
+
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert result.rows == source_rows
+    assert not result.truncated
+    assert result.matched_rows is None
+    assert [int(request.url.params.get("offset", 0)) for request in requests if request.method == "GET"] == [0, 2, 4]
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_pages_when_the_count_is_not_reported(settings: Any, catalog: Catalog) -> None:
+    """A 200 with no usable `Content-Range` is a count that did not come back, not a count of zero.
+
+    Reading the missing total as 0 would refuse every aggregate on the relation, and reading it as
+    absent is the only safe reading.
+    """
+    source_rows = [{"uei": str(index)} for index in range(5)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200)
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=source_rows[offset : offset + limit])
+
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert result.rows == source_rows
+    assert result.matched_rows is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_complete_pages_when_the_count_request_raises(settings: Any, catalog: Catalog) -> None:
+    source_rows = [{"uei": str(index)} for index in range(5)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            raise httpx.ReadTimeout("count timed out", request=request)
+        offset = int(request.url.params.get("offset", 0))
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=source_rows[offset : offset + limit])
+
+    small_settings = replace(settings, max_rows=2, aggregate_scan_limit=10)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(small_settings, client).fetch_complete(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert result.rows == source_rows
+    assert result.matched_rows is None
+
+
+@pytest.mark.asyncio
+async def test_count_matching_reads_the_total_out_of_an_unsatisfiable_range(settings: Any, catalog: Catalog) -> None:
+    """PostgREST answers `*/<total>` once the requested range is past the end of the result.
+
+    An empty relation is the case where the range 0-0 is unsatisfiable, so it is the case where the
+    header stops being `0-0/5` shaped, and an aggregate over an empty relation is a real answer.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"Content-Range": "*/0"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        count = await PostgrestTransport(settings, client).count_matching(
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert count is not None
+    assert count.total == 0
+    assert requests[0].method == "HEAD"
+
+
+@pytest.mark.asyncio
+async def test_a_count_request_never_carries_an_order(settings: Any, catalog: Catalog) -> None:
+    """A count is "how many rows match", which an ORDER BY cannot change, so asking for one is pure
+    cost - and on a large relation it is the dominant cost.
+
+    Measured live against usaspending.all_entities (17,884,243 rows):
+        filter only, no order    2.09s
+        filter + order=entity_id 3.35s
+        order=entity_id, no filter 26.10s
+
+    `fetch_complete` counts the `scan_source`, which carries the primary-key order the paging loop
+    needs, so every aggregate inherited the order. The unfiltered count went from about two seconds
+    to twenty-six, which is longer than the entire turn budget a model is given.
+
+    The order exists to make `offset` deterministic across pages. A HEAD fetches no rows, pages
+    nothing, and needs no order - so stripping it costs nothing and cannot change the count.
+    """
+    definition = catalog.resolve_relation("usaspending", "all_entities")
+    assert definition.primary_key, "the fixture must declare a primary key for the order to be added"
+
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-1416152/1416153"})
+        return httpx.Response(200, json=[])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        count = await PostgrestTransport(settings, client).count_matching(
+            RelationSource(
+                alias="awards",
+                dataset="usaspending",
+                relation="all_entities",
+                order=[SourceOrder(column=column) for column in definition.primary_key],
+            ),
+            definition,
+        )
+
+    heads = [request for request in requests if request.method == "HEAD"]
+    assert heads, "no count request was issued"
+    assert "order" not in heads[0].url.params, (
+        f"the count request carried {heads[0].url.params['order']}; on a large relation that is "
+        f"the whole cost of the count"
+    )
+    # The count is still the one the scan would see.
+    assert count is not None and count.total == 1416153

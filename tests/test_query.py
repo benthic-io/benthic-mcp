@@ -143,6 +143,8 @@ async def test_single_query_builds_filters_having_and_unqualified_output(
         if document is not None:
             return httpx.Response(200, json=document)
         requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-3/4"})
         offset = int(request.url.params.get("offset", 0))
         limit = int(request.url.params["limit"])
         return httpx.Response(200, json=source_rows[offset : offset + limit])
@@ -185,6 +187,9 @@ async def test_rejects_incomplete_aggregate_scan(
         document = bdp_documents.get(str(request.url))
         if document is not None:
             return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            # No count, so this is the scan that has to run out of its budget to discover the cap.
+            return httpx.Response(200)
         offset = int(request.url.params.get("offset", 0))
         limit = int(request.url.params["limit"])
         return httpx.Response(200, json=[{"uei": str(index)} for index in range(offset, offset + limit)])
@@ -201,8 +206,108 @@ async def test_rejects_incomplete_aggregate_scan(
             BdpRepository(small_settings, client),
             PostgrestTransport(small_settings, client),
         )
-        with pytest.raises(QueryValidationError, match="complete-scan limit"):
+        with pytest.raises(QueryValidationError, match="complete-scan limit") as caught:
             await service.execute(request)
+
+    # With no count to go on, the cap is the only size the refusal can name, and it names it anyway.
+    assert "More than 3 rows match" in str(caught.value)
+    assert "usaspending.all_entities" in str(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_an_over_cap_refusal_names_the_row_count_and_how_far_over_it_is(
+    settings: Any,
+    bdp_documents: dict[str, Any],
+) -> None:
+    """The refusal used to say only "narrow the filters", to a caller that had already narrowed.
+
+    `congressional_district=eq.03` is a filter that looks narrow and matches 1416153 of the rows in
+    usaspending.all_entities, 141 times the limit. Told only to narrow, a caller cannot tell that
+    no amount of narrowing gets it under 10000, so it retries filters and gets told to narrow again.
+    The count is the whole difference between those two situations, so it has to be in the message.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        requests.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-1416152/1416153"})
+        raise AssertionError(f"the count is the refusal, so no page should be sent, but {request.method} was")
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    request = QueryRequest(
+        question="Total obligations in district 3",
+        sources=[
+            RelationSource(
+                alias="s",
+                dataset="usaspending",
+                relation="all_entities",
+                filters=[FilterSpec(column="congressional_district", operator=FilterOperator.EQ, value="03")],
+            )
+        ],
+        aggregates=[AggregateSpec(function=AggregateFunction.SUM, column="total_obligation", alias="total")],
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings,
+            BdpRepository(small_settings, client),
+            PostgrestTransport(small_settings, client),
+        )
+        with pytest.raises(QueryValidationError) as caught:
+            await service.execute(request)
+
+    message = str(caught.value)
+    assert "1416153 rows match" in message
+    assert "1406153 more than the complete-scan limit of 10000" in message
+    assert "usaspending.all_entities" in message
+    # The count is only worth anything if it counts the rows this query asked for.
+    assert requests[0].url.params["congressional_district"] == "eq.03"
+    assert [request.method for request in requests] == ["HEAD"]
+
+
+@pytest.mark.asyncio
+async def test_a_join_over_the_row_limit_does_not_blame_the_scan_limit(
+    settings: Any,
+    bdp_documents: dict[str, Any],
+) -> None:
+    """Both sources here are scanned in full and are nowhere near the scan limit. The join is what
+    produced too many rows, and the old message sent the caller to raise a limit that cannot fix it.
+    """
+    client = _query_client(
+        bdp_documents,
+        {
+            "/ngopen/usaspending/all_entities": [{"uei": "A"}, {"uei": "A"}],
+            "/ngopen/samer/sam_registrations": [{"uei": "A"}, {"uei": "A"}, {"uei": "A"}],
+        },
+    )
+    small_settings = replace(settings, max_rows=4, aggregate_scan_limit=10)
+    service = QueryService(
+        small_settings,
+        BdpRepository(small_settings, client),
+        PostgrestTransport(small_settings, client),
+    )
+    try:
+        with pytest.raises(QueryValidationError) as caught:
+            await service.execute(
+                QueryRequest(
+                    question="Match every recipient to every registration",
+                    sources=[
+                        RelationSource(alias="awards", dataset="usaspending", relation="all_entities"),
+                        RelationSource(alias="sam", dataset="samer", relation="sam_registrations"),
+                    ],
+                    joins=[JoinSpec(left_alias="awards", right_alias="sam", left_column="uei", right_column="uei")],
+                    allowed_reliability=[Reliability.RELIABLE],
+                )
+            )
+    finally:
+        await client.aclose()
+
+    message = str(caught.value)
+    assert "BENTHIC_MAX_ROWS" in message
+    assert "BENTHIC_AGGREGATE_SCAN_LIMIT" not in message
 
 
 @pytest.mark.asyncio
@@ -346,3 +451,135 @@ async def test_having_never_compares_text_with_a_number(settings: Any, bdp_docum
     assert equality.rows == [], "no text equals 3, so the answer is an empty result, not a crash"
     # The ordering operators still refuse, and the refusal names the column so the caller can act.
     assert "mx" in str(caught.value)
+
+
+def _built(metrics: list[str] | None = None, having: list[str] | None = None) -> QueryRequest:
+    return build_single_query(
+        question="Total obligations by state",
+        dataset="usaspending",
+        relation="all_entities",
+        select=None,
+        where=None,
+        group_by=["state"],
+        metrics=metrics,
+        having=having,
+        order=None,
+        limit=100,
+        offset=0,
+    )
+
+
+def test_both_metric_spellings_build_the_same_aggregate() -> None:
+    # The ':' spelling is accepted and was documented nowhere, so a caller who found it by trying
+    # had no reason to prefer it and no reason to trust it.
+    assert (
+        _built(metrics=["total=sum:total_obligation"]).aggregates
+        == _built(metrics=["total:sum:total_obligation"]).aggregates
+    )
+
+
+def test_a_bare_function_column_metric_is_rejected() -> None:
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=["sum:total_obligation"])
+
+    message = str(caught.value)
+    assert "total_sum=sum:total_obligation" in message
+    assert "The output name is missing" in message
+
+
+@pytest.mark.parametrize("expression", ["total:sum:obligation:extra", "total=sum:obligation:extra"])
+def test_a_column_containing_a_colon_is_rejected_where_it_is_typed(expression: str) -> None:
+    """The capped split accepted a column of 'obligation:extra' and failed much later on it.
+
+    The failure it reached instead was an unknown-column error from the fetched relation, so the
+    caller was sent looking for a column that had never been asked for.
+    """
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=[expression])
+
+    message = str(caught.value)
+    assert "total_sum=sum:total_obligation" in message
+    # The reason names the colon: a name was given, so the missing-name reason would send the
+    # caller to fix the part that is already right.
+    assert "A column cannot contain ':'." in message
+
+
+def test_an_empty_metric_column_is_a_named_error_and_not_a_pydantic_one() -> None:
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=["total_sum=sum:"])
+
+    assert "The source column is empty." in str(caught.value)
+
+
+def test_whitespace_around_every_part_of_a_metric_is_tolerated() -> None:
+    # Only the name was stripped, so 'n = sum : col' was reported as an unknown function ' sum '.
+    assert (
+        _built(metrics=[" total = sum : total_obligation "]).aggregates
+        == _built(metrics=["total=sum:total_obligation"]).aggregates
+    )
+
+
+def test_an_empty_metric_name_is_a_named_error_and_not_a_pydantic_one() -> None:
+    """An empty name reached AggregateSpec, so the caller read 'String should match pattern'.
+
+    The tool wrapper catches ValueError, which a pydantic failure is, so the pattern text was
+    served to the caller as the whole error: no form, no example, nothing to act on.
+    """
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=["=sum:total_obligation"])
+
+    message = str(caught.value)
+    assert type(caught.value) is QueryValidationError
+    assert "total_sum=sum:total_obligation" in message
+    assert "String should match" not in message
+
+
+@pytest.mark.parametrize("expression", ["sum:total_obligation", "=sum:total_obligation", "total_sum"])
+def test_the_metric_error_carries_an_example_that_parses(expression: str) -> None:
+    """The point of the example is that a caller can copy it, so the test uses it.
+
+    The message used to restate the form with no example, and the form said "name" where the tool
+    docstring said "alias", so a caller read it as the source column and its correction, which was
+    valid, was never confirmed.
+    """
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=[expression])
+
+    assert "total_sum=sum:total_obligation" in str(caught.value)
+    assert _built(metrics=["total_sum=sum:total_obligation"]).aggregates[0].alias == "total_sum"
+
+
+@pytest.mark.parametrize(
+    "expression",
+    ["total_sum", "total_sum:100000", ":gt:100000", ">100000"],
+)
+def test_a_malformed_having_names_both_accepted_forms(expression: str) -> None:
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=["total_sum=sum:total_obligation"], having=[expression])
+
+    message = str(caught.value)
+    assert "total_sum>100000" in message
+    assert "total_sum:gt:100000" in message
+    assert "String should match" not in message
+
+
+def test_an_unknown_having_operator_lists_the_accepted_ones() -> None:
+    with pytest.raises(QueryValidationError) as caught:
+        _built(metrics=["total_sum=sum:total_obligation"], having=["total_sum:above:100000"])
+
+    message = str(caught.value)
+    assert "above" in message
+    # ne is not a name this parser has; neq is, and it is the one a caller reading the filter
+    # operators would have written otherwise.
+    for operator in ("eq", "neq", "gt", "gte", "lt", "lte"):
+        assert operator in message
+
+
+def test_the_having_example_the_message_gives_parses() -> None:
+    assert _built(
+        metrics=["total_sum=sum:total_obligation"],
+        having=["total_sum>100000", "total_sum:gt:100000"],
+    ).having == [
+        HavingSpec(column="total_sum", operator=FilterOperator.GT, value=100000),
+        HavingSpec(column="total_sum", operator=FilterOperator.GT, value=100000),
+    ]

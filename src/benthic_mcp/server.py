@@ -291,7 +291,16 @@ async def query(
     select: list[str] | None = None,
     where: list[str] | None = None,
     group_by: list[str] | None = None,
-    metrics: list[str] | None = None,
+    metrics: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "Aggregates as 'output_name=function:column' or 'output_name:function:column', where "
+                "output_name is the output column, not a source column. Functions: count, sum, avg, min, "
+                "max. 'n=count:*' counts rows."
+            )
+        ),
+    ] = None,
     having: list[str] | None = None,
     order: list[str] | None = None,
     limit: Annotated[int, Field(ge=1, le=1000)] = 100,
@@ -300,7 +309,8 @@ async def query(
     """Run one bounded read-only relation query.
 
     Call benthic_discover first and pass its source value verbatim. where uses column=operator.value,
-    metrics uses alias=function:column, having uses alias>value, and order uses column:asc or column:desc.
+    metrics uses output_name=function:column, having uses output_name>value, and order uses
+    column:asc or column:desc. The name in a metric is the output column, not the source column.
     Operators: eq, neq, gt, gte, lt, lte, like, ilike, in, is.null, not.is.null. Aggregates are complete
     or rejected; never infer totals from a truncated source.
     """
