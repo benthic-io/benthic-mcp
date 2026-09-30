@@ -930,3 +930,85 @@ def test_a_bare_column_equals_value_is_still_refused() -> None:
 
     with pytest.raises(QueryValidationError, match="is a value, not an operator"):
         _parse_filter("is_current=true")
+
+
+@pytest.mark.asyncio
+async def test_a_truncated_result_says_how_many_rows_exist_and_what_to_do(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """The defect that stopped a live session dead: `truncated: true` and nothing else.
+
+    A session asked for entities in MA district 03, received 100 rows, and spent every remaining
+    turn querying again. It could not know whether another call would help, because a truncated page
+    of 100 out of 100 and a truncated page of 100 out of 1,416,153 look identical. The server knew
+    the difference - it had just paid for a HEAD to find out - and used the number only to build
+    refusal text, discarding it on the path that succeeded.
+
+    The stop rule was already in the tool description on every turn and did not help, because a
+    model cannot budget turns without knowing the size of what it is holding. The warning has to
+    distinguish "you are holding everything" from "paging cannot produce an answer at this size".
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-1416152/1416153"})
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(limit)])
+
+    capped = replace(settings, max_rows=5, default_query_limit=5)
+    request = QueryRequest(
+        question="Entities in MA district 03",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities")],
+        limit=5,
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    assert result.truncated
+    assert result.sources[0].matched_rows == 1416153
+    text = " ".join(warning.message for warning in result.warnings)
+    assert "1416153" in text, f"the true size must reach the caller: {text}"
+    assert "answer now" in text.lower(), f"the warning must say what to do, not only what happened: {text}"
+
+
+@pytest.mark.asyncio
+async def test_a_complete_result_does_not_claim_to_be_truncated(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """The counterpart, and the case that matters most.
+
+    A live probe returned 5 rows for a narrow filter and still reported `source_complete: false` and
+    `truncated: true`, because the page came back full and the sentinel row proved a sixth existed.
+    That is technically true and practically useless: the caller asked for 5 and got 5. If such a
+    result also says "paging cannot produce an answer", a model is being told to give up on data it
+    has not seen. So when the count shows the page holds everything, the warning says that instead.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-4/5"})
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(limit)])
+
+    capped = replace(settings, max_rows=5, default_query_limit=5)
+    request = QueryRequest(
+        question="Terms for district 3",
+        sources=[RelationSource(alias="s", dataset="usaspending", relation="all_entities")],
+        limit=5,
+    )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await QueryService(capped, BdpRepository(capped, client), PostgrestTransport(capped, client)).execute(
+            request
+        )
+
+    text = " ".join(warning.message for warning in result.warnings)
+    assert "all 5 rows" in text, f"a complete result must not be described as lossy: {text}"
+    assert "answer now" not in text.lower()

@@ -329,7 +329,12 @@ class SourceMetadata(StrictModel):
     alias: str
     source: str
     manifest_hash: str
+    # `row_count` is how many rows came back in this page, which is not how many rows the filters
+    # matched. On a truncated page the two differ by three orders of magnitude and the old name read
+    # as the total, so `matched_rows` carries the real figure when it is known and None when the
+    # server could not establish it.
     row_count: int
+    matched_rows: int | None = None
     complete: bool
 
 

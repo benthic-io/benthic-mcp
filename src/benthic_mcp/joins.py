@@ -163,6 +163,7 @@ def build_source_metadata(fetched: list[FetchedSource]) -> list[SourceMetadata]:
             source=f"{item.definition.dataset}.{item.definition.name}",
             manifest_hash=item.definition.manifest_hash,
             row_count=len(item.rows),
+            matched_rows=item.matched_rows,
             complete=not item.truncated,
         )
         for item in fetched

@@ -43,7 +43,18 @@ class PostgrestTransport:
 
     async def fetch(self, source: RelationSource, definition: RelationDefinition) -> FetchedSource:
         limit = min(source.limit or self.settings.default_query_limit, self.settings.max_rows)
-        return await self._fetch_page(source, definition, limit, source.offset)
+        page = await self._fetch_page(source, definition, limit, source.offset)
+        if not page.truncated:
+            # Nothing was cut off, so the rows in hand are the whole answer and the caller has no
+            # reason to ask how big it is.
+            return page
+        # `truncated` on its own says only that a page ended. A caller cannot tell 100 rows out of
+        # 100 from 100 out of 1,416,153, so it cannot judge whether another call would finish or
+        # whether it already holds the answer. One HEAD, no row bytes, and the size is known.
+        count = await self.count_matching(source, definition)
+        if count is None:
+            return page
+        return FetchedSource(source, definition, page.rows, page.request_url, True, count.total)
 
     async def fetch_complete(
         self,

@@ -122,6 +122,8 @@ class QueryService:
             warnings.extend(QueryWarning(message=message) for message in metadata.warnings)
 
         source_complete = all(not item.truncated for item in fetched) and not join_result.truncated
+        if truncated:
+            warnings.extend(_truncation_warnings(fetched))
         return QueryResult(
             columns=columns,
             rows=page,
@@ -204,6 +206,63 @@ class QueryService:
             joins=[],
             warnings=warnings,
         )
+
+
+def _truncation_warnings(fetched: list[FetchedSource]) -> list[QueryWarning]:
+    """Say how much is missing, and what that means for the answer, on every truncated result.
+
+    Found by driving the live interface. A session asking for entities in MA district 03 got 100 of
+    1,416,153 rows, saw only `truncated: true`, and spent every remaining turn querying again. The
+    server knew the exact size - it had just paid for a HEAD to find out - and discarded it on the
+    path that succeeded, after using it only to build refusal text.
+
+    The stop rule was already in the tool description the model reads on every turn. It did not
+    work, because the model had no way to judge whether one more call could help. A count gives it
+    that: at 1.4 million rows no amount of further paging produces an answer, and at 8 rows out of 8
+    the result is already complete. Without the number both cases look identical.
+
+    A truncated source whose size is unknown says so rather than implying it is knowable.
+    """
+    warnings: list[QueryWarning] = []
+    for item in fetched:
+        if not item.truncated:
+            continue
+        name = f"{item.definition.dataset}.{item.definition.name}"
+        matched = item.matched_rows
+        if matched is None:
+            warnings.append(
+                QueryWarning(
+                    source=item.source.alias,
+                    message=(
+                        f"{name} returned {len(item.rows)} rows and the result was cut off. "
+                        f"How many rows match the filters could not be established, so it is not "
+                        f"known whether further calls would reach them."
+                    ),
+                )
+            )
+            continue
+        if matched <= len(item.rows):
+            warnings.append(
+                QueryWarning(
+                    source=item.source.alias,
+                    message=(
+                        f"{name} returned all {matched} rows that match the filters. The source is "
+                        f"complete and no further call will return anything new."
+                    ),
+                )
+            )
+            continue
+        warnings.append(
+            QueryWarning(
+                source=item.source.alias,
+                message=(
+                    f"{name} returned {len(item.rows)} of {matched} rows that match the filters. "
+                    f"Paging cannot produce an answer at this size, so answer now with the rows held "
+                    f"and state that the result is a partial view rather than a total."
+                ),
+            )
+        )
+    return warnings
 
 
 def _scan_refusal(fetched: list[FetchedSource], scan_limit: int, max_rows: int) -> str:

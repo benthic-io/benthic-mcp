@@ -487,3 +487,38 @@ async def test_a_count_request_never_carries_an_order(settings: Any, catalog: Ca
     )
     # The count is still the one the scan would see.
     assert count is not None and count.total == 1416153
+
+
+@pytest.mark.asyncio
+async def test_a_page_reports_how_many_rows_the_filters_matched_in_total(settings: Any, catalog: Any) -> None:
+    """A truncated page says only `truncated: true`, so a caller cannot tell 100 rows out of 100
+    from 100 rows out of 1.4 million, and has no way to know whether paging would ever finish.
+
+    Found by driving the live interface. A session asked for entities in MA district 03 - 1,416,153
+    rows - received 100, saw `truncated: true` with `next_offset: null`, and spent every remaining
+    turn querying again instead of answering with what it had and a caveat. The server knew the
+    exact figure: it had just asked for it. The number was used only to build refusal text and was
+    thrown away on success.
+
+    This is the same defect as the count the scan already pays for, on the path that succeeds. The
+    model cannot budget turns without knowing the size of what it is looking at.
+    """
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-1416152/1416153"})
+        limit = int(request.url.params["limit"])
+        return httpx.Response(200, json=[{"uei": str(index)} for index in range(limit)])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await PostgrestTransport(settings, client).fetch(
+            RelationSource(alias="s", dataset="usaspending", relation="all_entities"),
+            catalog.resolve_relation("usaspending", "all_entities"),
+        )
+
+    assert result.truncated
+    assert result.matched_rows == 1416153, (
+        f"a truncated page must say how many rows exist, not only that it cut off; got {result.matched_rows}"
+    )
