@@ -38,7 +38,9 @@ SEED_RELATION_HINTS: dict[str, RelationGuide] = {
     "usp_cl.legislator_terms": RelationGuide(
         terms={"representative": 90, "congress": 70, "legislator": 90, "historical": 90, "term": 60},
         preferred_columns=["bioguide_id", "state", "district", "term_start", "term_end", "party", "url"],
-        description="Historical legislator terms; query term_start and term_end to avoid current-office mistakes.",
+        description="Historical legislator terms; query term_start and term_end to avoid current-office "
+        "mistakes. There is no `legislator_name` column and no `name` column: the person is named on "
+        "`usp_cl.legislators` via `bioguide_id`.",
     ),
     "usp_cl.legislators": RelationGuide(
         terms={"legislator": 70, "congress": 50, "member": 60, "bioguide": 80, "representative": 40},
@@ -127,7 +129,8 @@ SEED_DATASETS: dict[str, DatasetSection] = {
     "samer": DatasetSection(
         summary="SAM entity registrations, the bridge between USAspending and IRS identifiers.",
         when_to_use=[
-            "Use `samer.sam_registrations` to translate between UEI and DUNS identifiers.",
+            "The dataset is spelled `samer`, not `sam`. Use `samer.sam_registrations` to translate "
+            "between UEI and DUNS identifiers.",
         ],
         anti_patterns=[
             "DUNS to EIN is a heuristic identifier change, not an exact identity; say so when reporting.",
