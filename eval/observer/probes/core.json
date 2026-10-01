@@ -52,7 +52,8 @@
       "id": "join_partial",
       "cluster": "join",
       "expect": "A partial signed join on the usaspending-to-samer UEI edge, reported as provisional. Rewritten to stay on the aggregate side of the join: the original asked to match 1.4M entities against 2.6M registrations, which the model correctly identified as unanswerable at 0/8.",
-      "question": "For usaspending district 03 awards, show which recipients can be matched to a SAM registration on UEI, and say plainly which ones could not be matched."
+      "question": "For usaspending district 03 awards, show which recipients can be matched to a SAM registration on UEI, and say plainly which ones could not be matched.",
+      "max_tokens": 12000
     },
     {
       "id": "rpc_point",
@@ -106,7 +107,8 @@
       "id": "self_report",
       "cluster": "report",
       "expect": "Two pre-aggregated relations read together, no scan of a table over 10000 rows. The original asked for an agency ranking over a 10M-row awards table; every refusal it produced was correct, so the probe measured nothing but cost.",
-      "question": "Which top-tier agencies appear in the published DABS list, and which of them does the district spending rollup actually have spending for?"
+      "question": "Which top-tier agencies appear in the published DABS list, and which of them does the district spending rollup actually have spending for?",
+      "max_tokens": 12000
     }
   ]
 }

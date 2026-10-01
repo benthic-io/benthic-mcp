@@ -76,7 +76,14 @@ def run_probe(probe: dict, max_turns: int, timeout: float, temperature: float) -
                     # This model reasons before it answers, and a long reasoning turn can exhaust a
                     # small budget on its own: at 1400 tokens one turn spent all 1,400 on reasoning
                     # and emitted nothing, which reads identically to a refusal. Budget for thinking.
-                    "max_tokens": probe.get("max_tokens", 4000),
+                    #
+                    # 8000, not 4000, because 4000 is still not enough for a probe whose question is
+                    # genuinely open. self_report spent the whole 4,000 on visible deliberation and was
+                    # cut mid-string inside a tool call, so the model was recorded as not having
+                    # answered when the tool it wanted never reached the server. A truncated tool call
+                    # is the server's fault only if the server truncated the request; here the budget
+                    # did, and a probe that measures the model must not be the thing that limits it.
+                    "max_tokens": probe.get("max_tokens", 8000),
                     "temperature": temperature,
                     "top_p": 0.95,
                 },
