@@ -190,40 +190,92 @@ is explicit that labelling a hand-built object `derived` "would be lying about w
 commit produces". So a change is not done until it is in the ETL *and* the manifest. Currently the
 manifest records `b25eba84` while the ETL head is `3131c62` - discrepancy unverified.
 
-## Handed off to an agent on thunkah
+## Where the work went, 2026-09-30 evening
 
-Database and ETL work is now owned by an opencode session on thunkah; the brief is
-`~/thunkah-handoff.md` and the transcript `~/benthic-publish-work/run1.jsonl`. Session
-`ses_f0bb26b79ffe0JahS4LXf1JLjb`. Check it with `~/benthic-publish-work/status.sh`.
+**Pushed, in the order the manifest requires:** `ngopen-pipelines` `ea88629`, `bdp` `64b60b2`,
+`benthic-site` `de037f3`. The manifest names `ea88629`; verified by cloning from GitHub and
+confirming it resolves. `benthic-publish` is private, 7 commits, 9 documents plus `evidence/`.
 
-It is building `benthic-io/benthic-publish` (private) - a playbook to take any dataset from raw
-download to a fast, correctly signed, served API. The brief carries the measured numbers, the
-`CONCURRENTLY` rule, and the instruction not to touch `benthic-mcp`.
+**Production is fixed.** `CREATE INDEX CONCURRENTLY (fiscal_year, award_id)` on `prime_awards`:
+42:33, 5505 MB, in `ssd_1tb` (every other index there is, and `default_tablespace` is empty, so
+an unpinned build lands on the wrong filesystem). `Filter:` became `Index Cond:`, Limit cost
+1,108.60 -> 91.24. ANALYZE ran on 7 relations. 9 scratch databases dropped after four checks.
 
-**On thunkah, `/usr/local/bin/opencode` is 1.0.76 and has no `--auto`; only
-`~/.opencode/bin/opencode` (2.0.20) does. PATH picks the wrong one.** Without `--auto` an
-unattended run hangs on the first permission prompt rather than failing. Always set
-`PATH=$HOME/.opencode/bin:$PATH`.
+**The never-analyzed mystery is solved:** pg_dump does not carry planner statistics, so a relation
+transferred by swap arrives with `reltuples = -1` and no `last_analyze`, and nothing downstream
+replaces them. The serving database is not run through the stage sequence, so `07_analyze` never
+touches it. Fixed at the swap point in `migrate.py`, not by adding an ANALYZE somewhere else.
 
-## Next steps on this side, in order
+**Three numbers were wrong before they were measured**, and both thunkah agents caught them
+independently:
+- "cost 112,744,059 -> 30.84, a factor of ~3.66 million" - written before the build finished. Real:
+  12.2x. The 30.84 was never measured.
+- "ANALYZE will reveal the estimate was stale" - wrong. The estimate moved 0.7% and cost moved *up*.
+  FY2023 genuinely holds ~10.2M rows. I had conflated how an estimate was obtained with whether it
+  is right, which is my error from the opposite direction.
+- `--db` does not exist; it is `--dbname`. And "76 recovered indexes" is a hardcoded log string; the
+  file has 61.
 
-1. **Use `row_count_estimate` as a pre-flight.** Refuse locally and instantly when the estimate
-   exceeds the scan limit, so a huge relation costs zero upstream queries. Contract: the second
-   identical call must refuse with no upstream request at all. Blocked on the manifest fix for
-   full coverage, but the 15 relations that have it can be used now - and it is strictly an
-   improvement to consult it where present.
-   **Open question for the user:** for the 104 relations with no estimate, refuse or proceed as
-   today? Proceeding keeps the catalog usable; refusing is safe but strands 87% of it.
-2. **Rewrite or retire the three unanswerable probes** (`join_partial` 0/8, `query_group_by` 0/8,
-   `self_report` 0/7). They are the direct cause of the upstream load, and they are questions this
-   API cannot answer, not server defects.
-3. **Check whether `rpc_*` regressed**: `rpc_box` 6/8 and `rpc_point` 7/8, from a previous 8/8.
-4. Do not chase the eleven probes that vary run to run. That is the signal already known not to
-   trust.
+These went into a README table in `benthic-publish` rather than being quietly fixed, because a
+playbook that hides its corrections teaches readers to trust the numbers it did not correct.
 
-**The observe timer is currently STOPPED** (`systemctl --user start benthic-observe.timer` to
-resume). It generates real production load, and running it while diagnosing a load problem is the
-wrong order of operations.
+## `row_count_estimate`, the exact convention
+
+Integer >= 0, per relation. **Present + 0 = genuinely empty. Present + n = advisory estimate. Key
+absent = never analyzed, unknown.** No null convention was introduced and none exists - there is no
+`null` or `-1` case from a fixed introspector. So my client-side `estimate > 0` guard was defending
+against something the fixed introspector cannot produce; it should test for absence instead.
+Live DB: 23 of 77 relations carry one, max 446,469,056. Calibrate against the live DB, not the
+published manifest, which still holds the sparse pre-fix set.
+
+## The observer, and the ninth false green
+
+The 19:17 tick printed "probe sweep finished" and exited 0. **The record did not exist.** It built a
+survey from records that were never written and reported four "new" hallucinated identifiers.
+
+The cause was mine: rewriting the three dead probes, I flattened `core.json` from `{"probes": [...]}`
+to a bare list, and `sweep.py` indexes `["probes"]`. My commit of that rewrite looked clean. Three
+defects, not one - the first was hidden by the other two: `sweep.py` exited 0 on an unhandled
+exception; `tick.sh` printed "finished" regardless of exit code; and a zero exit was never
+sufficient evidence, so the record itself is now checked for existence and non-emptiness.
+
+Pyright had been red on `sweep.py` all along (`get()` declared `-> object` while returning parsed
+JSON, so indexing its result was an error at line 57) and the sweep had been running anyway.
+
+**First two full cycles under the new probes: 14/18 answered, both times, with zero production load.**
+No query ran longer than 10s for the entire sweep. The three rewrites work; they were the entire
+cause of the upstream load.
+
+### The token budget has now produced three apparent failures
+
+At 1,400 a turn emitted nothing. At 4,000 `self_report` spent the whole budget on visible
+deliberation and was cut mid-string inside a tool call - `'{"question":"...","source":"'` never
+reached the server - so the probe was recorded as not having answered when the model never got to
+ask. Default is now 8,000, with 12,000 for the two open-ended probes. The durable pattern: **when
+the budget binds, the instrument measures the budget, not the model, and nothing in the output
+distinguishes the two.**
+
+### The four that still do not answer, and why
+
+`query_having_text` 0/2, `truncation` 0/2, `join_partial` 0/2, `self_report` 0/2. These are a
+different class from the three I retired: not refusals, but **turn exhaustion with usable data in
+hand** at 8 turns. There is no agency-level obligation rollup in the catalog -
+`mv_entity_spending_summary` has one but times out even on a HEAD count and is deliberately not
+offered as a route. So `query_having_text` needs a scan it cannot get, and the other three are
+plausible but need more turns than the sweep allows.
+
+Worth deciding rather than assuming: raise max-turns for these, rewrite them to be narrower, or
+retire them. Do not quietly let 14/18 stand as "the number" without saying which four and why.
+
+## Still open
+
+1. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
+2. **`migration_status: "migrated"` is now false**, not merely stale. The schema defines it as
+   "commit_hash fully reproduces the served data" and three live indexes sit outside version
+   control. Choosing `derived` vs `recovered` is a provenance claim and should be a human's call.
+3. Decide the four failing probes above.
+4. The observe timer is running again; production load measured zero for a whole sweep, so this is
+   no longer the constraint it was.
 
 ## Files worth reading first
 
