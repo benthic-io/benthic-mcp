@@ -44,6 +44,10 @@ SUITE = Path(__file__).resolve().parents[2] / "grok" / "ngopen-combination-suite
 # Relations the model named that the catalog does not carry. Cheap, and it is the same
 # check the observer's findings make, so a hallucinated relation is visible here too.
 CATALOG_RELATIONS: set[str] = set()
+# Column names, qualified by dataset where the manifest allows it. A model writing
+# `irs_ng.ein` is naming a column, not inventing a relation, and a check that reports it
+# as a missing relation would send someone to "fix" a relation that does not need fixing.
+CATALOG_COLUMNS: set[str] = set()
 
 
 def load_catalog_relations() -> set[str]:
@@ -59,20 +63,27 @@ def load_catalog_relations() -> set[str]:
         except json.JSONDecodeError:
             continue
         found: set[str] = set()
+        columns: set[str] = set()
 
-        def walk(node: Any) -> None:
+        def walk(node: Any, dataset: str | None = None) -> None:
             if isinstance(node, dict):
+                dataset = node.get("dataset_name") or dataset
                 name = node.get("name")
                 if isinstance(name, str) and "relation_type" in node and "columns" in node:
                     found.add(name)
+                    for column in node.get("columns") or []:
+                        if isinstance(column, dict) and isinstance(column.get("name"), str):
+                            columns.add(f"{dataset}.{column['name']}" if dataset else column["name"])
                 for value in node.values():
-                    walk(value)
+                    walk(value, dataset)
             elif isinstance(node, list):
                 for value in node:
-                    walk(value)
+                    walk(value, dataset)
 
         walk(document)
         if found:
+            global CATALOG_COLUMNS
+            CATALOG_COLUMNS = columns
             return found
     return set()
 
@@ -429,7 +440,16 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
                     candidate = match.group(1)
                     if candidate.split(".")[0] in {"usaspending", "samer", "irs_ng", "usp_cl", "up_cdmaps"}:
                         named[candidate] += 1
-    unknown = {name: count for name, count in named.items() if name.rsplit(".", 1)[-1] not in bare_relations}
+    # A qualified name the model used is absent only if it is neither a relation nor a
+    # column. `irs_ng.ein` is a column of bmf_organizations and `usaspending.geom_point`
+    # is a column of all_entities; both were reported as missing relations, which reads as
+    # a catalog defect when it is a check that does not know the difference.
+    bare_columns = {name.rsplit(".", 1)[-1] for name in CATALOG_COLUMNS}
+    unknown = {
+        name: count
+        for name, count in named.items()
+        if name.rsplit(".", 1)[-1] not in bare_relations and name.rsplit(".", 1)[-1] not in bare_columns
+    }
 
     return {
         "cases": len(rows),
