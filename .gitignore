@@ -30,3 +30,4 @@ eval/observer/records/
 eval/observer/findings.json
 eval/observer/.agent-session
 eval/observer/.tick.lock
+grok/

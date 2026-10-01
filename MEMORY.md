@@ -104,6 +104,23 @@ Seven cases of an instrument reporting success while measuring nothing:
 
 **Check the instrument before believing the number.** Health checks read `ActiveState`, never `NEXT`.
 
+## Never add an AI trailer to a commit here
+
+The operator does not use Claude, does not associate with Anthropic, and asked for
+every `Co-Authored-By: Claude Opus 4.5` and `Assisted-by: Claude Opus 4.5` trailer to be
+removed from the history. All 62 commits were rewritten on 2026-09-30
+(`filter-branch --msg-filter`) and force-pushed; HEAD moved `d9a4691` -> `311f66f`.
+Verified by cloning from GitHub and grepping the fresh clone: 0 matches.
+
+Write commit messages as the operator's work, plainly, and attribute nothing to a
+tool. The llama.cpp AGENTS.md rules against writing commit messages apply here by the
+operator's own instruction - `mcp-tools` is not llama.cpp, but the habit carried over
+and was wrong for this repo.
+
+**Anyone with a clone must `git fetch && git reset --hard`.** Old objects remain on
+GitHub's servers until they expire, so the trailers are unreachable by name but not
+cryptographically gone. Only the operator can decide whether that matters.
+
 ## Rules learned the hard way
 
 - A contract must fail before the fix. Three of mine shipped green because they asserted the wrong
