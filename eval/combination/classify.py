@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import re
 import time
@@ -106,6 +107,18 @@ def tools() -> list[dict[str, Any]]:
     return [tool["definition"] for tool in listing]
 
 
+# Transport-level failures. These are about the connection, not about the case, and must
+# never be recorded as a refusal, a failure to answer, or a missing hop.
+CONNECTION_ERRORS = (
+    urllib.error.URLError,
+    http.client.RemoteDisconnected,
+    http.client.IncompleteRead,
+    ConnectionResetError,
+    ConnectionAbortedError,
+    TimeoutError,
+    json.JSONDecodeError,
+)
+
 # A refusal is the server declining, in its own words. Prose matching finds filler.
 _REFUSAL_MARKERS = (
     "is not a signed BDP join path",
@@ -153,7 +166,24 @@ def classify_text(text: str) -> tuple[bool, str | None]:
             right = match.group("b") or match.group("d")
             if left and right:
                 hop = f"{left} -> {right}"
-    return refused, hop
+    return refused, _plausible_hop(hop)
+
+
+def _plausible_hop(hop: str | None) -> str | None:
+    """Keep a named hop only when both ends are relations the catalog actually carries.
+
+    The regexes match sentence shape, not meaning, so they fire on ordinary prose: a
+    58-case run produced `prime_awards -> the` and `awards -> foundations`, neither of
+    which is a hop. A finding that survives this check is two real relations the model
+    says are not connected, which is the thing category 3 is about.
+    """
+    if not hop or not CATALOG_RELATIONS:
+        return hop
+    bare = {name.rsplit(".", 1)[-1] for name in CATALOG_RELATIONS}
+    left, _, right = hop.partition("->")
+    if left.strip().rstrip(".").rsplit(".", 1)[-1] in bare and right.strip().rstrip(".").rsplit(".", 1)[-1] in bare:
+        return hop
+    return None
 
 
 def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, timeout: float) -> dict[str, Any]:
@@ -184,8 +214,14 @@ def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, tim
                 },
                 timeout,
             )
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            turns.append({"turn": number, "error": f"{type(exc).__name__}: {exc}"})
+        except CONNECTION_ERRORS as exc:
+            # A dropped connection is a property of the transport, not of the case. One
+            # RemoteDisconnected killed a 58-case run outright, which threw away an hour of
+            # model time and left the refusal floor unmeasured. The case records the error
+            # and the run continues; the summary reports how many cases ended this way so a
+            # transport failure is never silently counted as a model failure.
+            transport_error = f"{type(exc).__name__}: {exc}"
+            turns.append({"turn": number, "error": transport_error})
             break
 
         choice = (response.get("choices") or [{}])[0]
@@ -206,11 +242,20 @@ def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, tim
         if not tool_calls:
             break
 
-        messages.append({"role": "assistant", "content": content or None,
-                         "tool_calls": [{"id": call["id"], "type": "function",
-                                         "function": {"name": call["function"]["name"],
-                                                      "arguments": call["function"]["arguments"]}}
-                                        for call in tool_calls]})
+        messages.append(
+            {
+                "role": "assistant",
+                "content": content or None,
+                "tool_calls": [
+                    {
+                        "id": call["id"],
+                        "type": "function",
+                        "function": {"name": call["function"]["name"], "arguments": call["function"]["arguments"]},
+                    }
+                    for call in tool_calls
+                ],
+            }
+        )
         for call in tool_calls:
             name = call["function"]["name"]
             called.append(name)
@@ -218,8 +263,7 @@ def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, tim
                 arguments = json.loads(call["function"]["arguments"])
             except json.JSONDecodeError:
                 broken += 1
-                messages.append({"role": "tool", "tool_call_id": call["id"],
-                                 "content": "malformed arguments"})
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content": "malformed arguments"})
                 continue
             try:
                 result = post("/tools", {"tool": name, "params": arguments}, timeout)
@@ -265,6 +309,11 @@ def main() -> int:
     parser.add_argument("--tags", help="comma-separated tags to restrict to")
     parser.add_argument("--max-turns", type=int, default=6)
     parser.add_argument("--timeout", type=float, default=300)
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="keep the records already in --out and run only the cases missing from them",
+    )
     args = parser.parse_args()
 
     global CATALOG_RELATIONS
@@ -282,11 +331,40 @@ def main() -> int:
         tags = {item.strip() for item in args.tags.split(",")}
         cases = [c for c in cases if c.get("tag") in tags]
 
+    # The floor goes first. The suite file interleaves tags and puts all seven `refuse`
+    # cases at positions 89-95, so a run that stops early - which is what happened, at 58 of
+    # 100 - measures the floor not at all. The seven cases that must keep refusing are the
+    # cheapest signal in the suite and the one that says whether anything broke.
+    priority = {"refuse": 0, "now": 1, "grow": 2}
+    cases = sorted(cases, key=lambda c: (priority.get(c.get("tag"), 3),))
+
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    records = out_dir / "cases.jsonl"
+
+    # Resume rather than restart. A dropped connection killed a run at 58 of 100 after an
+    # hour of model time, and the cases that completed were already on disk. Re-running them
+    # would spend the same hour again and produce slightly different numbers, which is worse
+    # than useless: it would make the two halves of one suite incomparable.
+    prior: list[dict[str, Any]] = []
+    if args.resume and records.is_file():
+        for line in records.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                try:
+                    prior.append(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        done = {row.get("id") for row in prior}
+        before = len(cases)
+        cases = [c for c in cases if c.get("id") not in done]
+        print(
+            f"resuming: {len(prior)} already recorded, {len(cases)} of {before} remaining",
+            flush=True,
+        )
+
     tool_list = tools()
 
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = list(prior)
     total = len(cases)
     for index, case in enumerate(cases, 1):
         started = time.monotonic()
@@ -302,9 +380,7 @@ def main() -> int:
         rows.append(row)
         flag = "R" if result["server_refused"] else ("A" if result["answered"] else "-")
         print(f"[{index}/{total}] {row['id']:24} {flag} {row['elapsed_s']:>6}s", flush=True)
-        (out_dir / "cases.jsonl").write_text(
-            "".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8"
-        )
+        (out_dir / "cases.jsonl").write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
     summary = summarise(rows)
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
