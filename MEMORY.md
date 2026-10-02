@@ -284,6 +284,67 @@ plausible but need more turns than the sweep allows.
 Worth deciding rather than assuming: raise max-turns for these, rewrite them to be narrower, or
 retire them. Do not quietly let 14/18 stand as "the number" without saying which four and why.
 
+## The publish procedure already existed: `pull_site.sh`
+
+**Do not build a publishing mechanism for benthic.io before looking for one.**
+The web server (`165.22.33.22`, `proxy-etc-0`) has its own git checkout at
+`/var/www/benthic.io/site`, and the operator's procedure is four lines in `~/pull_site.sh`:
+
+```bash
+cd /var/www/benthic.io/site
+sudo git pull origin master
+sudo /usr/local/bin/hugo
+sudo rm -rf /var/www/benthic.io/public
+sudo mv /var/www/benthic.io/site/public /var/www/benthic.io/public
+```
+
+I spent hours staging a build and writing an atomic-swap script for this, and told the
+operator to run a command that had never been copied to the host it was meant to run on.
+Two agents independently reported "there is no deploy automation at all" - neither of us
+had listed the home directory. Both `pull_site.sh` and my staged tree were in the same
+folder. Look for the existing procedure first; it will be adjacent to where you were about
+to put yours.
+
+`rm -rf` then `mv` is not atomic, so there is a window where `/bdp/*` 404s. Both paths are
+on the same device (64513, xfs) so `mv` is a rename and the window is sub-millisecond,
+and there is no backup - the one thing worth adding.
+
+**Result: live collection went 6 -> 9 signed edges.** The new hop is
+`usp_cl.legislators.bioguide_id -> legislator_terms` (identifier/reliable) and two
+`geom_point -> congressional_districts` spatial edges are restored, the latter having been
+collateral damage from a schema migration in commit `2e53270` that renamed relation names
+and deleted two edges instead of renaming them.
+
+`check-bdp-drift.sh` on thunkah compares the served collection against the committed one
+and exits 1 on drift. It is on a systemd timer every 16 minutes and is how the three
+missed releases would have been caught.
+
+## Two MCP instances, and restarting one of them changes nothing
+
+`benthic-mcp.service` (HTTP 8082) and the stdio child of `llama-server` (reached through
+`POST 8081/tools`) are separate processes with separate lifetimes. **The 8081 child holds
+its own in-memory catalog snapshot and does not restart when `benthic-mcp.service` does.**
+
+After the collection was published with 9 edges, the HTTP service served all of them and
+8081 still served 6 - not a bug, just a child that had been up 12h56m. Every check I ran
+went through 8081, so I spent a long time convinced the load path was broken. It was not:
+`verified-catalog.json` had 9 joins, `Catalog(snapshot).joins` had 9, and only the
+long-lived child disagreed.
+
+**When the signed catalog changes, restart `llama-server`, not just `benthic-mcp`.**
+
+Before concluding a change did not take effect, ask which process answered:
+
+```bash
+# the HTTP service, reads the cache at call time
+curl -s http://127.0.0.1:8082/mcp ...
+# llama-server's stdio child, long-lived, holds its own snapshot
+curl -s -X POST http://192.168.10.222:8081/tools ...
+```
+
+The catalog cache has a 900s TTL and refreshes on its own. I confirmed 9 edges on disk
+while the live process still reported 6, and the two converged only after a restart.
+
 ## Still open
 
 1. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
