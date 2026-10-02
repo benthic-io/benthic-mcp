@@ -245,10 +245,19 @@ async def test_playbook_serves_signed_facts_only(catalog: Catalog, settings: Set
     # The signed catalog joins all_entities to usp_cl.legislator_terms, so the guide must carry that
     # recipe with its partial reliability rather than claiming there is no path.
     assert guide["dataset"] == "usp_cl"
+    # Both edges touching usp_cl, in the order the collection declares them. The
+    # all_entities edge is `partial` because a bare district number is only an identity
+    # when paired with state; the legislators edge is `reliable` because bioguide_id is an
+    # identifier and every term resolves to a legislator. Asserting the exact set is
+    # deliberate: a recipe appearing or vanishing here is the model being told something
+    # different, which is the whole point of the playbook.
     assert [
         (recipe["left_source"], recipe["left_column"], recipe["right_source"], recipe["reliability"])
         for recipe in guide["join_recipes"]
-    ] == [("usaspending.all_entities", "congressional_district", "usp_cl.legislator_terms", "partial")]
+    ] == [
+        ("usaspending.all_entities", "congressional_district", "usp_cl.legislator_terms", "partial"),
+        ("usp_cl.legislators", "bioguide_id", "usp_cl.legislator_terms", "reliable"),
+    ]
     assert "Unknown dataset" in str(missing)
 
 

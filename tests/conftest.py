@@ -223,6 +223,19 @@ def collection(private_key: Ed25519PrivateKey, manifests: dict[str, dict[str, An
                 "reliability": "partial",
                 "notes": "Must pair with state; bracket action_date by congress_start/end",
             },
+            {
+                # Same dataset, unlike every other edge here, and reliable rather than
+                # partial: bioguide_id is an identifier and every term resolves to a
+                # legislator. The combination suite found the model asking for this twice
+                # with no path in the collection. Whether the catalog agrees is the
+                # pipeline's call, and `test_a_signed_hop_is_reachable_from_both_ends`
+                # is the contract that says so either way.
+                "from": {"dataset_name": "usp_cl", "relation": "legislators", "column": "bioguide_id"},
+                "to": {"dataset_name": "usp_cl", "relation": "legislator_terms", "column": "bioguide_id"},
+                "join_type": "identifier",
+                "reliability": "reliable",
+                "notes": "Total referential integrity: every term resolves to a legislator.",
+            },
         ],
     )
 
