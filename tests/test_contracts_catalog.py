@@ -895,9 +895,11 @@ def test_every_preferred_column_the_seed_names_exists_in_the_signed_manifest() -
         if definition is None:
             missing.append(f"{source}: not in the signed manifest")
             continue
-        for column in guide.preferred_columns:
-            if column not in definition.columns:
-                missing.append(f"{source}.{column}: no such column")
+        missing.extend(
+            f"{source}.{column}: no such column"
+            for column in guide.preferred_columns
+            if column not in definition.columns
+        )
     assert not missing, "seed guidance names columns that do not exist: " + "; ".join(missing)
 
 
