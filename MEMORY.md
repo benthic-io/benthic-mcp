@@ -375,6 +375,62 @@ rate" that was entirely a sick server.
 300.0s with `turns=0`, the server was down and the number means nothing. Same trap as the
 token budget: when the instrument's limit binds, it measures the instrument.
 
+## The recurring llama-server wedge: everything known, for planning after compaction
+
+**Three confirmed instances: 2026-10-01, 2026-10-04 (twice in one evening).** Always the
+same signature, always fixed by a restart, never explained.
+
+| probe | wedged state | healthy state |
+|---|---|---|
+| `POST /v1/chat/completions` 15-20 tokens | times out 35s+ | 2.4s |
+| `POST /completion` 5 tokens, no chat template | also times out | n/a |
+| `GET /health` | `{"status":"ok"}` immediately | same |
+| `GET /props` | HTTP 200 in 0.7ms | same |
+| `GET /slots` | empty | populated |
+| worker threads | `S` sleeping, **0% CPU** | busy during generation |
+| process CPU | reads ~109% but workers idle | - |
+| journal | `stop: cancel task` every few minutes | quiet |
+| memory | 43-56 GiB available - **not** pressure | same |
+| `systemctl --user restart llama-server` | fixes it in 2.4s | - |
+
+Facts established, so they need not be re-derived:
+
+- **The HTTP layer stays healthy while inference dies.** Metadata endpoints answering
+  fast is what makes this confusing; it reads as a client problem. It is not one.
+- **Not the chat template.** A bare `/completion` with 5 tokens also hangs.
+- **Not resource pressure.** Memory was 43-56 GiB free on every occurrence.
+- **Not load.** A wedged server shows 0% CPU on its workers - nothing is computing.
+- **Not a hung request.** The journal shows `cancel task` recurring, i.e. tasks *are*
+  being cancelled, which points at the slot or backend state rather than one stuck request.
+- **Uptime correlation is weak.** Instances occurred after ~13h and ~24h+ of uptime, but
+  the server has run long healthy periods too.
+- Upstream is a local GGUF (`Cyber-Tiel-Coder-35B-A3B-MTP-UD-Q4_K_XL.gguf`), `-np 2`,
+  524288 ctx, ~30 GB RSS.
+
+What is **not** established, and is where a plan should start:
+
+- Whether both slots leak, or one wedged slot blocks the other.
+- Whether `--parallel 2` with a large ctx is implicated.
+- Whether `cancel task` precedes or follows the wedge.
+- Whether any stderr from llama-server exists at wedge time - the journal only has
+  warnings. A reproduction that captures stderr is the obvious first step.
+- Whether the combination suite, the observer sweep, or ordinary web-UI traffic is
+  implicated; all three have driven it.
+
+Reproduce cheaply: hammer a 15-token completion every 30s and log the elapsed time and
+`/slots`. A wedge is a 35s+ outlier; the restart is the recovery.
+
+## Status at 2026-10-04, end of session 3
+
+- `benthic-mcp` at `648cf00`, tree clean, **466 tests**, ruff and pyright clean.
+- Three services active. Observer budget raised to **12 turns** (`648cf00`), the change
+  that fixed `query_having_text`: **1/40 -> answered**, using all 12.
+- 9 signed edges live and verified; drift check green; `benthic-publish` populated.
+- Both district indexes landed valid and are in versioned ETL SQL with `ssd_1tb` pinning.
+- thunkah memory leak fixed: 8,888 processes and 2.7 GiB available -> 13 processes and
+  52-56 GiB. `--stateful` cut the leak 25x, plus a systemd reaper because supergateway's
+  own session cleanup never fires.
+
 ## Still open
 
 1. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
