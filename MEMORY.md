@@ -345,6 +345,36 @@ curl -s -X POST http://192.168.10.222:8081/tools ...
 The catalog cache has a 900s TTL and refreshes on its own. I confirmed 9 edges on disk
 while the live process still reported 6, and the two converged only after a restart.
 
+## llama-server wedges again, and it has a recognisable signature
+
+Second confirmed instance (first was 2026-10-01, second 2026-10-04). The signature:
+
+| check | state when wedged |
+|---|---|
+| `POST /v1/chat/completions`, 20 tokens | times out (35s+) |
+| `POST /completion`, 5 tokens | times out - it is not the chat template |
+| `GET /health` | `{"status":"ok"}` immediately |
+| `GET /props` | HTTP 200 in 0.7ms |
+| worker threads | `S` sleeping, 0% CPU - **not** busy |
+| `GET /slots` | empty |
+| journal | `stop: cancel task` every few minutes |
+
+**So the HTTP layer is healthy and the inference backend is dead.** Metadata endpoints
+answering fast is what makes this confusing: `/health` returning ok while no generation
+completes looks like a client problem and is not one. The first time I spent hours
+convinced the catalog load path was broken instead.
+
+A restart fixes it (`systemctl --user restart llama-server`): 35s timeout -> 2.4s.
+
+**Stop the observer sweep before restarting**, or it is mid-request. Its 300s per-case
+timeout means a wedged server shows up as *every probe timing out at exactly 300.0s with
+0 turns* - which looks like a model-quality result and is not. It produced a "39% pass
+rate" that was entirely a sick server.
+
+**Before reading any probe number, check the timestamp.** If many cases sit at exactly
+300.0s with `turns=0`, the server was down and the number means nothing. Same trap as the
+token budget: when the instrument's limit binds, it measures the instrument.
+
 ## Still open
 
 1. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
