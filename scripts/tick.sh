@@ -98,7 +98,7 @@ if (( RUN_PROBES )); then
   if ! .venv/bin/python eval/observer/sweep.py \
       --probes eval/observer/probes/core.json \
       --record "$RECORDS/${STAMP}.jsonl" \
-      --max-turns 8 >>"$LOG" 2>&1; then
+      --max-turns 12 >>"$LOG" 2>&1; then
     say "PROBE SWEEP FAILED - see $LOG. Not writing findings."
     exit 70
   fi
