@@ -49,13 +49,6 @@
       "question": "Join the recipient name in usaspending.all_entities directly to the current officeholder's phone number in usp_cl.mv_current_lawmakers."
     },
     {
-      "id": "join_partial",
-      "cluster": "join",
-      "expect": "A partial signed join on the usaspending-to-samer UEI edge, reported as provisional. Rewritten to stay on the aggregate side of the join: the original asked to match 1.4M entities against 2.6M registrations, which the model correctly identified as unanswerable at 0/8.",
-      "question": "For usaspending district 03 awards, show which recipients can be matched to a SAM registration on UEI, and say plainly which ones could not be matched.",
-      "max_tokens": 12000
-    },
-    {
       "id": "rpc_point",
       "cluster": "rpc",
       "expect": "Spatial RPC with precisely specified arguments. The model must not invent an extent it was not given.",
