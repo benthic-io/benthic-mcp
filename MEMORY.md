@@ -473,9 +473,13 @@ Four things I got wrong in this session, all the same shape:
 6. **`eval/validate/` and the five `eval/harness*/` sandboxes hold about 200MB of superseded
    experiment residue**, all gitignored. Safe to delete in principle, but the claim that every one is
    regenerable by a documented command has not been verified per directory.
-7. **`scripts/observe-loop.sh` and `scripts/agent-step.sh` are unreferenced by systemd, by code and
-   by any doc.** The first is a shell loop the systemd timer replaced; the second would hand findings
-   to a headless agent, which is not how the work is done. Both are candidates for deletion.
+7. **`scripts/agent-step.sh` is unused but deliberately kept.** It hands observer findings to a
+   headless OpenCode session behind the same gates a human turn gets, and doing that by hand is how
+   this work actually runs. Nothing references it, which is not the same as superseded - deleting a
+   working tool because nothing calls it today is how capability disappears quietly. It needs either
+   a caller or a note that it is a convenience, not a dead path. Its predecessor
+   `scripts/observe-loop.sh` was deleted on 2026-10-05: it was a `while true` loop whose own header
+   said to install `benthic-observe.timer` instead.
 
 ## Files worth reading first
 
