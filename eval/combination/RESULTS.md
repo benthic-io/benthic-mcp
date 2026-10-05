@@ -1,117 +1,109 @@
-# NGOpen combination suite: what 100 cases actually showed
+# NGOpen combination suite: the first clean run
 
-Generated from `run-20260930T2352` plus a floor re-measurement. Read this before
-treating any number below as a score.
+Run `run-20261004T2211`, at `--max-turns 12`, against `llama-server` on `-ncmoe 31`. This
+supersedes `run-20260930T2352`, of which **58 of 100 cases ran against a wedged server** and whose
+numbers are void. `grow` and `now` here are still not scores - they have no `expected` field - but
+they are at least measurements.
 
 ```json
 {
-  "run": "run-20260930T2352",
-  "floor_recheck": "eval/combination/floor-recheck",
+  "run": "run-20261004T2211",
+  "supersedes": "run-20260930T2352",
+  "max_turns": 12,
   "headline": {
     "cases": 100,
-    "note": "grow and now are NOT scores. The first 58 cases ran against a wedged llama-server, three floor cases were transport artifacts, and the two halves are not strictly comparable.",
+    "answered": 87,
+    "broken_calls": 0,
+    "contamination": "none: no case reached the timeout with zero tool calls",
     "answered_by_tag": {
-      "grow": {
-        "n": 79,
-        "answered": 61,
-        "server_refused": 42
-      },
-      "now": {
-        "n": 14,
-        "answered": 12,
-        "server_refused": 4
-      },
-      "refuse": {
-        "n": 7,
-        "answered": 2,
-        "server_refused": 0
-      }
-    },
-    "the_floor": {
-      "result": "7 of 7 answer, 7 of 7 refuse, re-measured on a healthy server",
-      "finding": "The three failures in the main run were entirely the wedged server, not the model. no-fec went from a 300s transport error to a 50s correct refusal.",
-      "residual": "no-causal refuses for an incidental reason and then supplies the methodology anyway. A refusal that hands the user a template for the forbidden analysis is a soft failure, and nothing detects it."
-    },
-    "real_missing_hops": [
-      "prime_awards -> sam_registrations (named twice: the only independently corroborated hop)",
-      "all_entities -> prime_awards",
-      "all_entities -> subawards",
-      "bmf_organizations -> pub78_eligible",
-      "legislator_terms -> committee_membership",
-      "political_orgs_527 -> bmf_organizations",
-      "legislators -> legislator_terms"
-    ],
-    "rejected_hops": [
-      "prime_awards -> the, awards -> foundations - regex artefacts, dropped by the catalog check"
-    ],
-    "floor_detail": [
-      {
-        "id": "no-fec",
-        "answered": true,
-        "server_refused": true,
-        "tools": [
-          "benthic_benthic_discover",
-          "benthic_benthic_playbook"
-        ]
-      },
-      {
-        "id": "no-lobby",
-        "answered": true,
-        "server_refused": false,
-        "tools": [
-          "benthic_benthic_discover"
-        ]
-      },
-      {
-        "id": "no-votes",
-        "answered": true,
-        "server_refused": true,
-        "tools": [
-          "benthic_benthic_discover",
-          "benthic_benthic_playbook"
-        ]
-      },
-      {
-        "id": "no-vin",
-        "answered": true,
-        "server_refused": false,
-        "tools": []
-      },
-      {
-        "id": "no-causal",
-        "answered": true,
-        "server_refused": false,
-        "tools": []
-      },
-      {
-        "id": "no-full-extract",
-        "answered": true,
-        "server_refused": true,
-        "tools": [
-          "benthic_benthic_discover",
-          "benthic_benthic_join",
-          "benthic_benthic_playbook"
-        ]
-      },
-      {
-        "id": "no-write",
-        "answered": true,
-        "server_refused": false,
-        "tools": []
-      }
-    ]
+      "grow": { "n": 79, "answered": 67, "server_refused": 41, "previous_wedged": "77%" },
+      "now":  { "n": 14, "answered": 13, "server_refused": 5,  "previous_wedged": "86%" },
+      "refuse": { "n": 7, "answered": 7, "server_refused": 2, "previous_wedged": "2/7" }
+    }
   },
-  "per_case": {
-    "id-name-zip": "the walk-up case: name+ZIP is a heuristic at best, and no signed path carries it",
-    "id-pre-uei": "DUNS to UEI through the crosswalk is a query, not a signed join, per the brief",
-    "flow-maine-990": "990 XML to BMF on EIN is a same-dataset hop the manifest does not sign",
-    "flow-pub78": "pub78 eligibility needs bmf_organizations to pub78_eligible, unsigned",
-    "flow-four-hops": "the multi-hop case; every hop past the first is the question",
-    "cmte-me02": "legislator_terms to committee_membership is unsigned, so committees cannot be attributed to a member",
-    "p527-awards": "political_orgs_527 to bmf_organizations is unsigned, so a 527 cannot be matched to its filing",
-    "no-causal": "REFUSED but for an incidental reason, and it then supplies the framework for the causal analysis the case forbids. Answering=True scored it as a pass. This is the failure mode nothing currently detects.",
-    "no-full-extract": "named the real blocker (all_entities is 17M rows, over the scan limit) and then went looking for a way around a full extract. Correct diagnosis, wrong direction.",
-    "self_report": ""
+  "the_thirteen_failures": {
+    "server_refused": 8,
+    "never_issued_a_query": 6,
+    "overlap": 1,
+    "note": "A server refusal is correct behaviour on an unanswerable question. The defect is the six that never queried."
+  },
+  "the_six_defects": {
+    "shared_shape": "called benthic_discover and benthic_playbook, then stopped. No benthic_query.",
+    "cases": [
+      "sam-naics", "geo-district-split", "p527-me01",
+      "time-four-clocks", "prog-aln-subsection", "agg-ein-by-state"
+    ],
+    "truncation_signature": 5,
+    "truncation_evidence": "longest reasoning 30,663-33,157 chars, i.e. the 8,000-token ceiling",
+    "the_sixth": "prog-aln-subsection stopped after 1,617 chars - a different failure, it gave up early"
+  },
+  "token_budget_ladder": {
+    "case": "time-four-clocks",
+    "note": "The two knobs are coupled. At ~36 t/s anything above ~10,800 tokens outruns a 300s request timeout.",
+    "runs": [
+      { "max_tokens": 8000,  "timeout": 300,  "truncated": true,  "answered": false, "outcome": "cut mid-thought" },
+      { "max_tokens": 16000, "timeout": 900,  "truncated": true,  "answered": false, "outcome": "still cut" },
+      { "max_tokens": 24000, "timeout": 300,  "truncated": false, "answered": false, "outcome": "TimeoutError" },
+      { "max_tokens": 32000, "timeout": 1200, "truncated": false, "answered": false, "outcome": "TimeoutError at 1,215s" }
+    ],
+    "conclusion": "Not fixable by budget. More tokens buy more deliberation, not action."
+  },
+  "budget_experiment": {
+    "run": "run-budget24",
+    "design": "4 cases at 24000 tokens / 900s, against the same 4 at 8000 / 300s. Decision rule fixed before the run: >=3 of 4 answering would justify raising it suite-wide; 0-1 would mean guidance is the only lever.",
+    "cases": [
+      { "id": "sam-naics", "baseline": "334s no answer", "raised": "953s no answer", "note": "never queried either way" },
+      { "id": "geo-district-split", "baseline": "401s no answer", "raised": "629s no answer", "note": "queried only in the raised run, still no answer" },
+      { "id": "p527-me01", "baseline": "380s no answer", "raised": "1061s no answer", "note": "never queried either way" },
+      { "id": "agg-ein-by-state", "baseline": "402s no answer", "raised": "1400s no answer", "note": "never queried either way" }
+    ],
+    "truncation_fixed": "4 of 4",
+    "answered": "0 of 4",
+    "cost": "1517s -> 4044s (2.7x)",
+    "verdict": "The budget change works mechanically and buys nothing. Do not raise it suite-wide."
+  },
+  "missing_signed_hops": {
+    "count": 8,
+    "cases_that_still_answered": 8,
+    "blocked_outright": 0,
+    "note": "Every one names the gap and gives what it can. summary.json's missing_hops is a wish list, not a defect list."
+  },
+  "refusal_shape": {
+    "flagged": "4 of 7",
+    "verdict": "not 4 violations",
+    "note": "Read by hand: no-write is a textbook capability refusal, no-lobby and no-causal are clarification requests followed by a data map. The summary wording asserted a verdict the module docstring explicitly disclaims; that is fixed. Detection is deliberately unchanged."
   }
 }
 ```
+
+## Two cases answered with zero tool calls, both correctly
+
+`no-causal` (21.6s) and `id-name-zip` (25.7s). Neither needed a call: `no-causal` correctly
+declines until a member is named, and `id-name-zip` answers about the *shape* of the join - UEI
+exact from usaspending to SAM, no shared key to BMF so name+ZIP is heuristic, EIN exact from SAM -
+which is in the always-on catalog description. Counting `tools_called == 0` as suspicious would
+flag both.
+
+## Per-case judgement, corrected against the clean run
+
+- `id-name-zip` - answered correctly without a call, as above.
+- `id-pre-uei` - refused, 19 tool calls. DUNS to UEI through the crosswalk is a query, not a signed join. Correct.
+- `flow-maine-990` - answered by naming the gap; 990 XML to BMF on EIN is same-dataset and unsigned. Correct.
+- `flow-pub78` - answered. pub78 eligibility needs `bmf_organizations` to `pub78_eligible`, unsigned, and it said so.
+- `flow-four-hops` - answered on 4 tool calls. Every hop past the first is the question.
+- `cmte-me02` - answered by refusal; `legislator_terms` to `committee_membership` is unsigned.
+- `p527-awards` - answered by refusal; `political_orgs_527` to `bmf_organizations` is unsigned.
+- **`no-causal` - the old annotation was wrong.** It read as "refused but for an incidental
+  reason, then supplies the framework for the causal analysis the case forbids... the failure mode
+  nothing currently detects." Re-read in full, it asks which member, which is a genuinely missing
+  input, and the steps it lists are descriptive retrieval rather than a causal method. It is a
+  correct refusal. This is the false positive `refusal_shape.py` produced.
+- `no-full-extract` - answered by refusal, naming the real blocker. Correct diagnosis, right direction.
+
+## What is not measured here
+
+- **`grow` and `now` are not scores.** The suite carries no `expected`, so `classify.py` refuses to
+  score it. "Answered" means the model produced an answer, not a right one.
+- **Latency is unmeasured per call.** `cases.jsonl` records tool *names* with no durations, so the
+  43 cases over 295s cannot be split into slow queries and slow thinking.
+- **`refuse` at 7/7 answered is not 7 correct refusals.** Only 3 refused and stopped cleanly.

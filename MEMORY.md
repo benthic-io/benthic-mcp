@@ -345,101 +345,111 @@ curl -s -X POST http://192.168.10.222:8081/tools ...
 The catalog cache has a 900s TTL and refreshes on its own. I confirmed 9 edges on disk
 while the live process still reported 6, and the two converged only after a restart.
 
-## llama-server wedges again, and it has a recognisable signature
+## llama-server ran out of VRAM; ncmoe 31 fixed it, and the fix is measurable
 
-Second confirmed instance (first was 2026-10-01, second 2026-10-04). The signature:
+Three wedges on 2026-10-01 and 2026-10-04, all identical, all fixed by a restart. Root cause
+found by the operator: **`-ncmoe 30` left too little VRAM.** Raised to **31**, and
+`--spec-draft-n-max` lowered 2 -> 1 at the same time.
 
-| check | state when wedged |
-|---|---|
-| `POST /v1/chat/completions`, 20 tokens | times out (35s+) |
-| `POST /completion`, 5 tokens | times out - it is not the chat template |
-| `GET /health` | `{"status":"ok"}` immediately |
-| `GET /props` | HTTP 200 in 0.7ms |
-| worker threads | `S` sleeping, 0% CPU - **not** busy |
-| `GET /slots` | empty |
-| journal | `stop: cancel task` every few minutes |
+**Measured creep, the falsifiable form of the claim:** 383 MiB free at 22:16, 333 MiB at 06:38
+eight hours later. **~6 MiB/hour**, so ~55 hours of margin. The prediction to hold me to: if a
+buildup ever exceeds ~400 MB it wedges again. `tick.sh` now logs VRAM every cycle from
+`/sys/class/drm/card*/device/mem_info_vram_{total,used}` because `/health` answers ok through a
+wedge and cannot see this coming.
 
-**So the HTTP layer is healthy and the inference backend is dead.** Metadata endpoints
-answering fast is what makes this confusing: `/health` returning ok while no generation
-completes looks like a client problem and is not one. The first time I spent hours
-convinced the catalog load path was broken instead.
+Facts that were wrong while I was diagnosing it, kept because they will mislead again if not:
 
-A restart fixes it (`systemctl --user restart llama-server`): 35s timeout -> 2.4s.
+- **This is an AMD box, ROCm gfx906, not CUDA.** `nvidia-smi` failing is expected, not a driver
+  fault. `rocm-smi` and `amd-smi` are both installed at `/usr/bin`. I called it "no GPU present"
+  and consequently claimed "GPU idle" having never measured GPU utilisation at all.
+- **The journal had 3,474,957 lines going back to 2026-08-06.** The claim that no stderr existed
+  at wedge time was false; every occurrence is recoverable, including `print_timing` per task.
+- **The lost-wakeup theory was wrong.** It fit the evidence I had and none of the rest.
+- Every wedge was pre-**admission**: zero `print_timing` lines during the entire wedged period.
+  That observation stands and is what pointed at the resource, not the queue.
 
-**Stop the observer sweep before restarting**, or it is mid-request. Its 300s per-case
-timeout means a wedged server shows up as *every probe timing out at exactly 300.0s with
-0 turns* - which looks like a model-quality result and is not. It produced a "39% pass
-rate" that was entirely a sick server.
+Five coredumps exist (SIGABRT), all from `TimeoutStopFailureMode=abort` during shutdown, not from
+crashes. `gdb` is not installed, so their thread backtraces are unread. If this ever needs
+reopening: `sudo dnf install gdb` then `coredumpctl debug <pid>`.
 
-**Before reading any probe number, check the timestamp.** If many cases sit at exactly
-300.0s with `turns=0`, the server was down and the number means nothing. Same trap as the
-token budget: when the instrument's limit binds, it measures the instrument.
+## Status at 2026-10-05, end of session 4
 
-## The recurring llama-server wedge: everything known, for planning after compaction
+**The combination suite finally ran clean: 87/100 answered.** The previous run's numbers were
+void - 58 of its 100 cases had run against a wedged server.
 
-**Three confirmed instances: 2026-10-01, 2026-10-04 (twice in one evening).** Always the
-same signature, always fixed by a restart, never explained.
+| tag | n | answered | previous (wedged) |
+|---|---|---|---|
+| grow | 79 | 67 (85%) | 77% |
+| now | 14 | 13 (93%) | 86% |
+| refuse | 7 | 7 | 2/7 |
 
-| probe | wedged state | healthy state |
+`broken_calls: 0` across all 100. One hallucinated relation (`usp_cl.d`, a truncation artifact).
+Run: `eval/combination/run-20261004T2211`, at `--max-turns 12`.
+
+**A third of the observer's recorded history was the server not answering.** `is_invalid()` in
+`findings.py` derives it (`no turns` and elapsed at the timeout) rather than reading a field,
+because 404 of the existing records predate the field. Effect on every rate ever reported:
+
+| | including outages | excluding |
 |---|---|---|
-| `POST /v1/chat/completions` 15-20 tokens | times out 35s+ | 2.4s |
-| `POST /completion` 5 tokens, no chat template | also times out | n/a |
-| `GET /health` | `{"status":"ok"}` immediately | same |
-| `GET /props` | HTTP 200 in 0.7ms | same |
-| `GET /slots` | empty | populated |
-| worker threads | `S` sleeping, **0% CPU** | busy during generation |
-| process CPU | reads ~109% but workers idle | - |
-| journal | `stop: cancel task` every few minutes | quiet |
-| memory | 43-56 GiB available - **not** pressure | same |
-| `systemctl --user restart llama-server` | fixes it in 2.4s | - |
+| overall | 47% | **72%** |
+| disc_qualified | 58% | 100% |
+| disc_typo | 57% | 100% |
 
-Facts established, so they need not be re-derived:
+`findings.py` now **refuses to write findings at all** (exit 2) when the newest cycle contains an
+invalid case, and `tick.sh` honours that instead of printing "survey written" regardless.
 
-- **The HTTP layer stays healthy while inference dies.** Metadata endpoints answering
-  fast is what makes this confusing; it reads as a client problem. It is not one.
-- **Not the chat template.** A bare `/completion` with 5 tokens also hangs.
-- **Not resource pressure.** Memory was 43-56 GiB free on every occurrence.
-- **Not load.** A wedged server shows 0% CPU on its workers - nothing is computing.
-- **Not a hung request.** The journal shows `cancel task` recurring, i.e. tasks *are*
-  being cancelled, which points at the slot or backend state rather than one stuck request.
-- **Uptime correlation is weak.** Instances occurred after ~13h and ~24h+ of uptime, but
-  the server has run long healthy periods too.
-- Upstream is a local GGUF (`Cyber-Tiel-Coder-35B-A3B-MTP-UD-Q4_K_XL.gguf`), `-np 2`,
-  524288 ctx, ~30 GB RSS.
+**The 13 failures are 8 correct refusals and 6 real defects (1 overlap).** The defect is a single
+behaviour: `sam-naics`, `geo-district-split`, `p527-me01`, `time-four-clocks`,
+`prog-aln-subsection`, `agg-ein-by-state` called only `discover` and `playbook` and never issued a
+single `query`. Five show reasoning blocks of 30,663-33,157 chars - the 8,000-token ceiling.
 
-What is **not** established, and is where a plan should start:
+**The token budget cannot be fixed by raising it.** Ladder on `time-four-clocks`:
+8,000/300s truncates, 16,000/900s still truncates, 24,000/300s `TimeoutError`, 32,000/1200s
+`TimeoutError` at 1,215s. The two knobs are coupled: at ~36 t/s, anything above ~10,800 tokens
+outruns a 300s request timeout.
 
-- Whether both slots leak, or one wedged slot blocks the other.
-- Whether `--parallel 2` with a large ctx is implicated.
-- Whether `cancel task` precedes or follows the wedge.
-- Whether any stderr from llama-server exists at wedge time - the journal only has
-  warnings. A reproduction that captures stderr is the obvious first step.
-- Whether the combination suite, the observer sweep, or ordinary web-UI traffic is
-  implicated; all three have driven it.
+Then tested properly on **four** cases (`run-budget24`), with the decision rule fixed before the
+run: >=3 of 4 answering would justify raising it suite-wide. Result: **truncation fixed in 4 of 4,
+answered in 0 of 4, at 2.7x the cost** (1,517s -> 4,044s). One case (`geo-district-split`) started
+querying and still did not answer. More tokens buy more deliberation, not action. `classify.py`
+keeps `--max-tokens` (default 8000) so the experiment is repeatable, but the suite default must
+stay at 8,000 - raising it is a 2.7x cost for zero gain.
 
-Reproduce cheaply: hammer a 15-token completion every 30s and log the elapsed time and
-`/slots`. A wedge is a 35s+ outlier; the restart is the recovery.
+Four things I got wrong in this session, all the same shape:
 
-## Status at 2026-10-04, end of session 3
-
-- `benthic-mcp` at `648cf00`, tree clean, **466 tests**, ruff and pyright clean.
-- Three services active. Observer budget raised to **12 turns** (`648cf00`), the change
-  that fixed `query_having_text`: **1/40 -> answered**, using all 12.
-- 9 signed edges live and verified; drift check green; `benthic-publish` populated.
-- Both district indexes landed valid and are in versioned ETL SQL with `ssd_1tb` pinning.
-- thunkah memory leak fixed: 8,888 processes and 2.7 GiB available -> 13 processes and
-  52-56 GiB. `--stateful` cut the leak 25x, plus a systemd reaper because supergateway's
-  own session cleanup never fires.
+1. **`length_cut` is not the main problem** - 23 cases hit it and 16 still answered (70% vs 92%).
+2. **The 8 missing signed hops block zero cases** - all 8 answered, naming the gap and giving what
+   they could. `missing_hops` in `summary.json` is a wish list, not a defect list.
+3. **`refusal_shape.py`'s 4-of-7 is not 4 violations.** Its docstring already documents that
+   refining the regex punishes the best refusals; only the *summary wording* asserted a verdict,
+   and that is now hedged. Detection deliberately unchanged.
+4. **34% of observer history was an outage**, which I had been reporting as model quality.
 
 ## Still open
 
-1. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
-2. **`migration_status: "migrated"` is now false**, not merely stale. The schema defines it as
-   "commit_hash fully reproduces the served data" and three live indexes sit outside version
-   control. Choosing `derived` vs `recovered` is a provenance claim and should be a human's call.
-3. Decide the four failing probes above.
-4. The observe timer is running again; production load measured zero for a whole sweep, so this is
-   no longer the constraint it was.
+1. **Six cases never issue a `query`, and a raised token budget does not fix it** (0 of 4 on
+   `run-budget24`). This is the single remaining behavioural defect and it is a *convergence*
+   problem: the model deliberates until it is cut off rather than deciding it cannot proceed.
+   `BASE_CORE` has six always-on rules and none says what to do when you cannot proceed - rule 2
+   says "never invent a join" but not "and if no signed path exists, stop and report". Adding one
+   is not free: `_MAX_CORE_LINES = 9`, and the cap leaves room for "exactly one further rule that
+   earned its place by measurement". It needs a contract and a measurement, and per playbook.py's
+   own note, twelve grounded lessons were once measured as worth no more than one hand-written
+   rule - so grounding a true statement is not evidence that it changes behaviour.
+2. **`classify.py` records tool names with no per-call durations**, so I cannot tell a slow query
+   from slow thinking. 43 of 100 cases exceeded 295s and that gap is still unmeasured.
+3. **`migration_status: "migrated"` is now false**, not merely stale - three live indexes sit
+   outside version control. `derived` vs `recovered` is a provenance claim and should be a human's
+   call.
+4. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
+5. **Five files are modified and uncommitted**: the observer invalid-case guard (4 files) and the
+   `classify.py --max-tokens` flag. No commit has been made; per AGENTS.md that needs explicit
+   approval and the message is the user's to write.
+6. **The observe timer is stopped**, deliberately, so the suite had uncontended model slots. Restore
+   it when the manual runs are done.
+7. `eval/run_eval.py:686` does `questions["metadata"]` and the questions file has no such key, so
+   the canary dies with `KeyError` when it runs. `tick.sh` never invokes it, so this looks vestigial.
 
 ## Files worth reading first
 
