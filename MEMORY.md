@@ -112,6 +112,17 @@ removed from the history. All 62 commits were rewritten on 2026-09-30
 (`filter-branch --msg-filter`) and force-pushed; HEAD moved `d9a4691` -> `311f66f`.
 Verified by cloning from GitHub and grepping the fresh clone: 0 matches.
 
+It happened again, so this is twice, not once. On 2026-10-05 eleven commits were
+found carrying `Co-Authored-By: none` - written after the first scrub, by the same
+work that added this rule. Rewritten with the same operation and one force-push
+(`f15ed71` -> `98faf2f`, 79 commits). Verified by fresh clone: 0 anchored trailer
+lines.
+
+The lesson is not about the wording. A rule written down is not a rule followed,
+because the check has to be mechanical: the commit stating the rule was written by
+the same hand that broke it eleven times. Verify with a clone and a grep, never by
+reading the message you have just written.
+
 Write commit messages as the operator's work, plainly, and attribute nothing to a
 tool. The llama.cpp AGENTS.md rules against writing commit messages apply here by the
 operator's own instruction - `mcp-tools` is not llama.cpp, but the habit carried over
