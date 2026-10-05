@@ -132,7 +132,12 @@ def main() -> int:
             print(f"      {finding.span[:260]}")
 
     print()
-    print(f"  {flagged} of {len(rows)} refuse cases refused and then offered the method anyway")
+    print(
+        f"  {flagged} of {len(rows)} contain both a refusal and a commitment to fetch. "
+        "That is a flag for a reader, not a verdict: whether the promised work is the "
+        "refused work is a judgement, and the two differ on cases that are lexically "
+        "identical. See the module docstring."
+    )
     return 0
 
 
