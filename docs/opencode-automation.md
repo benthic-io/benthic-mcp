@@ -1,8 +1,9 @@
 # Driving an OpenCode agent from a shell timer
 
-Verified against the running server and the installed CLI (`opencode v2.0.20`), not from
+Verified against the running server and the installed CLI (`opencode v2.0.22`), not from
 documentation alone. Source of truth is <https://opencode.ai/v2/docs/>; where behaviour was
-confirmed only by running it, that is said.
+confirmed only by running it, that is said. Re-check the version with `opencode --version`
+before trusting the commands, since this file ages faster than the rest.
 
 ## The four things that matter
 

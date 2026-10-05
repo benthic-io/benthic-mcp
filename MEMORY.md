@@ -7,26 +7,38 @@ self-improving guidance loop was the original goal. The evidence says that speci
 what replaced it is below. The mechanism that does work is contracts plus a reviewer, plus an
 observer that watches real use and turns recurring stumbles into standing guidance.
 
-## Current state (2026-09-30, end of session 2)
+## The deployment
 
-**Repo** `github.com/benthic-io/benthic-mcp`, public, MIT. HEAD `a1882c5`, CI green, **460 tests**.
+Durable facts about where this runs. Volatile numbers deliberately left out; the current ones are in
+the status section near the end.
+
+**Repo** `github.com/benthic-io/benthic-mcp`, public, MIT, CI green.
 
 **Running on 192.168.10.222**, all under systemd user units:
-- `llama-server.service` - 8081, `-np 2`, spawns the MCP as a **stdio child**; restart it to make
-  the chat path pick up new code
+
+- `llama-server.service` - 8081, `-np 2`, spawns the MCP as a **stdio child**; restart it to make the
+  chat path pick up new code. This is an AMD box on ROCm gfx906, so `nvidia-smi` is not the tool -
+  `rocm-smi` and `amd-smi` are.
 - `benthic-mcp.service` - 8082 HTTP
-- `benthic-observe.timer` - one observation cycle every 30 min, `Type=oneshot` + `OnUnitInactiveSec`
+- `benthic-observe.timer` - one cycle every 30 min, `Type=oneshot` + `OnUnitInactiveSec`
 
-MCP config `~/.config/llama.cpp/mcp-servers.json`; env `~/.config/benthic-mcp/env`.
+MCP config `~/.config/llama.cpp/mcp-servers.json`; env `~/.config/benthic-mcp/env`; audit output
+`$BENTHIC_AUDIT_DIR`, default `/tmp/opencode/audit`.
 
-**Scripts:** `scripts/deploy.sh` (push-target-independent deploy: daemon-reload, restart both
-services, health check, canary, roll back on red), `scripts/tick.sh` (one observe cycle, with a
-`flock`), `scripts/observe-once.sh` (what the timer runs).
+**The observation chain, which is the part worth knowing:** `benthic-observe.timer` runs
+`scripts/observe-once.sh`, which calls `scripts/tick.sh --probe`, which runs the contracts, then
+`eval/observer/sweep.py`, then `eval/observer/findings.py`. `observe-once.sh` exists so the systemd
+timer is the scheduler; `tick.sh` is the cycle itself. Neither is redundant and neither is called from
+the other directly by systemd.
 
-**Observer:** `eval/observer/sweep.py` drives probes through the same loop the web UI implements
-and records every turn **including reasoning**. `eval/observer/findings.py` reads the **server's own
-refusals** - not the model's prose - pairs each refused call with its error, and checks every
-identifier against the live signed manifest. 146 recorded case-runs over 11 cycles.
+**Deploy** is `scripts/deploy.sh`, invoked by hand: daemon-reload, restart both services, health
+check, canary via `eval/run_eval.py --questions eval/canary/questions.json`, roll back on red.
+
+**Observer:** `eval/observer/sweep.py` drives probes through the same loop the web UI implements and
+records every turn **including reasoning**. `eval/observer/findings.py` reads the **server's own
+refusals** - not the model's prose - pairs each refused call with its error, checks every identifier
+against the live signed manifest, and refuses to write findings at all if the newest cycle contains a
+case the server never answered.
 
 ## Resuming an agent automatically
 
@@ -454,13 +466,16 @@ Four things I got wrong in this session, all the same shape:
    outside version control. `derived` vs `recovered` is a provenance claim and should be a human's
    call.
 4. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
-5. **Five files are modified and uncommitted**: the observer invalid-case guard (4 files) and the
-   `classify.py --max-tokens` flag. No commit has been made; per AGENTS.md that needs explicit
-   approval and the message is the user's to write.
-6. **The observe timer is stopped**, deliberately, so the suite had uncontended model slots. Restore
-   it when the manual runs are done.
-7. `eval/run_eval.py:686` does `questions["metadata"]` and the questions file has no such key, so
-   the canary dies with `KeyError` when it runs. `tick.sh` never invokes it, so this looks vestigial.
+5. **The `README.md` still documents the pre-observer generation.** It is 306 lines last touched
+   2026-09-29, and it mentions `observer`, `tick.sh` and `combination` zero times each, while
+   describing `harness.py`, `guard.py` and `attrib.py` as the workflow. The observer and the
+   combination suite are what actually run now.
+6. **`eval/validate/` and the five `eval/harness*/` sandboxes hold about 200MB of superseded
+   experiment residue**, all gitignored. Safe to delete in principle, but the claim that every one is
+   regenerable by a documented command has not been verified per directory.
+7. **`scripts/observe-loop.sh` and `scripts/agent-step.sh` are unreferenced by systemd, by code and
+   by any doc.** The first is a shell loop the systemd timer replaced; the second would hand findings
+   to a headless agent, which is not how the work is done. Both are candidates for deletion.
 
 ## Files worth reading first
 
