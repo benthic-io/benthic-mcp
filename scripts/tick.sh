@@ -83,6 +83,17 @@ if [[ "${MCP_TOOLS:-0}" -lt 6 ]]; then
 fi
 say "preconditions ok (${MCP_TOOLS} tools)"
 
+# 2b. VRAM. The recorded cause of the recurring wedge was running out of it, and it is invisible to a
+#     health check: /health answered ok through every occurrence while generation was dead. Only the
+#     memory number shows it coming, so it goes in the log whether or not probes run.
+VRAM_TOTAL=$(cat /sys/class/drm/card*/device/mem_info_vram_total 2>/dev/null | head -1)
+VRAM_USED=$(cat /sys/class/drm/card*/device/mem_info_vram_used 2>/dev/null | head -1)
+if [[ -n "${VRAM_TOTAL:-}" && -n "${VRAM_USED:-}" ]]; then
+  say "vram $((VRAM_USED / 1024 / 1024))/$((VRAM_TOTAL / 1024 / 1024)) MiB used"
+else
+  say "vram unknown (no amdgpu sysfs)"
+fi
+
 # 3. Contracts. Cheap, deterministic, no model. Red here means do not go further.
 if ! .venv/bin/python -m pytest -m "not live" -q >"$AUDIT/contracts.txt" 2>&1; then
   say "CONTRACTS RED - see $AUDIT/contracts.txt"
@@ -114,10 +125,15 @@ else
   say "probe sweep skipped (pass --probe to run one)"
 fi
 
-# 5. Survey. Reads the server's own refusals rather than the model's prose.
-.venv/bin/python eval/observer/findings.py \
+# 5. Survey. Reads the server's own refusals rather than the model's prose. It exits non-zero when the
+#    newest cycle contains cases the server never answered, and that has to be honoured: printing
+#    "survey written" regardless is how a dead server becomes a quality result.
+if ! .venv/bin/python eval/observer/findings.py \
     --records "$RECORDS"/*.jsonl \
-    --out "$OBS/findings.json" >>"$LOG" 2>&1
+    --out "$OBS/findings.json" >>"$LOG" 2>&1; then
+  say "SURVEY REFUSED - see $LOG. Not writing findings."
+  exit 69
+fi
 say "survey written to $OBS/findings.json"
 
 # 6. Baseline diff. Only a NEW signature is worth an agent's attention; a known one is not news,

@@ -159,6 +159,8 @@ def run_probe(probe: dict, max_turns: int, timeout: float, temperature: float) -
                 }
             )
 
+    elapsed = time.monotonic() - started
+
     return {
         "id": probe.get("id", question[:40]),
         "cluster": probe.get("cluster", "unclassified"),
@@ -168,7 +170,11 @@ def run_probe(probe: dict, max_turns: int, timeout: float, temperature: float) -
         "answered": bool(turns and turns[-1]["tool_calls"] == [] and turns[-1]["content"].strip()),
         "exhausted_turns": len(turns) >= max_turns and bool(turns and turns[-1]["tool_calls"]),
         "errors": errors,
-        "elapsed_s": round(time.monotonic() - started, 1),
+        "elapsed_s": round(elapsed, 1),
+        # A case the server never answered is neither a pass nor a model failure. Scoring it as a
+        # failure turns an outage into a quality signal: a wedged llama-server produced a 39% pass
+        # rate that was entirely an artifact, because every case sat at the timeout with no turns.
+        "invalid": not turns and elapsed >= timeout * 0.95,
         "tool_call_count": sum(len(t["tool_calls"]) for t in turns),
         "final_text": turns[-1]["content"] if turns and not turns[-1]["tool_calls"] else "",
         "final_reasoning": turns[-1].get("reasoning", "") if turns else "",

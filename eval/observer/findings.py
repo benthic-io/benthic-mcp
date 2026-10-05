@@ -62,6 +62,23 @@ def load_records(paths: list[Path]) -> list[dict[str, Any]]:
     return records
 
 
+def is_invalid(record: dict[str, Any]) -> bool:
+    """True when the server never answered this case.
+
+    Derived rather than trusted, because most records predate the field: a case with no turns that ran
+    to the tool timeout is an outage whatever the file says. The explicit flag wins when present so a
+    future change to the rule is not silently overridden by this fallback.
+    """
+    if "invalid" in record:
+        return bool(record["invalid"])
+    elapsed = record.get("elapsed_s")
+    try:
+        elapsed = float(elapsed) if elapsed is not None else 0.0
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    return not record.get("turns") and elapsed >= 285.0
+
+
 def identifiers_in(error_text: str) -> list[tuple[str, str]]:
     """(kind, identifier) pairs a refusal is complaining about."""
     found: list[tuple[str, str]] = []
@@ -166,17 +183,37 @@ def main() -> int:
         print(f"no records in {[str(p) for p in paths]}")
         return 1
 
+    # The newest cycle is the one an agent will act on. If the server did not answer during it, its
+    # numbers are not a measurement of the model, so refuse to write findings at all. A cycle that
+    # never ran and a cycle that ran badly look identical downstream otherwise, and that ambiguity is
+    # how a wedged server was reported as a 39% pass rate.
+    newest = max((p for p in paths if p.is_file()), key=lambda p: p.stat().st_mtime, default=None)
+    newest_records = load_records([newest]) if newest else []
+    stale = [r for r in newest_records if is_invalid(r)]
+    if stale:
+        print(
+            f"REFUSING: {len(stale)}/{len(newest_records)} cases in the newest cycle "
+            f"({newest.name if newest else '?'}) got no answer from the server: "
+            f"{', '.join(sorted({str(r.get('id')) for r in stale}))}"
+        )
+        print("That is an outage, not a model result. Not writing findings.")
+        return 2
+
     found = survey(records)
     verdicts = check(asyncio.run(signed_catalog()), found["hallucinated"])
     report = {
         "records_read": len(records),
+        # Kept separate from answered rather than folded into it: a case the server never answered is
+        # not a failure, and any rate computed over these counts has to exclude them.
+        "invalid_total": sum(1 for r in records if is_invalid(r)),
         "per_probe": {
             probe: {
                 "answered": sum(1 for r in records if r.get("id") == probe and r.get("answered")),
                 "run": sum(1 for r in records if r.get("id") == probe),
                 "turn_exhausted": sum(1 for r in records if r.get("id") == probe and r.get("exhausted_turns")),
+                "invalid": sum(1 for r in records if r.get("id") == probe and is_invalid(r)),
             }
-            for probe in sorted({r.get("id") for r in records if r.get("id")})
+            for probe in sorted({str(r["id"]) for r in records if r.get("id")})
         },
         "hallucinated_identifiers": verdicts["absent"],
         "identifiers_that_exist_elsewhere": verdicts["present_elsewhere"],
@@ -192,6 +229,11 @@ def main() -> int:
     out.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     print(f"records {len(records)}")
+    if report["invalid_total"]:
+        print(
+            f"  INVALID (server never answered, excluded from every rate): "
+            f"{report['invalid_total']}"
+        )
     print(f"\nHALLUCINATED IDENTIFIERS ({len(report['hallucinated_identifiers'])}):")
     for item in report["hallucinated_identifiers"][:14]:
         if item["times"] >= args.min_seen:
