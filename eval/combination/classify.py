@@ -197,7 +197,7 @@ def _plausible_hop(hop: str | None) -> str | None:
     return None
 
 
-def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, timeout: float) -> dict[str, Any]:
+def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, timeout: float, max_tokens: int) -> dict[str, Any]:
     """Drive one question the way the web UI does: the model emits tool_calls and stops."""
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     turns: list[dict[str, Any]] = []
@@ -218,8 +218,10 @@ def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, tim
                     # The model reasons before it answers, and a turn that exhausts this
                     # budget mid tool-call is indistinguishable from a refusal. Measured:
                     # one probe spent 4,000 tokens on deliberation and was cut inside a
-                    # tool call that never reached the server.
-                    "max_tokens": 8000,
+                    # tool call that never reached the server. Then at 8,000: every hard case
+                    # ended on a reasoning block of ~32,500 characters, which is 8,000 tokens,
+                    # so the model was cut mid-thought and never emitted a tool call at all.
+                    "max_tokens": max_tokens,
                     "temperature": 0.0,
                     "top_p": 0.95,
                 },
@@ -319,6 +321,7 @@ def main() -> int:
     parser.add_argument("--only", help="comma-separated ids or tags to run")
     parser.add_argument("--tags", help="comma-separated tags to restrict to")
     parser.add_argument("--max-turns", type=int, default=6)
+    parser.add_argument("--max-tokens", type=int, default=8000)
     parser.add_argument("--timeout", type=float, default=300)
     parser.add_argument(
         "--resume",
@@ -379,7 +382,7 @@ def main() -> int:
     total = len(cases)
     for index, case in enumerate(cases, 1):
         started = time.monotonic()
-        result = run_case(case["question"], tool_list, args.max_turns, args.timeout)
+        result = run_case(case["question"], tool_list, args.max_turns, args.timeout, args.max_tokens)
         row = {
             "id": case.get("id"),
             "tag": case.get("tag"),
