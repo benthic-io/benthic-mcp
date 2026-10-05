@@ -344,7 +344,8 @@ that can see a distributed effect. It never touches the holdout, refuses a quest
 split, and reports the comparison as unreadable if one arm ran more than twice as slowly, because a
 wedged `llama-server` shows up as minutes-long runs rather than as cases that flip. One case cannot
 carry a verdict at this suite size, so `--min-delta` defaults to 2, and `--record` is what lets a
-passing verdict reach the core through `eval/core-evidence.json`.
+passing verdict reach the core through the evidence file that `attribute_suite.py --output`
+writes and `consolidate.py --core-evidence` reads.
 
 ## The scorer could not see the one real bug in the server
 
