@@ -103,6 +103,26 @@ the aggregate-free relations the model was never told about: `mv_district_spendi
 
 ## False greens: the recurring failure mode
 
+**A gate that stops at lint is not a gate.** Five commits went red on `main` at CI's format step
+while I reported "gates green" after every one. The local sequence was `ruff check`, and `E501` is in
+`per-file-ignores` for `eval/*.py`, so lint passes over a 129-character signature that `ruff format`
+then wraps. The violation entered at `6d7fd47`.
+
+CI runs, in this order, and all four are required:
+
+```sh
+uv run ruff check .
+uv run ruff format --check .     # the one that was missing
+uv run pyright
+uv run pytest -m "not live" -q
+```
+
+Note that pyright here covers `src` and `tests` only, per `[tool.pyright] include` - not `eval/`.
+Widen it deliberately if you want eval type-checked, but do not assume CI is checking it.
+
+The same failure has a longer history here, all of it an instrument reporting on something other than
+what was asked:
+
 Seven cases of an instrument reporting success while measuring nothing:
 - 6 contracts arrived violated and were silently green
 - the scorer checked the route, not the result; 55 stored runs rescored red
