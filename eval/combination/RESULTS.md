@@ -2,8 +2,9 @@
 
 Run `run-20261004T2211`, at `--max-turns 12`, against `llama-server` on `-ncmoe 31`. This
 supersedes `run-20260930T2352`, of which **58 of 100 cases ran against a wedged server** and whose
-numbers are void. `grow` and `now` here are still not scores - they have no `expected` field - but
-they are at least measurements.
+numbers are void; that run's transcripts have since been deleted as superseded, and the record of
+what it showed is the paragraph above. `grow` and `now` here are still not scores - they have no
+`expected` field - but they are at least measurements.
 
 ```json
 {
