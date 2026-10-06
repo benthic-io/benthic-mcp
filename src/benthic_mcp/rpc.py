@@ -73,6 +73,15 @@ def rpc_argument_reference() -> str:
     return "; ".join(describe(operation) for operation in RPC_DEFINITIONS)
 
 
+def rpc_operation_reference() -> str:
+    """Compact operation -> what-it-answers reference, injected into the benthic_rpc description.
+
+    The arguments alone do not tell a caller which question an operation answers. Without this the
+    model has to call each one to find out, and each call is a turn.
+    """
+    return "\n".join(f"{operation.value}: {definition.summary}" for operation, definition in RPC_DEFINITIONS.items())
+
+
 class RpcService:
     def __init__(self, settings: Settings, client: httpx.AsyncClient) -> None:
         self.settings = settings
