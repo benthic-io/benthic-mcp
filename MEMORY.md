@@ -480,6 +480,13 @@ measured before being corrected - 97 records, 29MB, 7 days - and the comment now
 repopulates a path rather than reproducing what is in it. Two contracts in
 `tests/test_loop_invariants.py` hold the rules; the first was checked to fail with `grok/` unignored.
 
+Quantified by running `findings.py` both ways: dropping 4 of the 97 files moved `invalid_total` from
+404 to 360 and the denominator on 11 of 18 probes, flattering every rate it touched. Those 4 are
+ranks 2, 3, 4 and 5 by size - the smallest records in the set - and each holds 11 cases of which
+**all 11 are invalid**, because they are cycles where the server answered nobody. **The tidiest-looking
+files are the ones carrying the evidence that the server used to fail**, so size is inversely related to
+what is worth keeping here and any "delete the small stale files" sweep starts by deleting the evidence.
+
 **Slow cases are slow thinking, not slow server.** `classify.py` now records per-call timings and a
 run-level split. On `time-health`: 458.7s total, **30.9s in tools (6.4%), 427.8s in the model (93.6%)**,
 slowest single call 30.2s, four of six calls returned in 0.08s. So server latency is not where the
