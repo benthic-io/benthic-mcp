@@ -230,10 +230,7 @@ def main() -> int:
 
     print(f"records {len(records)}")
     if report["invalid_total"]:
-        print(
-            f"  INVALID (server never answered, excluded from every rate): "
-            f"{report['invalid_total']}"
-        )
+        print(f"  INVALID (server never answered, excluded from every rate): {report['invalid_total']}")
     print(f"\nHALLUCINATED IDENTIFIERS ({len(report['hallucinated_identifiers'])}):")
     for item in report["hallucinated_identifiers"][:14]:
         if item["times"] >= args.min_seen:
