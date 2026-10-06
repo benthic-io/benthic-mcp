@@ -147,8 +147,16 @@ def run_probe(probe: dict, max_turns: int, timeout: float, temperature: float) -
                 )
                 continue
             result = call_tool(function["name"], arguments, timeout)
+            # The arguments are kept because the result alone cannot answer what was asked. A trace
+            # that records only the response cannot tell a repeated benthic_discover from the model
+            # escalating to detail=full, and those are opposite findings about the same behaviour.
             record.setdefault("tool_results", []).append(
-                {"name": function["name"], "ok": result["ok"], "text": result["text"][:6000]}
+                {
+                    "name": function["name"],
+                    "args": dict(list(arguments.items())[:12]),
+                    "ok": result["ok"],
+                    "text": result["text"][:6000],
+                }
             )
             messages.append(
                 {

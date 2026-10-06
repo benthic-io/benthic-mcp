@@ -165,6 +165,25 @@ def test_rpc_description_says_what_each_operation_returns() -> None:
         assert definition.summary in description, f"{operation.value} does not say what it returns"
 
 
+def test_discover_says_that_detail_full_answers_for_one_relation() -> None:
+    """detail='full' forces limit=1, so the description must not imply it widens the first call.
+
+    The description told the model to "ask again for more columns ... by passing detail='full'"
+    after seeing six relations with columns_truncated set. Passing it returns the single best match,
+    so full columns for those six cost six calls, and nothing in the reply says so. The narrowing is
+    deliberate - catalog.py refuses the widened form because it once made the model retry the same
+    call - so the description has to carry the consequence.
+    """
+    tool = server_module.mcp._tool_manager.get_tool("benthic_discover")
+    assert tool is not None
+    description = tool.description or ""
+    assert "detail='full'" in description, "the parameter is no longer mentioned at all"
+    assert "one relation" in description, (
+        "the description does not say that detail='full' answers for a single relation, so following "
+        "it looks like one extra call and costs one call per relation"
+    )
+
+
 @pytest.mark.asyncio
 async def test_lists_expected_tools(catalog: Catalog, settings: Settings) -> None:
     server_module._service = FakeService(catalog, settings)
