@@ -21,6 +21,7 @@ from benthic_mcp.models import (
     RpcResult,
 )
 from benthic_mcp.playbook import VerifyReport
+from benthic_mcp.rpc import RPC_DEFINITIONS
 from benthic_mcp.service import BenthicService, PlaybookRuntime
 from benthic_mcp.trace import LessonStore, TraceStore
 
@@ -134,6 +135,34 @@ def test_query_and_join_pointers_are_injected(catalog: Catalog, settings: Settin
     finally:
         server_module._service = None
         server_module._applied.clear()
+
+
+def test_every_tool_carries_its_own_description() -> None:
+    """No tool may reach the calling model with nothing in its description.
+
+    benthic_rpc was registered with an f-string as the first statement of its body. Python only
+    promotes a constant string literal to __doc__, so the f-string was evaluated and discarded at
+    import and the tool went out with a zero-length description while the other five carried
+    499 to 899 characters. Asserting it per tool meant nobody noticed; this asserts the shape.
+    """
+    tools = server_module.mcp._tool_manager.list_tools()
+    assert tools, "no tools registered"
+    empty = [tool.name for tool in tools if not (tool.description or "").strip()]
+    assert not empty, f"registered with no description: {empty}"
+
+
+def test_rpc_description_says_what_each_operation_returns() -> None:
+    """The three operations answer different questions, so the description has to say which is which.
+
+    Without it the model cannot tell a district lookup from a bounding-box sweep from a nearby
+    nonprofit search, and spends a turn finding out.
+    """
+    tool = server_module.mcp._tool_manager.get_tool("benthic_rpc")
+    assert tool is not None
+    description = tool.description or ""
+    for operation, definition in RPC_DEFINITIONS.items():
+        assert operation.value in description, f"{operation.value} is not named"
+        assert definition.summary in description, f"{operation.value} does not say what it returns"
 
 
 @pytest.mark.asyncio

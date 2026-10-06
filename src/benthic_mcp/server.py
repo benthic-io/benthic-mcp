@@ -37,11 +37,23 @@ from benthic_mcp.models import (
 )
 from benthic_mcp.playbook import BASE_CORE
 from benthic_mcp.query import build_single_join, build_single_query, unqualify_result
-from benthic_mcp.rpc import RpcOperation, rpc_argument_reference
+from benthic_mcp.rpc import RpcOperation, rpc_argument_reference, rpc_operation_reference
 from benthic_mcp.service import BenthicService
 from benthic_mcp.trace import TraceEntry
 
 _operations = rpc_argument_reference()
+
+# Built here rather than written as the tool's docstring because that was an f-string, and Python
+# only promotes a constant string literal to __doc__. The f-string was evaluated and discarded at
+# import, so benthic_rpc went out to the calling model with a zero-length description while the
+# other five tools carried theirs. mcp.tool takes an explicit description, which cannot be lost.
+_RPC_DESCRIPTION = (
+    "Run one allowlisted read-only spatial operation. Each returns rows, a row_count, a truncated "
+    "flag, and any scope warning. The rows are the whole answer; do not infer a location's identity "
+    "beyond what they state.\n\n"
+    f"Arguments: {_operations}\n"
+    f"{rpc_operation_reference()}"
+)
 
 _service: BenthicService | None = None
 _service_lock = asyncio.Lock()
@@ -430,7 +442,7 @@ async def join(
         raise ToolError(str(exc)) from exc
 
 
-@mcp.tool(name="benthic_rpc", annotations=READ_ONLY)
+@mcp.tool(name="benthic_rpc", annotations=READ_ONLY, description=_RPC_DESCRIPTION)
 @_traced
 async def rpc(
     operation: RpcOperation,
@@ -443,11 +455,7 @@ async def rpc(
     max_lon: float | None = None,
     radius_meters: int | None = None,
 ) -> RpcResult:
-    f"""Run an allowlisted read-only spatial operation exposed by this server.
-
-    Operations and their arguments: {_operations}. Use the returned row count, truncation flag, and
-    scope warning. Do not infer geographic identity beyond the returned evidence.
-    """
+    """Spatial RPC dispatch. The description the model reads is built in _RPC_DESCRIPTION."""
     try:
         arguments = {
             "lat": lat,
