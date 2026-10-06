@@ -250,8 +250,10 @@ async def discover(
     benthic_query calls; never invent a join.
 
     One call is normally enough: it returns the best relations together with their columns, and
-    columns_truncated says when that list is partial. Ask again for more columns only when
-    columns_truncated is true, by passing detail='full'. A wrong column guess is recoverable rather
+    columns_truncated says when that list is partial. detail='full' answers for one relation, so
+    pass relation=<name> (and dataset if the name is not unique) to get that relation's complete
+    column list; without relation it returns only the best match, and getting every relation you
+    were shown means one call per relation. A wrong column guess is recoverable rather
     than fatal, because benthic_query reports the near-miss signed name.
     """
     try:
