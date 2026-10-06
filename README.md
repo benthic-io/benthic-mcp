@@ -4,14 +4,16 @@ A read-only [MCP](https://modelcontextprotocol.io) server over signed [Benthic D
 Provenance](https://benthic.io/bdp/) datasets, plus the evaluation harness that measures whether the
 playbook it serves actually improves an agent's answers.
 
-The server exposes four tools:
+The server exposes six tools:
 
 | tool | what it does |
 | --- | --- |
 | `benthic_discover` | finds the smallest relevant signed relation, its columns, and its join paths |
+| `benthic_playbook` | returns dataset access conventions, or the signed route between two relations |
 | `benthic_query` | runs a bounded single-relation query with compact filter, aggregate, and `having` expressions |
 | `benthic_join` | runs a multi-relation plan using only signed BDP join paths |
 | `benthic_rpc` | runs three allowlisted spatial RPCs |
+| `benthic_report` | records one mistake and its correction, held pending until verified and A/B measured |
 
 Plain-language questions are interpreted by the calling chat model, which turns a question into compact
 tool arguments. This service validates and executes those arguments without embedding a model of its
@@ -188,7 +190,7 @@ contracts plus a reviewer.
 # Tier 1, the gate: six cases, one per signed join path, 184s/rep
 uv run python eval/run_eval.py --questions eval/canary/questions.json --reps 3
 
-# Tier 2, report only: the full 33, 778s/rep. Measures turn discipline more than server correctness
+# Tier 2, report only: the full 30 cases. Measures turn discipline more than server correctness
 uv run python eval/run_eval.py                       # run it
 uv run python eval/generate_cases.py                 # rebuild it from the signed catalog
 uv run python eval/run_eval.py --case-filter multi_step --reps 5
@@ -201,9 +203,10 @@ so the evaluator does not depend on the MCP query implementation it is scoring.
 Four hand-verified cases in `eval/golden/questions.json` must pass with the seed playbook alone. They
 are a check on the harness, the scorer, and the tool surface, so a failure there is a bug rather than a
 result. `tests/test_golden.py` re-checks their expected values against the signed catalog, so a catalog
-change cannot leave the suite quietly stale. Run it at `--max-turns 6`, not the 5 the generated suite
-uses: one case needs six to test what it is for and was failing about one run in five at five, which is
-a tripwire firing on a capability it is not watching. At six it is 12/12.
+change cannot leave the suite quietly stale. They used to need `--max-turns 6` while the generated
+suite ran at 5, because one case was failing about one run in five at five - a tripwire firing on a
+capability it was not watching. The generated suite now defaults to 6 as well, so the special case is
+gone; pass `--max-turns` explicitly if you are comparing against an older run.
 
 Long runs belong in tmux so they can be watched:
 
@@ -221,6 +224,61 @@ uv run python eval/attrib.py --lesson-id <id> --case <case-id> --playbook eval/h
 # Does this rule earn a place in the always-on core? Two full runs of the tuning split.
 uv run python eval/attribute_suite.py --rule "Never end the turn without a final answer." --reps 1
 ```
+
+### Observation, which is the primary instrument
+
+The suites above score against expected values. What follows does not, and it is what actually shows
+whether the model can use the tools, because it records the model's own behaviour rather than a
+verdict about it.
+
+`benthic-observe.timer` runs `scripts/observe-once.sh` every 30 minutes, which calls
+`scripts/tick.sh --probe`. One cycle refuses to run at all if `src/` is dirty, if 8081 is unhealthy,
+if fewer than six MCP tools are registered, or if the repository toplevel is one whose guidelines
+forbid autonomous agents. Then it runs the contracts, probes, and surveys.
+
+```sh
+# One cycle by hand. The timer runs exactly this.
+scripts/tick.sh --probe
+
+# The probe set is eval/observer/probes/core.json; sweep.py records every turn including reasoning.
+uv run python eval/observer/sweep.py \
+  --probes eval/observer/probes/core.json \
+  --record eval/observer/records/manual.jsonl \
+  --max-turns 12
+
+# Reads the server's own refusal text, not the model's prose.
+uv run python eval/observer/findings.py --records eval/observer/records/*.jsonl
+```
+
+The cycle observes and reports. It never edits code or guidance, because deciding whether a failure is
+the server's fault or the model's is judgement, and an unattended loop that guesses at causes
+manufactures false greens at a rate no review catches.
+
+One guard is worth knowing about. A case that got no answer from the server at all - no turns, elapsed
+at the tool timeout - is an outage, not a model failure, and it is recorded as `invalid` rather than as
+a failure. `findings.py` refuses to write findings at all if the newest cycle contains one. Without
+that, a server that stopped answering generation still served `/health` and `/props`, and the cycle
+reported the outage as a pass rate: across this repository's recorded history, 404 of 1,176 cases were
+server outages, which moved the overall rate from 47% to 72%.
+
+### The combination suite
+
+`eval/combination/` runs 100 real multi-hop questions against the live model, written by the operator
+and held in `grok/` because it is theirs rather than ours.
+
+```sh
+# Roughly 8 hours for 100 cases. Belongs in tmux.
+scripts/tmux-run.sh suite logs/suite.log \
+  uv run python eval/combination/classify.py --out eval/combination/run-$(date +%Y%m%dT%H%M) \
+  --max-turns 12
+
+# Reads refusals for ones that hand back the method they just refused.
+uv run python eval/combination/refusal_shape.py --cases eval/combination/run-*/cases.jsonl
+```
+
+The suite carries no expected values, so `classify.py` refuses to score it and reports outcomes rather
+than grades. "Answered" means the model produced an answer, not a right one. Results and what they do
+not establish are in [`eval/combination/RESULTS.md`](eval/combination/RESULTS.md).
 
 ## Configuration
 
@@ -288,8 +346,8 @@ BENTHIC_LIVE_TESTS=1 BENTHIC_LIVE_REGRESSION=1 uv run pytest -m live
 properties that make a self-modifying system trustworthy - nothing is served without a measured
 effect, a verdict is auditable, the document cannot self-perpetuate - rather than examples of them.
 
-Long-running changes to the playbook belong under `eval/harness*/` with `BENTHIC_CACHE_DIR` pointed
-somewhere disposable, so a run never touches the live store:
+Long-running changes to the playbook belong in a disposable sandbox with `BENTHIC_CACHE_DIR` pointed
+somewhere that is not the live store, so a run never serves a candidate:
 
 ```sh
 BENTHIC_CACHE_DIR=eval/harness/cache uv run python eval/harness.py --rounds 6
@@ -297,8 +355,14 @@ BENTHIC_CACHE_DIR=eval/harness/cache uv run python eval/harness.py --rounds 6
 
 ## Documentation
 
+- [`MEMORY.md`](MEMORY.md) - working memory: what is deployed, what has been measured, what is still
+  open, and the failure modes this project keeps hitting
 - [`docs/findings.md`](docs/findings.md) - what the harness measured, what did not work, and the limits
   of the measurement
+- [`eval/combination/RESULTS.md`](eval/combination/RESULTS.md) - the 100-case combination suite, its
+  failure taxonomy, and the corrections made to earlier readings of it
+- [`docs/opencode-automation.md`](docs/opencode-automation.md) - driving an OpenCode agent from a shell
+  timer, with what was verified by running it and what was only undocumented
 - [`SECURITY.md`](SECURITY.md) - reporting a vulnerability, deployment notes, and the trust boundary
 
 ## License
