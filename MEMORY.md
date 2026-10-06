@@ -32,7 +32,19 @@ timer is the scheduler; `tick.sh` is the cycle itself. Neither is redundant and 
 the other directly by systemd.
 
 **Deploy** is `scripts/deploy.sh`, invoked by hand: daemon-reload, restart both services, health
-check, canary via `eval/run_eval.py --questions eval/canary/questions.json`, roll back on red.
+check, freshness check, canary via `eval/run_eval.py --questions eval/canary/questions.json`, roll
+back on red.
+
+**Freshness is now checked, because nothing noticed a three-day-old service.** `benthic-mcp.service`
+had been running since 2026-10-02 while `src/` moved underneath it, and the health check could not
+see it: it restarted both services but only probed 8081, so a dead or stale 8082 still went green.
+`freshness_check` compares each unit's start time against the newest mtime under `src/` and fails the
+deploy on a difference. It uses **file mtime, not commit time** - a commit is recorded when it is
+written, so comparing against it would report a correct deploy of fresh code as stale. 8082's
+endpoints all require the bearer token, so its liveness is asked of systemd rather than over HTTP.
+
+`tick.sh` logs the same comparison every cycle but does not refuse on it: the subject of a cycle is
+8081, and a stale 8082 is worth knowing about without stopping observation of a healthy 8081.
 
 **Observer:** `eval/observer/sweep.py` drives probes through the same loop the web UI implements and
 records every turn **including reasoning**. `eval/observer/findings.py` reads the **server's own
