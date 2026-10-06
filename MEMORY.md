@@ -480,8 +480,12 @@ Four things I got wrong in this session, all the same shape:
    earned its place by measurement". It needs a contract and a measurement, and per playbook.py's
    own note, twelve grounded lessons were once measured as worth no more than one hand-written
    rule - so grounding a true statement is not evidence that it changes behaviour.
-2. **`classify.py` records tool names with no per-call durations**, so I cannot tell a slow query
-   from slow thinking. 43 of 100 cases exceeded 295s and that gap is still unmeasured.
+2. **`time-health` and 42 other cases are slow thinking, not slow server** - measured, not assumed.
+   `classify.py` now records per-call timings and a run-level split. On `time-health`: 458.7s total,
+   **30.9s in tools (6.4%), 427.8s in the model (93.6%)**, slowest single call 30.2s, and four of six
+   calls returned in 0.08s. That is the whole token-budget line of work confirmed: the cost is
+   turns and deliberation, not row payload. It also means server-side latency is *not* where the
+   remaining failures live.
 3. **`migration_status: "migrated"` is now false**, not merely stale - three live indexes sit
    outside version control. `derived` vs `recovered` is a provenance claim and should be a human's
    call.
