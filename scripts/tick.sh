@@ -105,7 +105,11 @@ say "contracts green"
 # 4. Probe the live server. This is the observation.
 STAMP="$(date +%Y%m%dT%H%M%S)"
 if (( RUN_PROBES )); then
-  say "probing (18 cases, roughly 25 minutes)"
+  # Counted from the probe file, because a hardcoded number went stale the moment a probe was retired
+  # and the log kept claiming 18 for a 17-probe sweep.
+  PROBE_COUNT=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["probes"]))' \
+    eval/observer/probes/core.json 2>/dev/null || echo "?")
+  say "probing (${PROBE_COUNT} cases, roughly 25 minutes)"
   if ! .venv/bin/python eval/observer/sweep.py \
       --probes eval/observer/probes/core.json \
       --record "$RECORDS/${STAMP}.jsonl" \
