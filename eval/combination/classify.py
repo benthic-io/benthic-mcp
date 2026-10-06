@@ -197,7 +197,9 @@ def _plausible_hop(hop: str | None) -> str | None:
     return None
 
 
-def run_case(question: str, tool_list: list[dict[str, Any]], max_turns: int, timeout: float, max_tokens: int) -> dict[str, Any]:
+def run_case(
+    question: str, tool_list: list[dict[str, Any]], max_turns: int, timeout: float, max_tokens: int
+) -> dict[str, Any]:
     """Drive one question the way the web UI does: the model emits tool_calls and stops."""
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     turns: list[dict[str, Any]] = []
