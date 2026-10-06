@@ -56,7 +56,12 @@ health_check() {
         | python3 -c 'import json,sys; print(sum(1 for t in json.load(sys.stdin) if t.get("type")=="mcp"))' 2>/dev/null)"
       [[ -n "$tools" ]] || tools=0
       (( tools >= 6 )) || { log "only ${tools} MCP tools registered"; return 1; }
-      log "healthy: 8081 up, ${tools} MCP tools registered"
+      # 8082 is restarted above but was never checked here, so it could be dead or serving older
+      # code while this loop went green on 8081 and called the deploy healthy. Its endpoints all
+      # require the bearer token, so liveness is asked of systemd rather than over HTTP.
+      [[ "$(systemctl --user is-active benthic-mcp.service)" == "active" ]] \
+        || { log "benthic-mcp.service is not active after restart"; return 1; }
+      log "healthy: 8081 up with ${tools} MCP tools, benthic-mcp.service active"
       return 0
     fi
     (( tries++ ))
@@ -64,6 +69,30 @@ health_check() {
   done
   log "health check timed out"
   return 1
+}
+
+freshness_check() {
+  # A restart that predates the newest edit under src/ means the process is running older code than
+  # the checkout. The health check above cannot see this: it only proves the port answers. Compared
+  # against file mtime rather than commit time, because a commit is recorded when it is written and
+  # a deploy of correct code would otherwise read as stale.
+  local newest
+  newest="$(find src -name '*.py' -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)"
+  [[ -n "$newest" ]] || { log "no src/ files to compare against"; return 0; }
+  local unit started stale=0
+  for unit in benthic-mcp.service llama-server.service; do
+    started="$(date -d "$(systemctl --user show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null)" +%s 2>/dev/null || echo 0)"
+    if [[ -z "$started" || "$started" == "0" ]]; then
+      log "cannot read the start time of ${unit}"
+      stale=1
+    elif (( started < newest )); then
+      log "${unit} started $(date -d @"$started" '+%Y-%m-%d %H:%M'), older than the newest src/ edit at $(date -d @"$newest" '+%Y-%m-%d %H:%M')"
+      stale=1
+    else
+      log "${unit} is running the current src/"
+    fi
+  done
+  return $stale
 }
 
 run_canary() {
@@ -87,6 +116,7 @@ run_canary() {
 log "restarting services (systemd only)"
 restart_services || die "service restart failed"
 health_check || { log "health check failed after restart"; RESTART_FAILED=1; }
+freshness_check || { log "a service is running older code than the checkout"; RESTART_FAILED=1; }
 
 if (( ${RESTART_FAILED:-0} )); then
   if (( ROLLBACK )) && [[ -n "$GOOD_SHA" ]]; then

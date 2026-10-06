@@ -94,6 +94,25 @@ else
   say "vram unknown (no amdgpu sysfs)"
 fi
 
+# 2c. Which instance is this cycle measuring. The probes go to 8081, whose MCP runs as a stdio child
+#     of llama-server and holds its own catalog snapshot, so restarting benthic-mcp.service does not
+#     refresh it and vice versa. A cycle can be measuring code three days older than the checkout.
+#     Reported, not refused: the subject of this cycle is 8081, and a stale 8082 is worth knowing
+#     about without stopping observation of a healthy 8081.
+NEWEST_SRC=$(find src -name '*.py' -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)
+if [[ -n "$NEWEST_SRC" ]]; then
+  for unit in llama-server.service benthic-mcp.service; do
+    started=$(date -d "$(systemctl --user show -p ActiveEnterTimestamp --value "$unit" 2>/dev/null)" +%s 2>/dev/null || echo 0)
+    if [[ -z "$started" || "$started" == "0" ]]; then
+      say "service ${unit}: start time unreadable"
+    elif (( started < NEWEST_SRC )); then
+      say "service ${unit}: STALE, started $(date -d @"$started" '+%m-%d %H:%M') vs src/ edited $(date -d @"$NEWEST_SRC" '+%m-%d %H:%M')"
+    else
+      say "service ${unit}: current"
+    fi
+  done
+fi
+
 # 3. Contracts. Cheap, deterministic, no model. Red here means do not go further.
 if ! .venv/bin/python -m pytest -m "not live" -q >"$AUDIT/contracts.txt" 2>&1; then
   say "CONTRACTS RED - see $AUDIT/contracts.txt"
