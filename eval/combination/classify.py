@@ -205,6 +205,7 @@ def run_case(
     turns: list[dict[str, Any]] = []
     called: list[str] = []
     server_text: list[str] = []
+    call_timings: list[dict[str, Any]] = []
     answered = False
     length_cut = False
     broken = 0
@@ -278,13 +279,17 @@ def run_case(
                 arguments = json.loads(call["function"]["arguments"])
             except json.JSONDecodeError:
                 broken += 1
+                call_timings.append({"tool": name, "seconds": 0.0, "error": True})
                 messages.append({"role": "tool", "tool_call_id": call["id"], "content": "malformed arguments"})
                 continue
+            started = time.monotonic()
             try:
                 result = post("/tools", {"tool": name, "params": arguments}, timeout)
                 text = result.get("plain_text_response") or json.dumps(result)
+                call_timings.append({"tool": name, "seconds": round(time.monotonic() - started, 2), "error": False})
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
                 text = f"{type(exc).__name__}: {exc}"
+                call_timings.append({"tool": name, "seconds": round(time.monotonic() - started, 2), "error": True})
                 broken += 1
             server_text.append(text)
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": text})
@@ -311,6 +316,9 @@ def run_case(
         "distinct_tools": sorted(set(called)),
         "turns": turns,
         "server_text": server_text,
+        # Per-call, so a slow case can be split into slow server and slow model. A run of
+        # 100 cases where 43 exceeded 295s could not be attributed either way before this.
+        "tool_timings": call_timings,
         "length_cut": length_cut,
         "broken_calls": broken,
     }
@@ -427,6 +435,20 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     for row in rows:
         tools_used.update(row.get("distinct_tools") or [])
 
+    # Split every case into time the server spent and time the model spent. Without this a slow case
+    # is ambiguous: 43 of 100 exceeded 295s and nothing recorded said whether the query was slow or
+    # the deliberation was. Per-tool below, per-run here.
+    tool_seconds = 0.0
+    elapsed_seconds = 0.0
+    slowest_tool: tuple[float, str] | None = None
+    for row in rows:
+        elapsed_seconds += float(row.get("elapsed_s") or 0.0)
+        for timing in row.get("tool_timings") or []:
+            seconds = float(timing.get("seconds") or 0.0)
+            tool_seconds += seconds
+            if slowest_tool is None or seconds > slowest_tool[0]:
+                slowest_tool = (seconds, str(timing.get("tool")))
+
     # Every relation the model named, checked against the signed catalog. A relation the
     # server does not carry is a hallucination regardless of how well the answer reads.
     #
@@ -459,6 +481,13 @@ def summarise(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "cases": len(rows),
         "by_tag": {tag: dict(counts) for tag, counts in sorted(by_tag.items())},
+        "time": {
+            "case_seconds": round(elapsed_seconds, 1),
+            "tool_seconds": round(tool_seconds, 1),
+            "model_seconds": round(elapsed_seconds - tool_seconds, 1),
+            "tool_share": round(tool_seconds / elapsed_seconds, 3) if elapsed_seconds else None,
+            "slowest_call": ({"tool": slowest_tool[1], "seconds": slowest_tool[0]} if slowest_tool else None),
+        },
         "missing_hops": hops.most_common(),
         "tools_used": tools_used.most_common(),
         "relations_named_but_absent": sorted(unknown.items(), key=lambda kv: -kv[1]),
