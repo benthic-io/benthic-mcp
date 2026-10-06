@@ -677,6 +677,74 @@ def _ignored(repo: Path, rel: str) -> bool:
     return probe.returncode == 0
 
 
+def _observer_module():
+    """Load eval/observer/findings.py by path.
+
+    tick.sh runs it as a script and eval/observer is not a package, so there is no bare name to
+    import and adding one would mean changing the layout for the sake of a test.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "eval" / "observer" / "findings.py"
+    spec = importlib.util.spec_from_file_location("observer_findings", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _tool_call(name: str, text: str, ok: bool = False) -> dict[str, Any]:
+    return {"name": name, "ok": ok, "text": text}
+
+
+def _case(tool_results: list[dict[str, Any]], **extra: Any) -> dict[str, Any]:
+    return {"id": "c", "turns": [{"turn": 0, "tool_results": tool_results}], **extra}
+
+
+def test_a_case_the_server_answered_only_with_5xx_is_an_outage_not_a_result() -> None:
+    """is_invalid() read "did it get turns" as "was the server up".
+
+    A case where every call came back 503 has turns, so it passed the old guard and its refusals
+    were counted as evidence about the model. Forty-five such cases, all from 2026-10-01, put 429
+    outage errors into refusal_kinds - which is what sent me looking for a live 503 defect that does
+    not exist. A server that answers nothing is not the model declining to answer.
+    """
+    findings = _observer_module()
+
+    outage = _case(
+        [
+            _tool_call(
+                "benthic_query",
+                '{"error": "Error executing tool benthic_query: '
+                'Benthic API returned 503 for usaspending.prime_awards"}',
+            ),
+            _tool_call(
+                "benthic_query",
+                '{"error": "Error executing tool benthic_query: '
+                'Benthic API returned 503 for usaspending.prime_awards"}',
+            ),
+        ]
+    )
+    assert findings.is_invalid(outage), "every call failing 5xx is an outage, however many turns there are"
+
+    # One genuine model error among them is enough for the case to be about the model again.
+    mixed = _case(
+        [
+            _tool_call(
+                "benthic_query",
+                '{"error": "Error executing tool benthic_query: '
+                'Benthic API returned 503 for usaspending.prime_awards"}',
+            ),
+            _tool_call("benthic_query", '{"error": "Unknown column \'nope\'; signed columns are ..."}'),
+        ]
+    )
+    assert not findings.is_invalid(mixed), "a non-5xx refusal is a real answer about the model"
+
+    # And an all-5xx case must not reach the survey's counters at all.
+    assert not findings.survey([outage])["refusals"], "outage errors must not be counted as refusals"
+    assert findings.survey([mixed])["refusals"], "real refusals must still be counted"
+
+
 def test_operator_input_and_run_evidence_stay_out_of_every_commit() -> None:
     """grok/ belongs to the operator, and the run evidence is read back as a denominator.
 

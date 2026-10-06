@@ -62,6 +62,26 @@ def load_records(paths: list[Path]) -> list[dict[str, Any]]:
     return records
 
 
+_SERVER_ERROR = re.compile(r"returned (5\d\d) for ")
+
+
+def only_server_errors(record: dict[str, Any]) -> bool:
+    """True when every failed call in this case came back as a 5xx.
+
+    A case the server answered only with 503s is an outage whatever the file says about turns, and
+    is_invalid() has to catch it: left valid, its refusals are counted as evidence about the model.
+    Forty-five such cases from 2026-10-01 put 429 outage errors into refusal_kinds, which read as a
+    live 503 defect that does not exist.
+
+    Requires at least one failed call, so a case that simply never called anything is not here; that
+    is is_invalid()'s existing zero-turn rule. One genuine refusal among the 5xx calls means the
+    server did answer something, and the case is about the model again.
+    """
+    results = [result for turn in record.get("turns") or [] for result in turn.get("tool_results") or []]
+    failed = [result for result in results if not result.get("ok", True)]
+    return bool(failed) and all(_SERVER_ERROR.search(result.get("text") or "") for result in failed)
+
+
 def is_invalid(record: dict[str, Any]) -> bool:
     """True when the server never answered this case.
 
@@ -71,6 +91,8 @@ def is_invalid(record: dict[str, Any]) -> bool:
     """
     if "invalid" in record:
         return bool(record["invalid"])
+    if only_server_errors(record):
+        return True
     elapsed = record.get("elapsed_s")
     try:
         elapsed = float(elapsed) if elapsed is not None else 0.0
@@ -106,6 +128,11 @@ def survey(records: list[dict[str, Any]]) -> dict[str, Any]:
     refusals: Counter = Counter()
 
     for record in records:
+        # An outage is not evidence about the model, so its errors never reach the counters. Kept in
+        # the record set and counted separately as invalid_total, which is what makes a refusal a
+        # measurement rather than a tally of outages.
+        if is_invalid(record):
+            continue
         probe = record.get("id", "?")
         for turn in record.get("turns", []):
             for result in turn.get("tool_results", []):
