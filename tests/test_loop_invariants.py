@@ -677,6 +677,36 @@ def _ignored(repo: Path, rel: str) -> bool:
     return probe.returncode == 0
 
 
+def test_a_cycle_cut_short_is_refused_rather_than_reported_as_a_measurement() -> None:
+    """A killed sweep leaves a partial record, and nothing downstream could tell.
+
+    tick.sh asks only that the record file is non-empty, so a cycle terminated after eleven of
+    seventeen probes produced findings exactly as a whole one would. 86 of 102 recorded cycles are
+    short of the full set and the four most recent truncate progressively - 16, 13, 12, 11 cases -
+    because complete cycles grew from 2385s to 3393s against TimeoutStartSec=3600. Per-probe rates
+    read off those are computed over whichever probes happened to finish, and the missing ones do not
+    appear as missing.
+    """
+    findings = _observer_module()
+    expected = {"a", "b", "c"}
+
+    complete = [_case_for("a"), _case_for("b"), _case_for("c")]
+    partial = [_case_for("a"), _case_for("b")]
+
+    assert findings.cycle_is_complete(complete, expected)
+    assert not findings.cycle_is_complete(partial, expected)
+
+    # The message has to name what never ran. A bare boolean leaves the reader guessing which probes
+    # are absent, and the answer is what tells them the cycle was killed rather than that probes
+    # were retired.
+    assert findings.missing_probes(partial, expected) == ["c"]
+    assert findings.missing_probes(complete, expected) == []
+
+
+def _case_for(case_id: str) -> dict[str, Any]:
+    return {"id": case_id, "turns": [{"turn": 0, "tool_results": []}], "elapsed_s": 1.0}
+
+
 def _observer_module():
     """Load eval/observer/findings.py by path.
 
