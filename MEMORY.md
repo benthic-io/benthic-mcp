@@ -257,10 +257,15 @@ ANALYZEd** - no `last_analyze`, no `last_autoanalyze`, ever. Stage `07_analyze` 
 "planner has no stats until this runs", so this is a pipeline that did not reach completion, not a
 missing feature. The thunkah agent is finding out why.
 
-**Manifest/commit coupling:** `etl_provenance.commit_hash` sits inside the signed payload. `SPEC.md`
-is explicit that labelling a hand-built object `derived` "would be lying about what the referenced
-commit produces". So a change is not done until it is in the ETL *and* the manifest. Currently the
-manifest records `b25eba84` while the ETL head is `3131c62` - discrepancy unverified.
+**Manifest/commit coupling:** `SPEC.md` is explicit that labelling a hand-built object `derived`
+"would be lying about what the referenced commit produces", so a change is not done until it is in
+the ETL *and* the manifest. The hash pair recorded here earlier (`b25eba84` against `3131c62`) was
+stale and is now measured properly - see "The pipeline is accurate; the manifests do not say so".
+
+**A ninth false green, and the biggest one.** The `CREATE INDEX CONCURRENTLY` on `prime_awards` that
+fixed a 42-minute query went straight to production and into the pipeline file weeks later. That
+divergence is what made "is `migration_status` false" a three-day question, and the divergence sat
+undetected for three weeks because nothing compared a manifest pin against the code on the runner.
 
 ## Where the work went, 2026-09-30 evening
 
@@ -370,9 +375,13 @@ and there is no backup - the one thing worth adding.
 collateral damage from a schema migration in commit `2e53270` that renamed relation names
 and deleted two edges instead of renaming them.
 
-`check-bdp-drift.sh` on thunkah compares the served collection against the committed one
+`check-bdp-drift.sh` on thunkah compares the served *collection* against the committed one
 and exits 1 on drift. It is on a systemd timer every 16 minutes and is how the three
-missed releases would have been caught.
+missed releases would have been caught. It compares the join graph only - not dataset manifests,
+not schema - so the dataset-pin gap below passed straight under it. The script also lives in
+`$HOME` unversioned, which is the ownership gap its own header complains about;
+`scripts/check_pipeline_provenance.py` lives in benthic-mcp instead and thunkah runs it from a
+clone at `~/benthic-mcp-checkout`.
 
 ## Two MCP instances, and restarting one of them changes nothing
 
@@ -516,6 +525,47 @@ Four things I got wrong in this session, all the same shape:
    and that is now hedged. Detection deliberately unchanged.
 4. **34% of observer history was an outage**, which I had been reporting as model quality.
 
+## The pipeline is accurate; the manifests do not say so
+
+**`scripts/check_pipeline_provenance.py`**, run on thunkah by `pipeline-provenance-check.timer`
+every 30 minutes, exit 1 on drift, exit 2 when it could not reach its subject. Read-only. The logic
+is in benthic-mcp so it is version controlled; thunkah runs it from `~/benthic-mcp-checkout`.
+
+**Pin drift, all five datasets.** The runner's checkout is `991a8715` (2026-10-03, "Drop six
+duplicate indexes"). Every manifest pins older: `usaspending` `ea88629f` (09-30), the other four
+`66f58556` (08-11). **The pipeline that built the database is present on the runner.** Nothing
+recorded that it was, because publishing the manifest is a separate step - the same ownership gap
+`check-bdp-drift.sh` exists to catch, one level down.
+
+Proof the stamp is not run-derived rather than merely stale: `usaspending` carries
+`migrated_at: 2026-09-21` against a `commit_hash` dated **09-30**. A run cannot stamp a commit that
+did not exist. `irs_ng` is consistent (migrated 08-14, commit 08-11), so some pins may be
+run-stamped and some not, which is worse than uniformly hand-written because it looks trustworthy.
+
+**Schema drift, two datasets.** `irs_ng` (78), `samer` (25) and `up_cdmaps` (9) are clean.
+`usaspending` has three live indexes the pipeline does not declare and twelve it declares that are
+absent; `usp_cl` has six declared-but-absent, including `idx_lt_bioguide_id`. Verified absent from
+every schema, not merely missing from `public`.
+
+`uei_crosswalk` is the instructive one. The pipeline declares `idx_uei_duns` and `idx_uei_uei`; the
+database carries `uei_crosswalk_uei_idx`, `uei_crosswalk_pkey1` and
+`uei_crosswalk_awardee_or_recipient_uniqu_idx`. **A rebuild would create the declared names and never
+drop the live ones**, producing a different index set than the one it replaced. That is the failure
+the whole exercise exists to prevent, and it is invisible to any check that compares names.
+
+**Three instruments in this project were blind before they were useful**, all fixed by having them
+report their own coverage: this one first read only `pipelines/<ds>/sql` and called 74 healthy
+indexes undeclared when they live in `recovered/<ds>/`; `is_automatic` missed `_pkey1`, so
+`uei_crosswalk_pkey1` would have been permanent false drift; and the run ledger in `src/ngopen_bdp`
+declares indexes in Python, which this check does not read - stated in its output rather than left
+implicit.
+
+**Two questions still open, and neither is mine to answer.** What `commit_hash` means - "migrated by"
+or "state as of" - decides whether re-pinning to `991a8715` is honest or a lie for datasets that
+were never re-migrated. And thunkah's checkout is on branch `main` tracking origin, not detached at a
+pinned commit, so "the pipeline that ran" is currently a moving target even though it is clean and
+in sync. Both need the pipeline owner.
+
 ## Still open
 1. **Six cases never issue a `query`, and a raised token budget does not fix it** (0 of 4 on
    `run-budget24`). This is the single remaining behavioural defect and it is a *convergence*
@@ -531,9 +581,10 @@ Four things I got wrong in this session, all the same shape:
    carry up to 12 columns each. Bounding the total is a separate decision from the `detail='full'`
    description fix that landed, and nothing bounds it today except `BENTHIC_MAX_RESPONSE_BYTES` at
    1MB, far too loose to ever bind.
-3. **`migration_status: "migrated"` is now false**, not merely stale - three live indexes sit
-   outside version control. `derived` vs `recovered` is a provenance claim and should be a human's
-   call.
+3. **All five manifests pin an older commit than the pipeline the runner holds, and two datasets
+   have schema drift the pipeline does not account for.** `scripts/check_pipeline_provenance.py`
+   measures both, on a 30-minute timer on thunkah, exit 1 on drift. Superseded as an open item by the
+   measurement recorded under "The pipeline is accurate; the manifests do not say so".
 4. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
 5. **`eval/arms/` and `eval/noise/` were deleted with no recorded invocation.** Every other residue
    directory had a documented producer, which is what made deleting it defensible. These two were
