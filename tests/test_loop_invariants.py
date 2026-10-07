@@ -707,6 +707,53 @@ def _case_for(case_id: str) -> dict[str, Any]:
     return {"id": case_id, "turns": [{"turn": 0, "tool_results": []}], "elapsed_s": 1.0}
 
 
+def test_pipeline_provenance_check_classifies_system_indexes_rather_than_calling_them_drift() -> None:
+    """Every index a rebuild would not recreate is worth naming; the ones Postgres creates are not.
+
+    Primary keys and PostGIS internals are created by the system, never declared, so reporting them
+    as undeclared would mean the check always fails and its output stops being read. They are counted
+    and named instead, so a real undeclared index stands out against a known background count.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "check_pipeline_provenance.py"
+    spec = importlib.util.spec_from_file_location("check_pipeline_provenance", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    automatic = ["uei_crosswalk_pkey1", "spatial_ref_sys_pkey", "recipient_geocode_index_pkey"]
+    declared_by_hand = ["idx_fabs_uei", "idx_lt_bioguide_id", "uei_crosswalk_uei_idx"]
+
+    for name in automatic:
+        assert module.is_automatic(name), f"{name} is system-created and must not be reported as drift"
+    for name in declared_by_hand:
+        assert not module.is_automatic(name), f"{name} is a real index and must be compared"
+
+
+def test_pipeline_provenance_check_reads_both_declaration_sources() -> None:
+    """Reading only pipelines/<ds>/sql/ once reported 74 indexes as undeclared.
+
+    They were declared in recovered/<ds>/, which holds the indexes carried from a prior database. A
+    clean-looking result over a narrow search is worse than a noisy one over a complete search, so the
+    declaration sources are enumerated here rather than discovered at runtime.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "check_pipeline_provenance.py"
+    spec = importlib.util.spec_from_file_location("check_pipeline_provenance_sources", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    source = path.read_text(encoding="utf-8")
+    assert '"pipelines"' in source and '"recovered"' in source, (
+        "both pipelines/<ds>/sql and recovered/<ds>/ must be read as declaration sources"
+    )
+    # And the extractor reports what it read, so a narrow pass cannot read as a clean result.
+    assert hasattr(module, "declared_indexes")
+
+
 def _observer_module():
     """Load eval/observer/findings.py by path.
 
