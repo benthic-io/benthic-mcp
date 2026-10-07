@@ -195,11 +195,31 @@ def check(catalog, hallucinated: dict[tuple[str, str], list[str]]) -> dict[str, 
     return {"absent": absent, "present_elsewhere": present_elsewhere}
 
 
+def missing_probes(newest_records: list[dict[str, Any]], expected: set[str]) -> list[str]:
+    """Probes the newest cycle never ran, sorted.
+
+    Empty means the cycle covered the probe set. Anything else means it was cut short, and the rates
+    downstream would be computed over whichever probes happened to finish.
+    """
+    ran = {str(record.get("id")) for record in newest_records}
+    return sorted(expected - ran)
+
+
+def cycle_is_complete(newest_records: list[dict[str, Any]], expected: set[str]) -> bool:
+    return not missing_probes(newest_records, expected)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--records", nargs="*", default=[])
     parser.add_argument("--out", default=str(ROOT / "eval" / "observer" / "findings.json"))
     parser.add_argument("--min-seen", type=int, default=1)
+    parser.add_argument(
+        "--probes",
+        type=Path,
+        default=ROOT / "eval" / "observer" / "probes" / "core.json",
+        help="the probe set the newest cycle is expected to have covered in full",
+    )
     args = parser.parse_args()
 
     paths = [Path(item) for item in args.records]
@@ -224,6 +244,27 @@ def main() -> int:
             f"{', '.join(sorted({str(r.get('id')) for r in stale}))}"
         )
         print("That is an outage, not a model result. Not writing findings.")
+        return 2
+
+    # A cycle that was killed partway leaves a partial record, and a partial record is
+    # indistinguishable from a complete one downstream: tick.sh only asks that the file is non-empty,
+    # so eleven of seventeen probes produce findings and nothing says the other six never ran.
+    # 86 of 102 recorded cycles are short of the full probe set, and the most recent four truncate
+    # progressively - 16, 13, 12, 11 cases - because the sweep outgrew TimeoutStartSec=3600 while
+    # complete cycles rose from 2385s to 3393s. Reporting rates from those is reporting a partial
+    # measurement as a whole one, which is the failure this file exists to prevent.
+    if not args.probes.exists():
+        print(f"probe set {args.probes} is missing, so the newest cycle cannot be checked")
+        return 1
+    expected = {str(item.get("id")) for item in json.loads(args.probes.read_text(encoding="utf-8"))["probes"]}
+    missing = missing_probes(newest_records, expected)
+    if missing:
+        ran = {str(record.get("id")) for record in newest_records}
+        print(
+            f"REFUSING: the newest cycle ({newest.name if newest else '?'}) covered "
+            f"{len(ran & expected)}/{len(expected)} probes and never ran {', '.join(missing)}"
+        )
+        print("A cycle cut short is not a measurement. Not writing findings.")
         return 2
 
     found = survey(records)
