@@ -412,6 +412,20 @@ buildup ever exceeds ~400 MB it wedges again. `tick.sh` now logs VRAM every cycl
 `/sys/class/drm/card*/device/mem_info_vram_{total,used}` because `/health` answers ok through a
 wedge and cannot see this coming.
 
+**The creep stopped.** All 22 logged readings, 2026-10-05 18:20 to 2026-10-06 23:07: free VRAM goes
+**330 -> 339 MiB over 28.8 hours, a net gain of 9 MiB.** The last five deltas are -3, -2, -2, 0, so it
+is flat. The "~4.2 MiB/h, ~63 hours to zero" projection was taken from a short window and no longer
+describes anything.
+
+Read the series in cycle order rather than by grepping one log file, because individual cycles show
+swings of +221 and -282 MiB that net out and are not creep: reading a single file makes the trend look
+like whatever that cycle caught. The per-cycle start time is in the filename
+`logs/observe-<YYYYMMDD>T<HHMMSS>.log`, and `tick.sh` prints `vram` as its fourth line.
+
+**339 MiB free, above the ~300 MiB trigger, so no restart is warranted.** Do not restart on the older
+projection; read the series. `nvidia-smi` failing here is expected (AMD/ROCm, see below) and `free -m`
+showing 716 MiB available is host RAM, not VRAM - I read that as alarming before noticing what it was.
+
 Facts that were wrong while I was diagnosing it, kept because they will mislead again if not:
 
 - **This is an AMD box, ROCm gfx906, not CUDA.** `nvidia-smi` failing is expected, not a driver

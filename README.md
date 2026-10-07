@@ -254,12 +254,20 @@ The cycle observes and reports. It never edits code or guidance, because decidin
 the server's fault or the model's is judgement, and an unattended loop that guesses at causes
 manufactures false greens at a rate no review catches.
 
-One guard is worth knowing about. A case that got no answer from the server at all - no turns, elapsed
-at the tool timeout - is an outage, not a model failure, and it is recorded as `invalid` rather than as
-a failure. `findings.py` refuses to write findings at all if the newest cycle contains one. Without
-that, a server that stopped answering generation still served `/health` and `/props`, and the cycle
-reported the outage as a pass rate: across this repository's recorded history, 404 of 1,176 cases were
-server outages, which moved the overall rate from 47% to 72%.
+One guard is worth knowing about. A case the server did not properly answer is an outage, not a model
+failure, and it is recorded as `invalid` rather than as a failure. Two shapes count: no turns at all
+with the elapsed time at the tool timeout, and a case where every call that came back was a 5xx. The
+second shape matters because such a case *does* have turns, so a guard that only asks "did it get
+turns" passes it and counts the outage as evidence about the model - which is how 429 outage errors
+sat in `refusal_kinds` for six days and read as a live defect that did not exist. One genuine refusal
+among the 5xx calls means the server answered something, so the case counts as the model's again.
+Measured over the recorded history, 288 of those 5xx responses sit in 45 cases, all from a single day.
+
+`findings.py` refuses to write findings at all if the newest cycle contains an invalid case, and the
+survey skips invalid cases so their errors cannot reach the counters. Without any of this, a server
+that stopped answering generation still served `/health` and `/props`, and the cycle reported the
+outage as a pass rate: across this repository's recorded history, 459 of 1,527 cases were server
+outages.
 
 ### The combination suite
 
