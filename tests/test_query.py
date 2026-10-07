@@ -1091,6 +1091,10 @@ async def _refusal_via_service(
         aggregates=aggregates,
         group_by=group_by or [],
     )
+    # The tool layer qualifies aggregate columns with their source alias, so the request that reaches
+    # QueryService carries `s.uei`, not `uei`. Testing the bare name left the branch inert on the
+    # live server while this file passed: the lookup missed, the column read as unknown, and no claim
+    # was made. Both spellings are asserted below so the alias cannot quietly stop being handled.
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         service = QueryService(
             small_settings,
@@ -1126,6 +1130,29 @@ async def test_a_refusal_over_cap_says_when_the_row_count_is_already_the_answer(
     assert "is the answer" in message, (
         "a count-only, ungrouped query was refused even though the matching-row count answers it; "
         "the message must say so rather than sending the caller off to narrow"
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_count_claim_survives_a_source_qualified_aggregate_column(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """The claim has to be reached through the spelling the tool actually sends.
+
+    `benthic_query` qualifies an aggregate column with its source alias, so what arrives is
+    `count:s.uei` against a definition holding bare `uei`. A lookup that does not strip the prefix
+    finds no column, decides the column is unknown, and declines to say anything at all - which is
+    exactly what happened: the three contracts above passed while the live server kept sending the
+    pre-fix message to the model, for a full working day of observation cycles.
+    """
+    message = await _refusal_via_service(
+        settings,
+        bdp_documents,
+        [AggregateSpec(function=AggregateFunction.COUNT, column="s.uei", alias="n")],
+    )
+
+    assert "is the answer" in message, (
+        "a source-qualified count column is what the tool sends; the refusal must still recognise it"
     )
 
 

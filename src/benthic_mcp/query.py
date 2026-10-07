@@ -293,16 +293,14 @@ def _count_is_the_answer(request: QueryRequest, widest: FetchedSource) -> tuple[
         return False, None
 
     columns = widest.definition.columns
-    nullable = [
-        aggregate.column
-        for aggregate in request.aggregates
-        if aggregate.column is not None and aggregate.column in columns and columns[aggregate.column].nullable
-    ]
-    unknown = [
-        aggregate.column
-        for aggregate in request.aggregates
-        if aggregate.column is not None and aggregate.column not in columns
-    ]
+
+    # The tool layer qualifies a column with its source alias, so a count arrives as `s.id` while
+    # the definition holds bare `id`. Without stripping the prefix the lookup finds nothing, treats
+    # the column as unknown, and declines to make any claim - which is how the branch was inert on
+    # the live server while every direct call to it returned the right answer.
+    named = [aggregate.column.split(".", 1)[-1] for aggregate in request.aggregates if aggregate.column]
+    nullable = [name for name in named if name in columns and columns[name].nullable]
+    unknown = [name for name in named if name not in columns]
     if nullable:
         names = ", ".join(f"`{name}`" for name in nullable)
         return False, names
