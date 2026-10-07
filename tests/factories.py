@@ -95,7 +95,11 @@ def relation(
     *,
     queryable: bool = True,
     description: str | None = None,
+    non_nullable: tuple[str, ...] = (),
 ) -> dict[str, Any]:
+    # non_nullable is explicit because the catalog reads a missing key as nullable, so a fixture that
+    # means "cannot be null" has to say so. The production manifest marks primary keys that way, and
+    # it changes what a scan refusal is allowed to claim about a count.
     return {
         "name": name,
         "relation_type": "table",
@@ -103,5 +107,15 @@ def relation(
         "queryable": queryable,
         "description": description,
         "primary_key": [columns[0][0]] if columns else [],
-        "columns": [{"name": column, "type": column_type} for column, column_type in columns],
+        "columns": [
+            {
+                "name": column,
+                "type": column_type,
+                # Always explicit. The catalog reads a missing key as nullable, so a non-nullable
+                # column has to carry `nullable: false` rather than simply omit it - omitting it is
+                # what produced a fixture that claimed a primary key could be null.
+                "nullable": column not in non_nullable,
+            }
+            for column, column_type in columns
+        ],
     }

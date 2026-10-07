@@ -65,6 +65,10 @@ def manifests(private_key: Ed25519PrivateKey) -> dict[str, dict[str, Any]]:
                         ("date_last_award", "date"),
                     ],
                     description="Federal award recipients",
+                    # uei is the primary key and the manifest marks it non-nullable, which is what lets
+                    # a scan refusal tell a caller that count(uei) and the matching-row count are the
+                    # same number. Every other column stays nullable, so the two are different.
+                    non_nullable=("uei",),
                 ),
                 relation(
                     "prime_awards",
