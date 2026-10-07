@@ -104,7 +104,12 @@ class QueryService:
         by_alias = {item.source.alias: item.definition for item in fetched}
         if requires_complete and (any(item.truncated for item in fetched) or join_result.truncated):
             raise QueryValidationError(
-                _scan_refusal(fetched, self.settings.aggregate_scan_limit, self.settings.max_rows)
+                _scan_refusal(
+                    fetched,
+                    self.settings.aggregate_scan_limit,
+                    self.settings.max_rows,
+                    request=request,
+                )
             )
         rows = _aggregate_rows(join_result.rows, request)
         available_columns = _available_source_columns(fetched)
@@ -265,13 +270,60 @@ def _truncation_warnings(fetched: list[FetchedSource]) -> list[QueryWarning]:
     return warnings
 
 
-def _scan_refusal(fetched: list[FetchedSource], scan_limit: int, max_rows: int) -> str:
+def _count_is_the_answer(request: QueryRequest, widest: FetchedSource) -> tuple[bool, str | None]:
+    """Whether the matching-row count answers this request outright, and why not when it does not.
+
+    A count-only request with nothing grouped wants one number, and the count the refusal already
+    carries is that number. Measured on `truncation`: asked for the count of organisations in
+    Massachusetts, the model was refused and told to narrow, then spent twelve turns enumerating
+    subsection, foundation and affiliation codes to arrive at a number it had already been given. Over
+    121 cap-then-success retries it narrowed 121 times and repeated the request zero times, so it is
+    not failing to understand "narrow" - it is being sent to narrow when narrowing cannot be what the
+    question wants.
+
+    `count(some_column)` is a different number whenever that column is nullable, so the count is only
+    offered as the answer for count(*) and for columns the manifest marks non-nullable. Otherwise it
+    is an upper bound, and the caller is told the one filter that makes the two numbers equal.
+    """
+    if request.group_by or request.having or request.joins:
+        return False, None
+    if len(request.sources) > 1:
+        return False, None
+    if not request.aggregates or any(aggregate.function != AggregateFunction.COUNT for aggregate in request.aggregates):
+        return False, None
+
+    columns = widest.definition.columns
+    nullable = [
+        aggregate.column
+        for aggregate in request.aggregates
+        if aggregate.column is not None and aggregate.column in columns and columns[aggregate.column].nullable
+    ]
+    unknown = [
+        aggregate.column
+        for aggregate in request.aggregates
+        if aggregate.column is not None and aggregate.column not in columns
+    ]
+    if nullable:
+        names = ", ".join(f"`{name}`" for name in nullable)
+        return False, names
+    if unknown:
+        return False, None
+    return True, None
+
+
+def _scan_refusal(
+    fetched: list[FetchedSource], scan_limit: int, max_rows: int, request: QueryRequest | None = None
+) -> str:
     """Refuses a complete scan that cannot be made exact, naming what put it over.
 
     "Narrow the filters" is not an instruction a caller can act on. A filter already narrowed to a
     single congressional district is told exactly what an unfiltered scan is told, and has no way to
     see whether it is 10 percent or 1400 percent over, so it can neither tighten the filter nor
     conclude that filtering cannot help and a pre-aggregated relation is the way.
+
+    Where the count the refusal already carries is itself the answer, it says so, because telling a
+    caller to narrow towards a number it is already holding is the instruction that spent twelve turns
+    on `truncation`.
     """
     over = [item for item in fetched if item.truncated]
     if not over:
@@ -289,10 +341,35 @@ def _scan_refusal(fetched: list[FetchedSource], scan_limit: int, max_rows: int) 
             f"More than {scan_limit} rows match the filters in {source_name}, "
             f"past the complete-scan limit of {scan_limit}"
         )
-    else:
-        magnitude = (
-            f"{widest.matched_rows} rows match the filters in {source_name}, "
-            f"{widest.matched_rows - scan_limit} more than the complete-scan limit of {scan_limit}"
+        return (
+            f"{magnitude}. Aggregating or joining needs every source scanned in full, so narrow the "
+            f"filters until each source matches at most {scan_limit} rows, or raise "
+            f"BENTHIC_AGGREGATE_SCAN_LIMIT."
+        )
+
+    answered, nullable = (False, None)
+    if request is not None:
+        answered, nullable = _count_is_the_answer(request, widest)
+
+    if answered:
+        return (
+            f"{widest.matched_rows} rows match the filters in {source_name}, which is "
+            f"{widest.matched_rows - scan_limit} more than the complete-scan limit of {scan_limit}. "
+            f"You asked only how many rows match and nothing is grouped, so {widest.matched_rows} is "
+            f"the answer to the question as asked. Report it as exact rather than narrowing."
+        )
+
+    magnitude = (
+        f"{widest.matched_rows} rows match the filters in {source_name}, "
+        f"{widest.matched_rows - scan_limit} more than the complete-scan limit of {scan_limit}"
+    )
+    if nullable:
+        # An upper bound is not the answer, and saying so plainly is what keeps the caller from
+        # reporting it as one. Excluding the nulls is the narrowing that makes the two equal.
+        magnitude += (
+            f", which is an upper bound on the count of {nullable} because that column is nullable. "
+            f"Adding {nullable}=not.is.null makes the row count and the column count the same number, "
+            f"at the cost of a narrower filter."
         )
     others = f", the widest of the {len(over)} sources over it" if len(over) > 1 else ""
     return (

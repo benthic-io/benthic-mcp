@@ -5,6 +5,7 @@ import httpx
 import pytest
 
 from benthic_mcp.bdp import BdpRepository
+from benthic_mcp.catalog import ColumnDefinition, RelationDefinition
 from benthic_mcp.errors import QueryValidationError
 from benthic_mcp.models import (
     AggregateFunction,
@@ -19,7 +20,7 @@ from benthic_mcp.models import (
     RelationSource,
     Reliability,
 )
-from benthic_mcp.postgrest import PostgrestTransport
+from benthic_mcp.postgrest import FetchedSource, PostgrestTransport
 from benthic_mcp.query import QueryService, build_single_query, unqualify_result
 
 
@@ -1051,3 +1052,118 @@ def test_an_unknown_colon_operator_is_still_refused() -> None:
     # `in` names itself unambiguously and its value is a JSON array either way, so it is accepted
     # with the colon too and parsed to the same list rather than refused.
     assert _parse_filter("ids=in:[1,2]").value == [1, 2]
+
+
+def _refusal_for(
+    aggregates: list[AggregateSpec],
+    group_by: list[str] | None = None,
+    matched: int = 50_284,
+) -> str:
+    """The message the model sees when a complete scan is refused."""
+    from benthic_mcp.query import _scan_refusal
+
+    definition = RelationDefinition(
+        dataset="irs_ng",
+        name="bmf_organizations",
+        relation_type="table",
+        provenance="upstream",
+        description=None,
+        queryable=True,
+        primary_key=("id",),
+        row_count_estimate=2_258_922,
+        columns={
+            # ein is nullable in the signed manifest, which is what makes count(ein) and the
+            # matching-row count different numbers.
+            "ein": ColumnDefinition(
+                name="ein",
+                type="string",
+                native_type="character varying(20)",
+                nullable=True,
+                description=None,
+                srid=None,
+                unit=None,
+            ),
+            "id": ColumnDefinition(
+                name="id",
+                type="integer",
+                native_type="integer",
+                nullable=False,
+                description=None,
+                srid=None,
+                unit=None,
+            ),
+        },
+        endpoint=None,
+        manifest_hash="h",
+        manifest_url="u",
+    )
+    source = RelationSource(alias="s", dataset="irs_ng", relation="bmf_organizations")
+    fetched = FetchedSource(
+        source=source,
+        definition=definition,
+        rows=[],
+        request_url="",
+        truncated=True,
+        matched_rows=matched,
+    )
+    request = QueryRequest(
+        question="count",
+        sources=[source],
+        aggregates=aggregates,
+        group_by=group_by or [],
+    )
+    return _scan_refusal([fetched], 10_000, 1_000, request=request)
+
+
+def test_a_refusal_over_cap_says_when_the_row_count_is_already_the_answer() -> None:
+    """A count-only query whose filters match 50284 rows was refused, and told to narrow.
+
+    `truncation` asks for the count of organisations in Massachusetts and "I need the count to be
+    reliable". The refusal names 50284 matching rows and then says narrow, so the model spent twelve
+    turns enumerating subsection codes, foundation codes and affiliation codes to get a number it had
+    already been given. Measured over 121 cap-then-success retries, the model narrowed 121 times and
+    repeated the request zero times, so it is not failing to understand the instruction to narrow - it
+    is being sent to narrow when narrowing cannot be what the question wants.
+
+    When every aggregate is a count and nothing is grouped, the matching-row count is the answer, and
+    the refusal should say so instead of spending the caller's turns.
+    """
+    message = _refusal_for([AggregateSpec(function=AggregateFunction.COUNT, column=None, alias="n")])
+
+    assert "50284" in message
+    assert "is the answer" in message, (
+        "a count-only, ungrouped query was refused even though the matching-row count answers it; "
+        "the message must say so rather than sending the caller off to narrow"
+    )
+
+
+def test_a_refusal_does_not_claim_the_row_count_is_a_nullable_columns_count() -> None:
+    """The claim above is only sound for count(*) and for columns the manifest says cannot be null.
+
+    The model asked for `count(ein)` and `ein` is nullable, so 50284 matching rows is an upper bound on
+    the answer and not the answer. Reporting it as the answer would be worse than the current refusal,
+    because a wrong number reads as a result.
+    """
+    nullable = _refusal_for([AggregateSpec(function=AggregateFunction.COUNT, column="ein", alias="n")])
+
+    assert "is the answer" not in nullable
+    assert "not.is.null" in nullable, (
+        "the caller needs the one narrowing that makes the two numbers equal, which is excluding the "
+        "nulls from the counted column"
+    )
+
+
+def test_a_refusal_makes_no_claim_when_grouping_or_a_non_count_is_asked_for() -> None:
+    """Row count is not the answer to a per-group count, a sum, or a total over several sources."""
+    grouped = _refusal_for(
+        [AggregateSpec(function=AggregateFunction.COUNT, column=None, alias="n")],
+        group_by=["census_county_name"],
+    )
+    summed = _refusal_for([AggregateSpec(function=AggregateFunction.SUM, column="ein", alias="t")])
+
+    assert "is the answer" not in grouped, "a grouped count is not answered by the total row count"
+    assert "is the answer" not in summed, "a sum is not a row count"
+    # And the message the model needs either way still stands.
+    for message in (grouped, summed):
+        assert "50284" in message
+        assert "narrow the filters" in message
