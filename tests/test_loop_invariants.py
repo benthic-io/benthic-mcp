@@ -707,6 +707,107 @@ def _case_for(case_id: str) -> dict[str, Any]:
     return {"id": case_id, "turns": [{"turn": 0, "tool_results": []}], "elapsed_s": 1.0}
 
 
+def test_pipeline_provenance_check_equates_spellings_but_not_different_indexes() -> None:
+    """The check compares definitions, because a name is not an identity.
+
+    CREATE INDEX IF NOT EXISTS succeeds when a differently-defined index already owns the name, so a
+    name-only comparison reports that as clean. Equating spellings matters just as much: the pipeline
+    omits the default access method and pg_get_indexdef always writes it, so the first definition-
+    comparing run reported 36 mismatches that were all the same index.
+
+    Predicates are compared with parentheses removed, which under-reports a grouping-only difference
+    - stated in the docstring rather than papered over. Everything the trap turns on is exact.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "check_pipeline_provenance.py"
+    spec = importlib.util.spec_from_file_location("check_pipeline_provenance_defs", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    normalise = module.normalise_definition
+
+    same = [
+        (
+            "default access method spelled out by the server",
+            "CREATE INDEX IF NOT EXISTS i ON public.t (a) TABLESPACE ssd_1tb;",
+            "CREATE INDEX i ON public.t USING btree (a)",
+        ),
+        (
+            "nested predicate parentheses",
+            "CREATE INDEX IF NOT EXISTS i ON public.t (a) WHERE ((a is null) AND (b is not null));",
+            "CREATE INDEX i ON public.t USING btree (a) WHERE (a is null) and (b is not null)",
+        ),
+        (
+            "cast echoed back with parentheses",
+            "CREATE INDEX IF NOT EXISTS i ON public.t ((b)::text) WHERE (b IS NOT NULL);",
+            "CREATE INDEX i ON public.t USING btree (b::text) WHERE b IS NOT NULL",
+        ),
+    ]
+    for label, declared, live in same:
+        assert normalise(declared) == normalise(live), f"{label} must compare equal"
+
+    different = [
+        (
+            "different column",
+            "CREATE INDEX IF NOT EXISTS i ON public.t (a);",
+            "CREATE INDEX i ON public.t USING btree (b)",
+        ),
+        (
+            "reordered composite",
+            "CREATE INDEX IF NOT EXISTS i ON public.t (a, b);",
+            "CREATE INDEX i ON public.t USING btree (b, a)",
+        ),
+        (
+            "different predicate",
+            "CREATE INDEX IF NOT EXISTS i ON public.t (a) WHERE a IS NULL;",
+            "CREATE INDEX i ON public.t USING btree (a) WHERE a IS NOT NULL",
+        ),
+        (
+            "predicate present against absent",
+            "CREATE INDEX IF NOT EXISTS i ON public.t (a);",
+            "CREATE INDEX i ON public.t USING btree (a) WHERE a IS NULL",
+        ),
+        (
+            "unique against non-unique",
+            "CREATE UNIQUE INDEX IF NOT EXISTS i ON public.t (a);",
+            "CREATE INDEX i ON public.t USING btree (a)",
+        ),
+    ]
+    for label, declared, live in different:
+        assert normalise(declared) != normalise(live), f"{label} must not compare equal"
+
+
+def test_pipeline_provenance_check_ignores_index_statements_written_in_comments() -> None:
+    """A prose comment containing the words CREATE INDEX CONCURRENTLY parses as a declaration.
+
+    `recovered/usaspending/indexes_recovered.sql` carries exactly that, in a comment explaining what an
+    interrupted CONCURRENTLY leaves behind. Comments were stripped inside the normaliser but not before
+    the statements were located, so the word became an index named CONCURRENTLY and was reported as a
+    declared index that is absent from the database.
+    """
+    import importlib.util
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "check_pipeline_provenance.py"
+    spec = importlib.util.spec_from_file_location("check_pipeline_provenance_comments", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    commented = (
+        "-- These two statements were found on production in the state a CREATE INDEX\n"
+        "-- CONCURRENTLY leaves when it is interrupted before writing anything:\n"
+        "CREATE INDEX IF NOT EXISTS idx_real ON public.t USING btree (a);\n"
+    )
+    found = module.parse_index_statements(commented)
+
+    assert "CONCURRENTLY" not in found, (
+        "a commented-out CREATE INDEX must not be counted as a declaration; it was reported as a "
+        "declared index absent from the database"
+    )
+    assert "idx_real" in found, "the real statement alongside the comment must still be found"
+
+
 def test_pipeline_provenance_check_classifies_system_indexes_rather_than_calling_them_drift() -> None:
     """Every index a rebuild would not recreate is worth naming; the ones Postgres creates are not.
 
