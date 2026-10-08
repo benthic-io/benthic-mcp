@@ -630,6 +630,68 @@ count cost. **Do not fix it with `reltuples`.** That message claims the number i
 the caller to report it as such; an estimate there would replace an unhelpful refusal with a
 confident false claim. An estimate is admissible only in the "how far over the cap" framing, labelled.
 
+## The `discover` payload, measured 2026-10-07
+
+All figures are live calls against the running service, bytes from the served text and tokens from
+llama-server's `/tokenize` on the real Tiel-Coder tokenizer. Five repeats per case, byte-identical.
+
+**Linear, not constant-dominated.** `bytes = 1,242 + 3,105 x limit` (constant is 6.2%), `limit` is
+schema-bounded at 8 (`server.py:244`). There is no fixed tax that lowering `limit` cannot touch - which
+falsifies the framing I had been using. But **`limit` is still the wrong knob**: of 850 recorded
+discover calls carrying arguments, **720 use the default 6, 130 use 8, and none use less than 6**. The
+model never under-asks, so lowering the default just gets re-asked next turn. `limit=1` is also unusable
+- it returns zero `join_paths` on the empty query.
+
+**Columns are the lever, not relations.** 62% of the payload is `relations[].columns[]`, multiplied by
+`limit` through `_INLINE_COLUMN_LIMIT = 12` (`catalog.py:149`). `description`, `srid` and `unit` are
+null in **4,255 of 4,255** manifest columns; `native_type` differs from `type` in 77.8%, so it is not
+duplication. There are no rows and no prose in a discovery response - it is pure schema.
+
+**A fourth blind instrument, found here.** `sweep.py:158` truncates recorded tool text at **6,000
+bytes**, which censors 133 of 149 `disc_qualified` results and 128 of 254 `disc_typo` results. Every
+size figure derived from a record is therefore a **lower bound**, including the ones in this section.
+Records also store no prompt token counts at all.
+
+**`b5344f5` is the precedent, and its verdict was negative.** That commit removed `native_type`, `srid`
+and `unit` and measured:
+
+```
+prompt tokens   646,553 -> 642,474   (-0.6%)
+tuning pass     23/25    -> 18/25
+empty answers   5        -> 9
+```
+
+Its own conclusion was that "response bytes are dominated by data rows, not schema", and that "the 40%
+target this work set should have been checked against the data-row share first". **Any payload change
+has to clear that bar.** Note the mechanism differs from what is now proposed - `b5344f5` *deleted*
+fields, which took information away, whereas a column budget defers it to `detail='full'`, which the
+model already uses. Different risk, still unproven.
+
+**What share is this, actually.** Discover is **56.3% of recorded tool-result bytes** across the probe
+corpus, and **100%** for both pure-discovery probes. A budget cutting discover ~55% saves about **28.6%
+of tool-result bytes corpus-wide**. That is not the same as prompt tokens: the prompt also carries the
+system prompt (tool descriptions ~449 tokens plus `BASE_CORE`) and the model's own completions, and
+**the prompt-level effect is unmeasured**. The population also differs from `b5344f5`'s suite.
+
+**It is not an accuracy fix.** None of the three failing probes fail because of payload size -
+`deadend_empty` fails by deliberating twelve turns without ever issuing a query, which is a convergence
+problem, and more context would not help it. This buys prompt tokens and latency, at real behavioural
+risk. That is a defensible trade; it is not a defect repair, and it should not be queued ahead of the
+stall cases on the strength of its byte count.
+
+**Two things a bound must not do.** `detail='full'` is where `disc_qualified`'s winning path lives (37
+of 126 records answer from a single `full` call, 2 turns) and 489 of 850 recorded calls use it, so a
+summary-only bound saves that probe **nothing**. The worst case is also untouched: `usaspending.
+subawards` at 103 columns is **23,928 bytes / 6,555 tokens** via `detail='full'`. And a `limit` ceiling
+must be clamped server-side (`min(limit, 4)`, the seam `service.discover` already uses), never by
+lowering the pydantic `le` - the model asks for `limit=8` in 130 recorded calls, and turning those into
+validation errors burns a turn for nothing.
+
+**Load-bearing assumption, if anyone revisits this:** ranking is a strict prefix. Across 9 probe
+questions the `limit=8` relation list was always exactly the `limit=3` prefix, so a lower ceiling
+never changes which relation ranks first. If a query exists where rank 1 or 2 moves with `limit`, that
+property is false and the whole argument collapses.
+
 ## The GPU is the operator's
 
 `benthic-observe.timer` is **disabled**. A sweep is ~25 minutes of continuous generation on a card the
@@ -666,11 +728,11 @@ controlled, so a rebuilt machine loses them - `benthic-observe.{service,timer}`,
    earned its place by measurement". It needs a contract and a measurement, and per playbook.py's
    own note, twelve grounded lessons were once measured as worth no more than one hand-written
    rule - so grounding a true statement is not evidence that it changes behaviour.
-2. **A default discover response is about 15KB.** Measured at `limit=6`, summary returns 14,812
-   bytes, roughly 3,700 tokens or 46% of an 8,000-token turn, because individual relations still
-   carry up to 12 columns each. Bounding the total is a separate decision from the `detail='full'`
-   description fix that landed, and nothing bounds it today except `BENTHIC_MAX_RESPONSE_BYTES` at
-   1MB, far too loose to ever bind.
+2. **The `discover` payload is a cost problem, not an accuracy problem, and one attempt to fix it was
+   already reverted on evidence.** Measured properly 2026-10-07: the default call is **19,763 bytes /
+   5,555 tokens**, not the 14,812 previously recorded here - that figure could not be reproduced
+   across ~120 argument combinations and was ~33% low. Full measurement below. **Do not treat this as
+   a defect to fix on sight**; `b5344f5` is the precedent and its verdict was negative.
 3. **All five manifests pin an older commit than the pipeline the runner holds, and two datasets
    have schema drift the pipeline does not account for.** `scripts/check_pipeline_provenance.py`
    measures both, on a 30-minute timer on thunkah, exit 1 on drift. The `commit_hash` semantics are
