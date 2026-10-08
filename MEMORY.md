@@ -676,49 +676,48 @@ what it means, with the positive requirement in a new contract.
 **Do not solve this with `reltuples`.** The refusal says the number is exact and instructs the caller to
 report it as such; an estimate there replaces an unhelpful refusal with a confident false claim.
 
-## `order=`, `limit=` and `offset=` are silently ignored (verified 2026-10-07)
+## `order=`, `limit=` and `offset=` were silently ignored (fixed in `4064a2a`)
 
-**This is a correctness defect, not a tuning problem, and it makes the observer's pass rate
-meaningless.** `build_single_query` constructs `RelationSource(...)` at `query.py:441` with only
-`alias`, `dataset`, `relation`, `select` and `filters`. `order`, `limit` and `offset` therefore keep
-their defaults - `order=[]`, `limit=None`, `offset=0`. `postgrest.py:228` only appends an `order` param
-when `source.order` is non-empty, so **PostgREST is never asked to sort**. `_order_rows`
-(`query.py:989`) then sorts the fetched page locally, and `postgrest.py:45` falls back to
-`default_query_limit` of 100.
+**This was a correctness defect, not a tuning problem, and it made the observer's pass rate
+meaningless.** `build_single_query` constructed `RelationSource(...)` with only `alias`, `dataset`,
+`relation`, `select` and `filters`. `order`, `limit` and `offset` therefore kept their defaults -
+`order=[]`, `limit=None`, `offset=0`. `postgrest.py:228` only appends an `order` param when
+`source.order` is non-empty, so **PostgREST was never asked to sort**. `_order_rows` sorted the
+fetched page locally, and `fetch` fell back to `default_query_limit` of 100.
 
-Verified against ground truth, not inferred:
+Before, against ground truth:
 
 ```
-benthic_query order=[total_obligation:desc] limit=1, usaspending.prime_awards
-    -> MULTIPLE RECIPIENTS  2,698,943.00          <- what the server calls the largest
+order=[total_obligation:desc] limit=1, usaspending.prime_awards
+    -> MULTIPLE RECIPIENTS  2,698,943.00          <- what the server called the largest
 count(total_obligation > 2,698,943)              -> 2,374,098 rows are larger
-psql: select total_obligation from public.prime_awards
-      where total_obligation > 0 order by total_obligation desc limit 1
-    -> MULTIPLE RECIPIENTS  373,109,113,199.00    <- ground truth
+psql ORDER BY total_obligation DESC LIMIT 1      -> 373,109,113,199.00
 ```
 
-**Off by a factor of ~138,000, with 2.37 million rows larger.** Three consequences follow from the same
-three missing arguments:
+Off by a factor of ~138,000, with 2.37 million rows larger. `limit` was also capped at 100 whatever
+the caller asked for, despite the tool advertising `le=1000`, and `offset` never paged at all.
 
-- **`order=` is page-local.** A probe can answer "the largest X" confidently and be wrong.
-- **`limit` is capped at 100.** `limit=1000` silently returns 100 rows; the tool advertises `le=1000`.
-- **`offset` does not page.** `offset=100` returns 0 rows with `next_offset: null`. There is no way out
-  of a wide source.
+After, same call, live:
 
-**This means 14/17 does not measure accuracy.** `query_order_mixed` currently scores as a pass while
-returning five recipients at `$0.00`; the cycle `20261004T215351` answered `query_having_text` with
-Treasury at $1.43T when the true agency maximum is HHS at $5.59T. **Fixing this will convert passes into
-failures before it converts failures into passes, and the pass rate will dip. That is the correct
-outcome and must not be read as a regression** - the honest reading is that the old number was
-measuring the wrong thing.
+```
+order=[total_obligation:desc] limit=1  ->  MULTIPLE RECIPIENTS  373,109,113,199.00   4.5s
+```
 
-Attribution came from the `deadend_empty` / `query_aggregate` / `query_having_text` review; the live
-verification above is mine and the numbers differ from that report's by three orders of magnitude
-(it bisected to ~$81B against SQL's $373B), so treat its arithmetic as directional and this as exact.
+**What this means for every number measured before it.** 14/17 was not measuring accuracy.
+`query_order_mixed` passed while returning five recipients at `$0.00`; `20261004T215351` answered
+`query_having_text` with Treasury at $1.43T when the true agency maximum is HHS at $5.59T.
+**Expect the pass rate to fall before it rises - that is the correct outcome, and reading it as a
+regression would be reading a corrected measurement as a new defect.**
 
-**The fix is verifiable without a GPU**, which is why it does not need batching against anything: the
-contract is "`order=desc limit=1` returns the same row as `ORDER BY ... LIMIT 1` in the database", and
-that is a pure query-engine property with no model in the loop.
+Pushing an order down is only sound for a plain row select. An aggregate alias is computed output and
+a grouped query orders over the group, so both keep the local sort, which is correct there because the
+database computed them. `fetch_complete`'s primary-key order for stable paging is untouched.
+
+**A contract that passed for the wrong reason, worth remembering.** The first version of the `order`
+contract built a `QueryRequest` by hand with the order already on the `RelationSource` - so it passed
+against the unfixed code, because it bypassed `build_single_query`, which is the boundary the tool
+actually crosses. Same shape as this morning's source-alias defect: the test had to be built through
+the same path the caller uses, or it proves nothing about production.
 
 ## Two refusal messages advertise a capability they do not have
 
