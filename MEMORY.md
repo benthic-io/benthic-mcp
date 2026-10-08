@@ -630,6 +630,52 @@ count cost. **Do not fix it with `reltuples`.** That message claims the number i
 the caller to report it as such; an estimate there would replace an unhelpful refusal with a
 confident false claim. An estimate is admissible only in the "how far over the cap" framing, labelled.
 
+## The count refusal had no number in it, and the obvious fix was the wrong one
+
+`count_matching` passed `limit=None` into `_build_params`, which **omits the parameter entirely**. The
+comment there claimed `Range: 0-0` bounded the request. It does not: **`Range` is honoured on GET and
+ignored on HEAD**, so with no limit PostgREST's `page_total` degenerates to `count(*)` over the whole
+relation. Captured from `pg_stat_activity`, the request the transport actually sends expands to a
+`SELECT count(*) FROM prime_awards` alongside the page.
+
+| usaspending.prime_awards, 183M rows | result |
+|---|---|
+| the form the transport sent | **825s, 834s** on two runs |
+| with `limit=1` | **3.2s**, exact |
+
+Both long runs were killed by **`statement_timeout=30s` on the `api_user` role** - verified directly:
+`select rolconfig from pg_roles where rolname='api_user'` returns `{statement_timeout=30s}`.
+`count_matching` turns any failure into `None`, which is why 106 of the corpus's cap refusals carried no
+number at all.
+
+**Raising `BENTHIC_REQUEST_TIMEOUT_SECONDS` would have changed nothing.** The client timeout and the
+server-side `statement_timeout` are both 30s, and the client wins that tie by about 150ms, so the trace
+cannot tell them apart - but a 40s client still receives `HTTP 500` with `proxy-status: PostgREST;
+error=57014` (`query_canceled`). A longer client timeout only converts a fast `None` into a slow one.
+
+Verified end to end after `c1d7fb7`, through the real transport:
+
+```
+benthic_query  metrics=[max:total_obligation]  on usaspending.prime_awards
+  -> "182995658 rows match the filters in usaspending.prime_awards, 182985658 more than
+      the complete-scan limit of 10000"          3.2s
+```
+
+`182995658` is the true `select count(*)`. Previously that same refusal said only "More than 10000 rows
+match". This is not a size problem specific to `prime_awards` either: `entity_awards` (191M) failed
+identically and `financial_accounts_by_awards` (446M) fails even with `limit=1`, because its bare count
+alone is 32.2s. It is a cliff at `statement_timeout`, not a threshold with a safe side.
+
+**A pre-existing contract had to be corrected rather than satisfied.** It asserted the count request
+carries no `limit` at all, with the rationale *"a count over 0 rows is not a 0-row request"* - a
+statement about `limit=0`, applied to every limit, which forbade the `limit=1` that fixes this. A HEAD
+never carries a body, so the absence of a limit was never what avoided the transfer; the
+`count_body_reads` assertion in that same test is what checks that, and it still passes. Narrowed to
+what it means, with the positive requirement in a new contract.
+
+**Do not solve this with `reltuples`.** The refusal says the number is exact and instructs the caller to
+report it as such; an estimate there replaces an unhelpful refusal with a confident false claim.
+
 ## `order=`, `limit=` and `offset=` are silently ignored (verified 2026-10-07)
 
 **This is a correctness defect, not a tuning problem, and it makes the observer's pass rate
