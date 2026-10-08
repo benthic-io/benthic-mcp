@@ -990,6 +990,99 @@ def test_the_seed_never_asserts_a_join_the_manifest_does_not_sign() -> None:
             assert kept, f"{dataset_name} guidance does not survive screening: {line} ({report.notes()})"
 
 
+def test_the_playbook_names_the_agency_obligation_route_and_its_narrowing_constraint() -> None:
+    """There is a signed relation for agency-level obligation totals, and the model is never told.
+
+    `query_having_text` asked "which USAspending agency has the largest total obligation" and failed in
+    **all 35 complete cycles** in the corpus - never once answered. It is not a server defect: the route
+    works. Measured live:
+
+        reporting_agency_overview, fiscal_year=2025, fiscal_period=12, group by toptier_code,
+        sum(total_dollars_obligated_gtas), order desc
+          -> 075 = 5,588,699,606,177.20   (then vw_published_dabs_toptier_agency for the name)
+
+    The relation was not discoverable by the question that needs it: of seven natural phrasings of
+    "agency total obligation", six never surfaced it in discover. `terms` is the lever that ranks it,
+    and the `usaspending` section names `mv_district_spending` for state and district totals while
+    saying nothing at all about agency.
+
+    The guide has to carry the narrowing constraint too, because it is a trap: the relation declares no
+    primary key, so an aggregate over it is refused as unreliable. A whole fiscal year is 1,221 rows and
+    is refused; a year *and* period is 102 and works. A model told the relation exists but not this will
+    spend its turns discovering the limit.
+    """
+    import asyncio
+
+    from benthic_mcp.seed import seed_playbook
+
+    playbook = seed_playbook()
+    guide = playbook.relations.get("usaspending.reporting_agency_overview")
+    assert guide is not None, (
+        "the seed does not mention reporting_agency_overview at all, so nothing can rank it for the "
+        "question that needs it"
+    )
+
+    signed = asyncio.run(live_catalog())
+    if not signed.relations:
+        pytest.skip("the signed manifest cache is absent, so there is nothing to check against")
+
+    relation = signed.relations.get(("usaspending", "reporting_agency_overview"))
+    assert relation is not None, (
+        "the guide names a relation the signed manifest does not carry; guidance may point at what is "
+        "already signed and at nothing else"
+    )
+    for column in guide.preferred_columns:
+        assert column in relation.columns, f"preferred_columns names {column}, which the relation does not declare"
+    assert "total_dollars_obligated_gtas" in guide.preferred_columns, (
+        "the obligation column has to be named, or the model aggregates the wrong one"
+    )
+
+    # The phrasings that were tested and did not surface the relation before.
+    blob = " ".join(guide.terms).lower()
+    for phrase in ("agency", "obligation"):
+        assert phrase in blob, f"no ranking term mentions {phrase!r}: {guide.terms}"
+
+    prose = " ".join(
+        [guide.description or "", *guide.anti_patterns, *playbook.datasets["usaspending"].when_to_use]
+    ).lower()
+    assert "reporting_agency_overview" in prose, "the dataset guidance must point at the relation"
+    assert "fiscal_period" in prose or "period" in prose, (
+        "the guidance has to say the relation is per agency, fiscal year and period; without that the "
+        "question has no single answer and the model cannot scope it"
+    )
+    assert "primary key" in prose, (
+        "the relation declares no primary key, so an aggregate over it is refused unless narrowed "
+        "below one page. That is a trap the model will otherwise walk into"
+    )
+
+
+def test_the_having_text_probe_describes_what_it_actually_measures() -> None:
+    """`query_having_text` named a regression that no longer exists, so a pass would prove nothing.
+
+    Its `expect` reads "Regression: `having mx=eq.<text>` on a text aggregate previously raised a
+    TypeError from an eagerly-built comparison dict." That is fixed - `having mx=eq.Wyoming` on a
+    grouped text max returns 0 rows cleanly, and the model never issues a `having` in any cycle in the
+    corpus. The probe's *question* is about agency obligation totals, which is a different thing
+    entirely.
+
+    Leaving the stale text would mean that when this probe finally passes, the record says it proved a
+    regression guard that was never exercised. That is the failure mode this project keeps having: an
+    instrument that reports a result it did not measure.
+    """
+    import json
+    from pathlib import Path
+
+    probes = json.loads((Path(__file__).resolve().parents[1] / "eval/observer/probes/core.json").read_text())
+    probe = next(item for item in probes["probes"] if item["id"] == "query_having_text")
+
+    expect = probe["expect"]
+    assert "having mx=eq" not in expect, (
+        "the expect still claims the having TypeError regression, which is fixed and never exercised "
+        f"by this probe: {expect}"
+    )
+    assert "agency" in expect.lower(), f"the expect must describe what the question actually asks about: {expect}"
+
+
 def test_the_scan_limit_refusal_names_a_relation_that_answers_the_question_without_an_aggregate() -> None:
     """A refusal the caller cannot act on is a dead end, and this one was hit 29 times in one
     unattended probe run.

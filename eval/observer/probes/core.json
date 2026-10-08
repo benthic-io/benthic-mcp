@@ -21,7 +21,7 @@
     {
       "id": "query_having_text",
       "cluster": "query",
-      "expect": "Regression: `having mx=eq.<text>` on a text aggregate previously raised a TypeError from an eagerly-built comparison dict.",
+      "expect": "The agency-obligation route: usaspending.reporting_agency_overview grouped by toptier_code within one fiscal year and period, with the name looked up in vw_published_dabs_toptier_agency. This probe's earlier expectation named a text-aggregate comparison TypeError; that regression is fixed and this probe never issued a having clause in any cycle in the corpus, so that expectation would have credited a pass with proving a guard it never touched.",
       "question": "Which USAspending agency has the largest total obligation? Give me the agency name and that maximum."
     },
     {
