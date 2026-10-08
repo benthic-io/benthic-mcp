@@ -630,6 +630,73 @@ count cost. **Do not fix it with `reltuples`.** That message claims the number i
 the caller to report it as such; an estimate there would replace an unhelpful refusal with a
 confident false claim. An estimate is admissible only in the "how far over the cap" framing, labelled.
 
+## `order=`, `limit=` and `offset=` are silently ignored (verified 2026-10-07)
+
+**This is a correctness defect, not a tuning problem, and it makes the observer's pass rate
+meaningless.** `build_single_query` constructs `RelationSource(...)` at `query.py:441` with only
+`alias`, `dataset`, `relation`, `select` and `filters`. `order`, `limit` and `offset` therefore keep
+their defaults - `order=[]`, `limit=None`, `offset=0`. `postgrest.py:228` only appends an `order` param
+when `source.order` is non-empty, so **PostgREST is never asked to sort**. `_order_rows`
+(`query.py:989`) then sorts the fetched page locally, and `postgrest.py:45` falls back to
+`default_query_limit` of 100.
+
+Verified against ground truth, not inferred:
+
+```
+benthic_query order=[total_obligation:desc] limit=1, usaspending.prime_awards
+    -> MULTIPLE RECIPIENTS  2,698,943.00          <- what the server calls the largest
+count(total_obligation > 2,698,943)              -> 2,374,098 rows are larger
+psql: select total_obligation from public.prime_awards
+      where total_obligation > 0 order by total_obligation desc limit 1
+    -> MULTIPLE RECIPIENTS  373,109,113,199.00    <- ground truth
+```
+
+**Off by a factor of ~138,000, with 2.37 million rows larger.** Three consequences follow from the same
+three missing arguments:
+
+- **`order=` is page-local.** A probe can answer "the largest X" confidently and be wrong.
+- **`limit` is capped at 100.** `limit=1000` silently returns 100 rows; the tool advertises `le=1000`.
+- **`offset` does not page.** `offset=100` returns 0 rows with `next_offset: null`. There is no way out
+  of a wide source.
+
+**This means 14/17 does not measure accuracy.** `query_order_mixed` currently scores as a pass while
+returning five recipients at `$0.00`; the cycle `20261004T215351` answered `query_having_text` with
+Treasury at $1.43T when the true agency maximum is HHS at $5.59T. **Fixing this will convert passes into
+failures before it converts failures into passes, and the pass rate will dip. That is the correct
+outcome and must not be read as a regression** - the honest reading is that the old number was
+measuring the wrong thing.
+
+Attribution came from the `deadend_empty` / `query_aggregate` / `query_having_text` review; the live
+verification above is mine and the numbers differ from that report's by three orders of magnitude
+(it bisected to ~$81B against SQL's $373B), so treat its arithmetic as directional and this as exact.
+
+**The fix is verifiable without a GPU**, which is why it does not need batching against anything: the
+contract is "`order=desc limit=1` returns the same row as `ORDER BY ... LIMIT 1` in the database", and
+that is a pure query-engine property with no model in the loop.
+
+## Two refusal messages advertise a capability they do not have
+
+Both were found by the same review and both are one-line corrections, but they are separate defects
+from the `order=` one above and should be fixed separately so each is measurable.
+
+**The `in` filter.** `_FILTER_SYNTAX` (`query.py:589`) tells every caller that
+`'column=in."a","b"'` takes a JSON array, and that exact string is then refused by `_parse_filter`
+(`query.py:623`), which requires `json.loads` to accept it - and `json.loads('"a","b"')` raises
+`Extra data`. Confirmed live: `uei=in.["A","B"]` works, `uei=in."A","B"` does not. The corpus contains
+the model **copying the advertised form verbatim and being refused for it**, in `deadend_empty` T6 of
+`20261007T200544` and T7 of `20261006T170851`. The message names the one shape that cannot work and
+never shows the one that does.
+
+**The truncation warning.** It tells the model the result is "a partial view rather than a total" and
+to answer from the rows held. Sound about completeness, actively false about ordering - and
+`20261004T215351` followed it exactly ("since we're ordering by obligation descending, the first row IS
+the maximum") and was scored as a pass. This warning should state that the ordering is page-local.
+
+The shared cause is that each message was written to be unmissable in isolation and neither was
+checked against what the model does next. `deadend_empty` has failed in **33 consecutive** cycles since
+2026-10-06 01:17 and `query_having_text` in **all 35** complete cycles in the corpus - neither has a
+passing cycle to point at except via a different route.
+
 ## The `discover` payload, measured 2026-10-07
 
 All figures are live calls against the running service, bytes from the served text and tokens from
