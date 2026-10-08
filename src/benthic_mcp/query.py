@@ -598,7 +598,7 @@ _FILTER_OPERATORS = ", ".join(operator.value for operator in FilterOperator if o
 _FILTER_SYNTAX = (
     "use 'column=operator.value'. Example: 'congressional_district=eq.03'. "
     f"Operators are {_FILTER_OPERATORS}. Values are unquoted; "
-    "'column=in.\"a\",\"b\"' takes a JSON array, and 'column=is.null' or 'column=not.is.null' takes no value. "
+    "'column=in.[\"a\",\"b\"]' takes a JSON array, and 'column=is.null' or 'column=not.is.null' takes no value. "
     "'column>0' is also accepted for the comparison operators."
 )
 
@@ -634,12 +634,18 @@ def _parse_filter(expression: str) -> FilterSpec:
         return FilterSpec(column=column, operator=operator)
     if expression_value.startswith(f"{FilterOperator.IN.value}."):
         raw = expression_value.split(".", 1)[1]
+        # The worked example is built from the caller's own column, because the refusal used to say
+        # only "use a JSON array" and a model that had copied the syntax text's own example got that
+        # message and no spelling that worked. See test_no_filter_example_the_server_advertises_is_one_it_would_refuse.
+        example = f'{column}=in.["A","B"]'
         try:
             values = json.loads(raw)
         except json.JSONDecodeError as exc:
-            raise QueryValidationError(f"Invalid in filter {expression!r}; use a JSON array") from exc
+            raise QueryValidationError(
+                f"Invalid in filter {expression!r}; use a JSON array, for example {example!r}"
+            ) from exc
         if not isinstance(values, list):
-            raise QueryValidationError(f"Invalid in filter {expression!r}; use a JSON array")
+            raise QueryValidationError(f"Invalid in filter {expression!r}; use a JSON array, for example {example!r}")
         return FilterSpec(column=column, operator=FilterOperator.IN, value=values)
     if "." not in expression_value:
         # Two shapes reach here, and they need different messages.

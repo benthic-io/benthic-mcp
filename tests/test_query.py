@@ -1,3 +1,4 @@
+import re
 from dataclasses import replace
 from typing import Any
 
@@ -73,6 +74,39 @@ async def test_executes_signed_multi_dataset_query(settings: Any, bdp_documents:
     assert result.rows[0]["awards.name"] == "Recipient A"
     assert result.rows[0]["sam.name"] == "SAM A"
     assert result.joins[0].reliability == Reliability.RELIABLE
+
+
+def test_no_filter_example_the_server_advertises_is_one_it_would_refuse() -> None:
+    """A message that shows a spelling the server then rejects costs the caller its turns.
+
+    `_FILTER_SYNTAX` advertised `'column=in."a","b"'`. `_parse_filter` requires `json.loads` to accept
+    what follows `in.`, and `json.loads('"a","b"')` raises `Extra data` - so the one example the server
+    printed was the one it refused. The invalid-in refusal said "use a JSON array" without showing one.
+
+    This is not hypothetical. `deadend_empty` failed in 33 consecutive cycles, and in two of them the
+    model copied the advertised form verbatim and was refused for it: T6 of `20261007T200544` and T7 of
+    `20261006T170851`, having already spent the turn before it on the same mistake.
+
+    Every filter-shaped example in the syntax text and in the invalid-in refusal is extracted and fed
+    back through the parser. If any of them would be refused, this fails - which is the property that
+    matters, rather than a check that one particular string happens to be right today.
+    """
+    from benthic_mcp.query import _FILTER_SYNTAX, _parse_filter
+
+    examples = re.findall(r"'([a-z_]+=[^']+)'", _FILTER_SYNTAX)
+    assert examples, "the syntax text has to show examples for this to check anything"
+
+    for example in examples:
+        if "operator.value" in example or "operator" in example:
+            continue
+        _parse_filter(example)  # raises if the server would refuse what it advertises
+
+    # And the refusal for a malformed `in` has to show a spelling that works, not just describe one.
+    with pytest.raises(QueryValidationError) as caught:
+        _parse_filter('uei=in."A","B"')
+    assert 'in.["A","B"]' in str(caught.value), "the invalid-in refusal has to show a spelling that parses: " + str(
+        caught.value
+    )
 
 
 @pytest.mark.asyncio
