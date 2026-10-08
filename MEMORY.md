@@ -560,11 +560,101 @@ indexes undeclared when they live in `recovered/<ds>/`; `is_automatic` missed `_
 declares indexes in Python, which this check does not read - stated in its output rather than left
 implicit.
 
-**Two questions still open, and neither is mine to answer.** What `commit_hash` means - "migrated by"
-or "state as of" - decides whether re-pinning to `991a8715` is honest or a lie for datasets that
-were never re-migrated. And thunkah's checkout is on branch `main` tracking origin, not detached at a
-pinned commit, so "the pipeline that ran" is currently a moving target even though it is clean and
-in sync. Both need the pipeline owner.
+**`commit_hash` means "the state of the database is created by this commit."** Operator, 2026-10-07.
+This settles the open question above, and it settles it the uncomfortable way: the current pins are
+**false by definition**, not merely stale. Indexes were added after `ea88629f` / `66f58556` and
+applied outside the pipeline, so a rebuild from a pinned commit does not reproduce the state it claims
+to describe.
+
+Consequences, which are not all mine to act on:
+- Advancing to `991a8715` would be **honest** for `irs_ng`, `samer`, `up_cdmaps`, whose declared
+  indexes are all present and defined identically to the live database.
+- Advancing to `991a8715` would **still be false** for `usaspending` and `usp_cl`, where 12 and 6
+  declared indexes are absent and `uei_crosswalk` would rebuild under different names.
+- Manifests are signed, so re-pinning is the pipeline owner's action, not ours.
+
+Still open, and also not mine: thunkah's checkout is on branch `main` tracking origin, not detached at
+a pinned commit, so "the pipeline that ran" is a moving target even though it is clean and in sync.
+Detaching at the commit, or having the run stamp the commit it used, is what makes this check's answer
+exact rather than approximate.
+
+**This check also compared index names and nothing else, which I described as comparing definitions.**
+`pg_get_indexdef` was never queried and tablespace was printed but never compared, so it could not see
+the failure it was written for - `CREATE INDEX IF NOT EXISTS` succeeding against a wrong index that
+already owns the name. Fixed in `0192eb3`. Four attempts were needed and every one produced phantom
+mismatches in the same direction (the pipeline omits the default `USING btree`; predicate parentheses
+differ; a prose comment containing the words "CREATE INDEX CONCURRENTLY" parsed as an index *named*
+`CONCURRENTLY`; `gist(` against `gist (`). The comparison is now bounded on purpose: the index head -
+name, relation, method, column list, uniqueness, whether a predicate exists - is exact, and
+predicate-only differences are reported but not counted. Three currently, all `0` against `0::numeric`.
+Normalising a predicate means choosing between calling that equal and calling `(b)::text <> ''` and
+`b <> ''` equal; the second is a real difference, so the predicate is reported rather than gated on.
+
+## Two accuracy defects, 2026-10-07
+
+**A refusal that can answer should say so.** `_scan_refusal` in `src/benthic_mcp/query.py` refuses any
+aggregate that would need a complete scan past the limit. The refusal used to say only how far over the
+cap the request was, so a model asking "how many IRS exempt organisations are on record" - a count, and
+nothing else - was refused, and then spent twelve turns enumerating organisation codes by hand while
+the answer sat in the message it had already been given. It now says **the count is the answer to the
+question as asked, report it as exact**, when the aggregate is a count over a single non-nullable column
+with no grouping. For a nullable column it instead says the figure is **an upper bound** and names the
+`not.is.null` filter that makes the two agree. `uei` is nullable in the live signed manifest despite
+being the primary key, so production correctly takes the upper-bound branch.
+
+**The branch was inert in production for a day, and the tests did not catch it.** Two defects of my
+own. `benthic_query` qualifies an aggregate column as `count:s.id`, so the nullability lookup missed
+and the branch never ran; and the test factory's `relation()` omitted `nullable`, which
+`catalog.py` reads as `column.get("nullable", True)` - so the fixture said nullable where the intent
+was non-nullable, inverting what the test was for. **A private-function test passed the whole time.**
+The general rule this earns: a test must cross the boundary the caller crosses. Here that meant
+building the contract through `QueryService` with the same qualified form the server actually receives,
+which is what `tests/test_query.py` does now.
+
+**Verified but not yet shown to change an answer.** The refusal wording is confirmed correct live in
+both branches, but that is a message, not a behaviour. The honest accuracy baseline is still the
+combination suite's **87/100** from the clean 2026-10-04 run. The observer's most recent complete cycle
+(`20261007T200544`) answered **14/17**, failing `deadend_empty` and `query_aggregate` at the full
+12-turn budget and `query_having_text` at four - the same three as the cycle before, so these are stable
+rather than noise.
+
+**The largest remaining accuracy gap is refusals with no number in them.** `matched_rows` is set in
+`PostgrestTransport.fetch` (`src/benthic_mcp/postgrest.py:36`) and is `None` when the count request did
+not answer - already documented in the code as "not an error". Measured across the whole record
+corpus: **562 cap refusals, 110 of them (20%) carrying no number at all, and 106 of those 110 on
+`usaspending.prime_awards` alone** - 183M rows, 192 GB. So for the highest-volume relation in the
+dataset the refusal degrades to "narrow the filters", which is exactly the unhelpful message that was
+just fixed. Not yet diagnosed: whether the count is lost to the 30 s client
+`request_timeout_seconds` (`config.py:76`), a server-side `statement_timeout`, or PostgREST's own
+count cost. **Do not fix it with `reltuples`.** That message claims the number is exact and instructs
+the caller to report it as such; an estimate there would replace an unhelpful refusal with a
+confident false claim. An estimate is admissible only in the "how far over the cap" framing, labelled.
+
+## The GPU is the operator's
+
+`benthic-observe.timer` is **disabled**. A sweep is ~25 minutes of continuous generation on a card the
+operator uses for other work between sessions. Replaced by `scripts/health-check.sh` on
+`benthic-health.timer`, every 15 minutes, which costs two file reads and one HTTP call and **no GPU
+at all**.
+
+The split is not an optimisation, it is what the failures actually were. Three VRAM wedges (2026-10-01,
+twice on 2026-10-04) were all fixed by a restart and none was caused by a commit, so nothing would
+ever trigger a sweep in response to one - polling was the only thing that could catch them. But
+`/health` answered **200 through every wedge** while generation was dead, so the signal was never in
+the health endpoint. It was in VRAM, read from sysfs. Meanwhile what the sweep is actually good at is
+measuring the server *after* a change - and the standing rule is to restart both MCP instances after
+every push, so on-demand is also the moment a sweep means most.
+
+`health-check.sh` reads `/health`, VRAM total/used, whether each MCP instance is running the current
+`src/` (comparing `ExecMainStartTimestamp` as wall clock, since the monotonic variant cannot be
+compared against a file mtime), and the newest observer record. It exits 1 on a wedge, on an
+unreachable chat path, and on a stale service. Both detectors are proven non-vacuous: a forced
+threshold trips it, and a `src/` edited after the services started reports `STALE`.
+
+Sweeps are on demand: `systemctl --user start benthic-observe.service`, or `scripts/tick.sh --probe`
+for the log and exit code. The units live in `~/.config/systemd/user/` and are **not** version
+controlled, so a rebuilt machine loses them - `benthic-observe.{service,timer}`, `benthic-health.
+{service,timer}`. Read `scripts/health-check.sh` and this section to restore them.
 
 ## Still open
 1. **Six cases never issue a `query`, and a raised token budget does not fix it** (0 of 4 on
@@ -583,16 +673,21 @@ in sync. Both need the pipeline owner.
    1MB, far too loose to ever bind.
 3. **All five manifests pin an older commit than the pipeline the runner holds, and two datasets
    have schema drift the pipeline does not account for.** `scripts/check_pipeline_provenance.py`
-   measures both, on a 30-minute timer on thunkah, exit 1 on drift. Superseded as an open item by the
-   measurement recorded under "The pipeline is accurate; the manifests do not say so".
-4. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
-5. **`eval/arms/` and `eval/noise/` were deleted with no recorded invocation.** Every other residue
+   measures both, on a 30-minute timer on thunkah, exit 1 on drift. The `commit_hash` semantics are
+   now settled - see above - which makes this *false by definition* rather than merely stale, and makes
+   re-pinning honest for three datasets and false for two. Both need the pipeline owner, because the
+   manifests are signed.
+4. **20% of cap refusals carry no number, 96% of those on one relation.** `usaspending.prime_awards`,
+   183M rows. Highest-leverage accuracy fix available. Mechanism not yet diagnosed, and the `reltuples`
+   shortcut is explicitly ruled out - see "Two accuracy defects" above.
+5. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
+6. **`eval/arms/` and `eval/noise/` were deleted with no recorded invocation.** Every other residue
    directory had a documented producer, which is what made deleting it defensible. These two were
    attributed to `run_eval.py --output-dir <path>` from their file shape alone - a `questions.json`,
    `results.json` and `transcript.jsonl` in a timestamped subdirectory. That is an inference, and if
    the shape was wrong, re-creating them means re-deriving what produced them.
 
-6. **`scripts/agent-step.sh` is unused but deliberately kept.** It hands observer findings to a
+7. **`scripts/agent-step.sh` is unused but deliberately kept.** It hands observer findings to a
    headless OpenCode session behind the same gates a human turn gets, and doing that by hand is how
    this work actually runs. Nothing references it, which is not the same as superseded - deleting a
    working tool because nothing calls it today is how capability disappears quietly. It needs either

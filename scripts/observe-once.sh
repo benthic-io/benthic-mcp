@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# One observation cycle. Driven by benthic-observe.timer, not a loop.
+# One observation cycle. Driven by benthic-observe.service, on demand - the timer is disabled
+# because a sweep is 25 minutes of the operator GPU and only measures something after a change.
+# The 15-minute benthic-health.timer covers the continuous part (VRAM wedge) for no GPU at all.
 #
 # This was a `while true` loop with the timer set to OnUnitActiveSec. Those are mutually
 # exclusive: the timer fires once, the service then never exits, and `OnUnitActiveSec` measures
