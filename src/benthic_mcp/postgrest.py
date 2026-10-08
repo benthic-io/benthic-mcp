@@ -131,10 +131,16 @@ class PostgrestTransport:
 
         The order is dropped. It exists so `offset` means something across pages, and a HEAD fetches
         no rows and pages nothing, so it cannot change how many rows match - it can only make the
-        question slower. On usaspending.all_entities (17.9M rows) the unfiltered count took 2.1s
-        with the order and 26.1s without it.
+        question slower.
+
+        The limit is 1 rather than absent. `Range: 0-0` bounds a GET and is ignored on a HEAD, so
+        without a limit PostgREST computes `page_total` as `count(*)` over the whole relation: 825s
+        and 834s on usaspending.prime_awards, both killed by `statement_timeout=30s` on the api_user
+        role, which returned None here and left 106 corpus refusals with no number in them. With
+        `limit=1` the same request returns the exact total in about 3.3s - the count comes from
+        `pgrst_source_count`, which the page limit does not touch.
         """
-        params = self._build_params(source.model_copy(update={"order": []}), definition, None, 0)
+        params = self._build_params(source.model_copy(update={"order": []}), definition, 1, 0)
         url = self._relation_url(definition)
         self._validate_endpoint(url)
         query = httpx.QueryParams([(key, str(value)) for key, value in params])
@@ -242,8 +248,9 @@ class PostgrestTransport:
                 self._format_filter(item, definition.columns[column], inner=True) for item in filters
             )
             params.append(("and", f"({expressions})"))
-        # A count asks for no rows at all, so it carries no limit: PostgREST reads `limit=0` as
-        # unset, and the 0-row range on the request is what actually bounds it.
+        # A count asks for no rows, but it still has to carry a limit: PostgREST reads `limit=0` as
+        # unset, and `Range` bounds a GET but not a HEAD, so a limit of None leaves page_total
+        # counting the whole relation.
         if limit is not None:
             params.append(("limit", limit + 1 if sentinel else limit))
         if offset:
