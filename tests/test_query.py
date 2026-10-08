@@ -76,6 +76,107 @@ async def test_executes_signed_multi_dataset_query(settings: Any, bdp_documents:
 
 
 @pytest.mark.asyncio
+async def test_order_limit_and_offset_reach_the_database(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """`order=`, `limit=` and `offset=` have to be pushed to PostgREST, not applied in Python.
+
+    `build_single_query` built its `RelationSource` with only alias, dataset, relation, select and
+    filters, so all three kept their defaults and the transport never sent them. `_order_rows` then
+    sorted one fixed page, which made "the largest X" a statement about whichever 100 rows came back.
+
+    Measured on usaspending.prime_awards before the fix:
+
+        order=[total_obligation:desc] limit=1  ->  2,698,943.00     what the server called the largest
+        count(total_obligation > 2,698,943)    ->  2,374,098 rows are larger
+        psql ORDER BY total_obligation DESC    ->  373,109,113,199.00
+
+    Off by about 138,000x, on a probe set where the pass rate therefore never measured accuracy.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-0/2"})
+        return httpx.Response(
+            200, json=[{"total_obligation": 373109113199.0, "legal_business_name": "MULTIPLE RECIPIENTS"}]
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(settings, BdpRepository(settings, client), PostgrestTransport(settings, client))
+        result = await service.execute(
+            build_single_query(
+                question="largest total obligation",
+                source="usaspending.all_entities",
+                select=["legal_business_name", "total_obligation"],
+                where=None,
+                group_by=None,
+                metrics=None,
+                having=None,
+                order=["total_obligation:desc"],
+                limit=1,
+                offset=0,
+            )
+        )
+
+    sent = requests[-1].url.params
+    assert sent.get("order") == "total_obligation.desc", (
+        "the database must be asked to sort; sorting one page in Python cannot answer "
+        f"'the largest X'. Request sent: {requests[-1].url}"
+    )
+    assert "limit" in sent, f"the request must carry a limit. Sent: {requests[-1].url}"
+    assert result.rows[0]["s.total_obligation"] == 373109113199.0
+
+
+@pytest.mark.asyncio
+async def test_an_order_on_an_aggregate_alias_is_not_pushed_to_the_source(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """An aggregate alias is not a column, so it cannot be an ORDER BY on the source.
+
+    `order=["mx:desc"]` over `metrics=["mx=max:total_obligation"]` sorts computed output. Pushing that
+    to the source would ask PostgREST to order a column named `mx` that does not exist there. It has
+    to stay a local sort, which is correct here precisely because the aggregate is computed by the
+    database over every matching row.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-0/2"})
+        return httpx.Response(200, json=[{"mx": 2.0}])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(settings, BdpRepository(settings, client), PostgrestTransport(settings, client))
+        await service.execute(
+            build_single_query(
+                question="largest",
+                source="usaspending.all_entities",
+                select=None,
+                where=None,
+                group_by=None,
+                metrics=["mx=max:total_obligation"],
+                having=None,
+                order=["mx:desc"],
+                limit=10,
+                offset=0,
+            )
+        )
+
+    # `fetch_complete` adds the primary-key order so paging is deterministic. That is correct and is
+    # not what this contract is about: what must not happen is `mx` reaching the source.
+    assert "mx" not in (requests[-1].url.params.get("order") or ""), (
+        f"an aggregate alias must not become a source ORDER BY: {requests[-1].url}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_aggregates_and_orders_joined_rows(settings: Any, bdp_documents: dict[str, Any]) -> None:
     client = _query_client(
         bdp_documents,
