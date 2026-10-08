@@ -26,6 +26,7 @@ from benthic_mcp.models import (
     Reliability,
     SourceErrorPolicy,
     SourceMetadata,
+    SourceOrder,
 )
 from benthic_mcp.postgrest import FetchedSource, PostgrestTransport
 
@@ -430,10 +431,18 @@ def build_single_query(
         else [f"{alias}.{column}" for column in selected]
     )
     output_order: list[OutputOrder] = []
+    source_order: list[SourceOrder] = []
+    # Only a plain row select can hand its ordering to the database. An aggregate alias is computed
+    # output and a grouped query orders over the group, so neither has a column to push down; both
+    # stay sorted by `_order_rows` afterwards, which is correct there because the database computed them.
+    pushable = not aggregates and not group_by
     for expression in order or []:
         column, descending = _parse_order(expression)
-        qualified = column if any(item.alias == column for item in aggregates) else f"{alias}.{column}"
+        on_aggregate = any(item.alias == column for item in aggregates)
+        qualified = column if on_aggregate else f"{alias}.{column}"
         output_order.append(OutputOrder(column=qualified, descending=descending))
+        if pushable and not on_aggregate:
+            source_order.append(SourceOrder(column=column, descending=descending))
 
     return QueryRequest(
         question=question,
@@ -444,6 +453,9 @@ def build_single_query(
                 relation=relation,
                 select=selected,
                 filters=filters,
+                order=source_order,
+                limit=limit,
+                offset=offset,
             )
         ],
         output_columns=output_columns,
