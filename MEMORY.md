@@ -590,6 +590,38 @@ predicate-only differences are reported but not counted. Three currently, all `0
 Normalising a predicate means choosing between calling that equal and calling `(b)::text <> ''` and
 `b <> ''` equal; the second is a real difference, so the predicate is reported rather than gated on.
 
+## `query_having_text` could not be answered because the route was unfindable (fixed `16bfbd7`)
+
+It failed in **all 35 complete cycles** in the corpus and was never once answered. Not a server defect -
+the route works, and after the `order=` fix it returns the right answer:
+
+```
+usaspending.reporting_agency_overview, fiscal_year=2025, fiscal_period=12,
+group by toptier_code, sum(total_dollars_obligated_gtas), order desc
+  -> 075 = 5,588,699,606,177.20      then vw_published_dabs_toptier_agency for the name
+```
+
+**The relation was simply not findable.** Of seven natural phrasings of "agency total obligation", six
+never surfaced it in `discover`; the `usaspending` guidance named `mv_district_spending` for state and
+district totals and said nothing about agency. The fix is a `RelationGuide` whose `terms` are those
+phrasings, plus a `when_to_use` line. Verified after restart: all seven now surface it, and for the
+probe's exact question it ranks **1st**, with the name lookup 2nd.
+
+**The trap the guide has to carry too.** The relation declares **no primary key**, so an aggregate over
+it is refused as unreliable - a whole fiscal year is 1,221 rows and is refused, a year *and* period is
+about 102 and works. It also holds one row per agency per period, so "the largest total obligation" has
+no single answer until the period is fixed. Both are in the guide; a model told only that the relation
+exists would spend its turns finding the limit.
+
+Note `Catalog.relations` is keyed by a **`tuple`** `(dataset, relation)`, not a dotted string - the
+playbook's own dict uses dotted strings, so the two look alike and are not.
+
+**The probe's `expect` was rewritten.** It named a text-aggregate comparison TypeError that is fixed and
+that the probe never exercised - no cycle in the corpus issues a `having` clause - so a pass would have
+been credited with proving a regression guard it never touched. `relation()` in the test factories gained
+a `primary_key` override so a fixture can say "no primary key" truthfully; inventing one would have let
+guidance about that refusal pass screening while describing a relation the manifest does not contain.
+
 ## Two accuracy defects, 2026-10-07
 
 **A refusal that can answer should say so.** `_scan_refusal` in `src/benthic_mcp/query.py` refuses any
