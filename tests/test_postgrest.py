@@ -298,7 +298,13 @@ async def test_fetch_complete_asks_for_the_count_without_transferring_a_row(sett
     assert count.method == "HEAD", "a GET would transfer the rows it is trying not to read"
     assert count.headers["prefer"] == "count=exact"
     assert count.headers["range"] == "0-0"
-    assert "limit" not in count.url.params, "a count over 0 rows is not a 0-row request"
+    # This used to assert no `limit` at all, on the grounds that "a count over 0 rows is not a 0-row
+    # request". That is a statement about `limit=0`, which PostgREST reads as unset, and it was applied
+    # to every limit - which forbade the `limit=1` that stops PostgREST counting the whole relation,
+    # since Range bounds a GET but not a HEAD. A HEAD never carries a body, so no limit was never what
+    # saved the transfer; the `count_body_reads` assertion above is what checks that. The positive
+    # requirement now lives in test_a_count_request_carries_a_limit_because_range_does_not_bound_a_head.
+    assert count.url.params.get("limit", "1") != "0", "a count over 0 rows is not a 0-row request"
     # The count has to describe the rows the scan would page, so it carries the scan's own filters.
     assert count.url.params["state"] == "eq.ME"
     assert count.url.params["select"] == "uei"
@@ -569,6 +575,43 @@ async def test_count_matching_reads_the_total_out_of_an_unsatisfiable_range(sett
     assert count is not None
     assert count.total == 0
     assert requests[0].method == "HEAD"
+
+
+@pytest.mark.asyncio
+async def test_a_count_request_carries_a_limit_because_range_does_not_bound_a_head(
+    settings: Any, catalog: Catalog
+) -> None:
+    """The count HEAD must carry `limit`, or it costs a full scan and answers nothing.
+
+    `Range: 0-0` is honoured on GET and ignored on HEAD, so on a HEAD the request is not bounded by
+    it. Without a `limit`, PostgREST's `page_total` degenerates to `count(*)` over the whole relation.
+    Measured on usaspending.prime_awards (183M rows): 825s and 834s for two runs without it, both
+    killed by `statement_timeout=30s` on the api_user role, so `count_matching` returned None and 106
+    of the corpus's refusals carried no number. With `limit=1` the same request returns the exact
+    total - 182995658, matching `select count(*)` - in about 3.3s.
+
+    Raising the client timeout does not help and is not the fix: the database refuses at 30s whatever
+    the client waits for, so a longer client timeout only converts a fast None into a slow one.
+    """
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, headers={"Content-Range": "0-0/182995658"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        count = await PostgrestTransport(settings, client).count_matching(
+            RelationSource(alias="awards", dataset="usaspending", relation="prime_awards"),
+            catalog.resolve_relation("usaspending", "prime_awards"),
+        )
+
+    sent = requests[0].url.params
+    assert "limit" in sent, (
+        "the count HEAD must carry a limit; Range is ignored on HEAD, so without one PostgREST "
+        f"counts the whole relation. Query sent: {requests[0].url}"
+    )
+    assert int(sent["limit"]) >= 1, "limit=0 reads as unset to PostgREST and reintroduces the full scan"
+    assert count is not None and count.total == 182995658, "the exact total must still be parsed"
 
 
 @pytest.mark.asyncio
