@@ -71,6 +71,19 @@ def manifests(private_key: Ed25519PrivateKey) -> dict[str, dict[str, Any]]:
                     non_nullable=("uei",),
                 ),
                 relation(
+                    "reporting_agency_overview",
+                    [
+                        ("toptier_code", "string"),
+                        ("fiscal_year", "integer"),
+                        ("fiscal_period", "integer"),
+                        ("total_dollars_obligated_gtas", "number"),
+                    ],
+                    description="Obligations by awarding agency, per fiscal year and period",
+                    # No primary key, as in the signed manifest. That is why guidance has to narrow this
+                    # relation to a single period before aggregating it.
+                    primary_key=(),
+                ),
+                relation(
                     "prime_awards",
                     [
                         ("recipient_uei", "string"),

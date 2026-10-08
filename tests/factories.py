@@ -96,6 +96,7 @@ def relation(
     queryable: bool = True,
     description: str | None = None,
     non_nullable: tuple[str, ...] = (),
+    primary_key: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     # non_nullable is explicit because the catalog reads a missing key as nullable, so a fixture that
     # means "cannot be null" has to say so. The production manifest marks primary keys that way, and
@@ -106,7 +107,12 @@ def relation(
         "provenance": "upstream",
         "queryable": queryable,
         "description": description,
-        "primary_key": [columns[0][0]] if columns else [],
+        # primary_key is overridable, and an explicit () means "this relation declares no primary key",
+        # which is a real property and not a fixture artefact: usaspending.reporting_agency_overview
+        # has none, so an aggregate over it is refused as unreliable unless the filter leaves fewer
+        # rows than one page. A fixture that invented a primary key would let guidance about that
+        # refusal pass screening while describing a relation the manifest does not contain.
+        "primary_key": list(primary_key) if primary_key is not None else ([columns[0][0]] if columns else []),
         "columns": [
             {
                 "name": column,

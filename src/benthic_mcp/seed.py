@@ -34,6 +34,29 @@ SEED_RELATION_HINTS: dict[str, RelationGuide] = {
         description="Award counts and total obligation already grouped by state, district and fiscal "
         "year, 16,401 rows. Use this instead of grouping a large award table by district.",
     ),
+    "usaspending.reporting_agency_overview": RelationGuide(
+        # Six of seven natural phrasings of "agency total obligation" failed to surface this relation
+        # before these terms existed, which is what left query_having_text unanswered in every cycle.
+        terms={
+            "agency total obligation": 90,
+            "agency obligation totals": 90,
+            "largest agency by obligation": 90,
+            "which agency has the largest total obligation": 95,
+            "obligations by agency": 85,
+            "agency spending by agency": 80,
+        },
+        preferred_columns=["toptier_code", "fiscal_year", "fiscal_period", "total_dollars_obligated_gtas"],
+        description="Obligations by awarding agency, one row per agency per fiscal year and fiscal "
+        "period, 10,545 rows. There is no agency name column: join or look up toptier_code in "
+        "vw_published_dabs_toptier_agency. Use this instead of summing an award table by agency.",
+        anti_patterns=[
+            "This relation declares no primary key, so an aggregate over it is refused as unreliable "
+            "unless the filter leaves fewer rows than one page. A whole fiscal year is 1,221 rows and is "
+            "refused; a fiscal year and period is about 102 and works.",
+            "It holds one row per agency per period, so 'the largest total obligation' has no single "
+            "answer until the period is fixed. Narrow by fiscal_year and fiscal_period first.",
+        ],
+    ),
     "usaspending.state_data": RelationGuide(
         terms={"state list": 70, "state codes": 60, "fips": 70},
         preferred_columns=["code", "name", "type", "fips"],
@@ -138,6 +161,10 @@ SEED_DATASETS: dict[str, DatasetSection] = {
             "For totals by state or district, use `usaspending.mv_district_spending`, which is already "
             "grouped upstream. Grouping `usaspending.all_entities` by a column is refused, because "
             "every matching row would have to be read into memory first.",
+            "For totals by awarding agency, use `usaspending.reporting_agency_overview`, which is "
+            "grouped by agency, fiscal year and fiscal period. Narrow it to a fiscal year and period "
+            "before aggregating, and look the name up by toptier_code in "
+            "`usaspending.vw_published_dabs_toptier_agency`, because it carries no name column.",
         ],
         anti_patterns=[
             "Recipient district and place-of-performance district are different columns; using the wrong "
