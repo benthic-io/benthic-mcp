@@ -180,6 +180,26 @@ cryptographically gone. Only the operator can decide whether that matters.
 
 - A contract must fail before the fix. Three of mine shipped green because they asserted the wrong
   thing - `screen_prose` returns what it **kept**, I named it `dropped`.
+- **A contract passing before you wrote the fix is a warning, not a relief.** The `order=` contract
+  built a `QueryRequest` by hand with the order already on the `RelationSource`, so it passed against
+  unfixed code by bypassing `build_single_query` - the boundary the tool actually crosses. Same shape as
+  the source-alias defect above: build the test through the path the caller uses.
+- **Read the field name in the code you are copying.** `sweep.py` reads `message["reasoning_content"]`
+  for a model's reasoning, and its comment explains why: this server runs `--reasoning-preserve`, so
+  `content` is empty on a thinking turn, and recording only that makes 61% of turns look blank. A new
+  runner read `content`, so every transcript it produced was missing its reasoning - which the grader
+  reads by design. It presented as two empty answers on one capability and read as a model failure
+  until the transcripts were opened.
+- **Read the contracts you are about to break.** Regenerating `eval/generated/questions.json` to
+  refresh stale sampled values silently reverted three deliberate decisions made on evidence.
+  `tests/test_canary.py` caught it - it asserts canary cases are byte-identical to their generated
+  counterparts - and I had not read that contract.
+- **Read what a check flagged rather than reasoning about what it should flag.** Six false positives in
+  one grader, every one found by opening the flagged item: filter syntax, column aliases and an acronym
+  read as invented relations, and a model correctly rejecting a trap it had named by mistake.
+- **A rising number is not progress.** Every improvement came from checking a claim against something
+  independent - `psql`, a contract that had to fail first, a corrupted expectation that had to grade
+  wrong. The grader had six defects before it found one real thing.
 - A test reading `eval/harness/cache` fails in CI; that directory is gitignored. Contracts must be
   self-contained.
 - `pkill` on the MCP binary kills the stdio child and llama-server does not always respawn it. Use
@@ -866,6 +886,107 @@ cause fixed today; the two cycles since read 16/17 and 17/17.
 was has been overtaken, and the truncation-warning fix that would have targeted it was deliberately not
 made - that defect was a consequence of the broken `order=`, so there may be nothing left to fix.
 
+## Measuring correctness, and the grader that had to be fixed first
+
+**`eval/truth/grade.py`** grades `eval/generated/questions.json` - 30 cases that have carried
+`expected` values since 2026-09-29 with **nothing grading them**. Their expectations come from the
+live database at generation time (`generate_cases.py` calls `fetch_rows` and `sample_key`), which is
+what makes them gradeable. `classify.py` refuses to score the *other* suite for the opposite reason:
+an `expected` written by whoever ran the tool last would describe whatever the server happened to do.
+
+**Grading is per capability and there is deliberately no overall rate.** An aggregate over exact RPCs
+and partly heuristic joins is a number that cannot be acted on, and it invites optimising the suite
+until the aggregate is high. `eval/truth/run_suite.py` drives the suite and prints that table;
+re-grading a stored run costs no model time and never changes a verdict, which is what makes it safe
+to re-check an old run against a corrected grader.
+
+Last run, corrected instrument:
+
+```
+discovery 7/7 100%          sequential_lookup        4/4 100%    unsigned_join_rejection  3/3 100%
+multi_step_join 2/2 100%    identifier_reliable_join 2/2 100%   heuristic_joins         4/4 100%
+relation_trap 1/1 100%      RPCs                     2/2 100%
+
+find_district_rpc       0/1  0%   reports_row_count
+identifier_partial_join 0/2  0%   reports:right_count
+2 cases not measured (HTTP ReadTimeout), reported as not_measured rather than as failures
+```
+
+`unsigned_join_rejection` 3/3 is the one that matters most for sharing this: the model refuses unsigned
+joins rather than inventing them.
+
+**The grader produced six false positives before it produced a finding**, and each was found the same
+way - by reading what a check flagged rather than by reasoning about it. A grader that manufactures
+failures gets stopped being read, and one that manufactures passes is worse than no grader:
+
+1. bare substring matching - `ein` inside `reine`, `name` inside `surname`, `uei` inside
+   `unique_entity_identifier`. Crediting a column the answer never named manufactures a pass
+2. dotted filter syntax read as relations - `eq.senate`, `not.is`, and `u.s` (which falls out of
+   matching inside `usp_cl.legislator_terms`)
+3. column aliases - `left.state` and `right.uei` are what a model writes when reporting join evidence.
+   Six of thirty cases failed on this alone
+4. acronyms - `SAM.gov` is the dataset's human name in prose. The discriminator is case: a relation is
+   lowercase snake case
+5. the trap check - a model that wrote "I used legislator_terms (NOT mv_current_lawmakers which is
+   current-only)" was graded as relying on the trap for naming it in order to reject it. Now every
+   mention must sit inside a rejection, bounded by sentence boundaries; bounding by neighbouring
+   mentions was not enough, because the second mention read the first rejection's wording
+6. **a case with no `expected` and no `required_tools` graded green** having verified nothing but the
+   absence of one phrase. Indistinguishable from a pass in a table, so it is its own check now
+
+**Two harness failures read as capability failures, and both are now their own checks.** A case that
+500'd recorded as `relation_trap 0/2`, and one cut off by the token budget recorded as the other half.
+`errored` and `truncated` are returned before any capability check runs, and the summary reports
+`measured` and `not_measured` per capability and divides by measured only. `not_measured` is always
+present including as zero, because a key that appears only when nonzero reads as zero on one row and
+absent on another.
+
+### The trap check's stated limit
+
+It misses a rejection whose only negation is the verb, as in "I avoided X". Widening the marker list to
+catch that would admit phrasings where the model *did* rely on the trap, and a false pass is worse
+than a miss. Asserted in a contract and stated in the function rather than engineered away.
+
+### Numeric truth, `eval/truth/numeric.py` and `generate_numeric.py`
+
+**Nothing in the 30-case suite asks the model for a number**, which is the whole reason the `order=` bug
+could report the largest `total_obligation` as 2,698,943 and pass every case. Five numeric cases close
+that, in three kinds because they catch three different failures:
+
+- **filtered_count** - catches a filter on the wrong column, since 0 is a confident answer
+- **ordered_max** - catches the page-local `order=` bug directly, because the value comes from SQL's
+  own ORDER BY
+- **grouped_max** - catches an aggregate over a partial scan
+
+Every value is derived from the database, never through `benthic_query`: a number fetched by the server
+under test inherits every defect the case exists to catch. Each case records `derived_from` and
+`derived_at`, and a contract requires both, so a stale expectation is visible rather than silently
+wrong. Three spot-checks against `psql` on production all matched.
+
+**Four defects in the generator, two of which would have produced wrong expectations silently:**
+`httpx.QueryParams` stringifies with no leading `?` so `f"{url}{query}"` requested
+`.../prime_awardsselect=...` and PostgREST answered PGRST205, a missing table; the manifest `endpoint`
+is a prefix and omitting the relation name fetched the site root, which returns 200 with the homepage
+HTML; sending the MCP bearer token to an **anonymous** endpoint makes PostgREST try to verify a JWT it
+has no secret for, so a credential the endpoint does not want fails the whole request; and a filtered
+and an unfiltered maximum over one column produced two cases with the same id.
+
+### Regenerating the suite reverts three deliberate decisions
+
+**`eval/generated/questions.json` is hand-corrected and `generate_cases.py` cannot reproduce it.**
+Restoring it from the wrong ancestor loses a subset of these:
+
+- `f2f0346` rewrote the `districts_in_bbox` question to **state the extents the case asserts on**,
+  after a model passed a zero-height box that returned the same row and satisfied the case for the
+  wrong reason
+- `8ed9c2b` **dropped three duplicate `_limits` RPC cases** - same expectations, same operation, same
+  assertions, a ninth of the suite's wall clock - and **dated the `relation_trap` questions to the 117th
+  Congress**, which had asked for "a past date" and never named one
+
+**`8ed9c2b` carries all three** and is the version to restore from. `tests/test_canary.py` asserts every
+canary case is byte-identical to its generated counterpart, because the canary must not carry a second
+answer key - that contract is what catches the regression, and it is why the canary exists.
+
 ## The `discover` payload, measured 2026-10-07
 
 All figures are live calls against the running service, bytes from the served text and tokens from
@@ -975,9 +1096,10 @@ controlled, so a rebuilt machine loses them - `benthic-observe.{service,timer}`,
    now settled - see above - which makes this *false by definition* rather than merely stale, and makes
    re-pinning honest for three datasets and false for two. Both need the pipeline owner, because the
    manifests are signed.
-4. **20% of cap refusals carry no number, 96% of those on one relation.** `usaspending.prime_awards`,
-   183M rows. Highest-leverage accuracy fix available. Mechanism not yet diagnosed, and the `reltuples`
-   shortcut is explicitly ruled out - see "Two accuracy defects" above.
+4. **Numeric truth exists but is nearly empty.** Five cases, all on two relations - see "Measuring
+   correctness, and the grader that had to be fixed first" below. Every relation whose answers involve
+   a number wants one, and the count fix is what made the numbers appear to check. The 20% of cap
+   refusals that carried no number were fixed in `c1d7fb7` and verified live; see that section.
 5. **Tighten the `estimate > 0` guard to test for absence**, per the convention above.
 6. **`eval/arms/` and `eval/noise/` were deleted with no recorded invocation.** Every other residue
    directory had a documented producer, which is what made deleting it defensible. These two were
