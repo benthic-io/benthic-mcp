@@ -415,8 +415,14 @@ def check_rpc(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
                 found=len(calls),
             )
         )
-    wanted = expected.get("arguments") or {}
+    wanted = dict(expected.get("arguments") or {})
     if calls and wanted:
+        # Exact comparison. An earlier version of this check excused the coordinates because the
+        # question said "a small bounding box around" a point without stating the extent, which made
+        # grading a coin flip. That was a defect in the *suite*, not in the check: f2f0346 rewrote the
+        # question to state the extents it asserts on, because a model had passed a zero-height box and
+        # satisfied the case for the wrong reason. The question now names the box, so the arguments are
+        # knowable and are compared exactly.
         sent = calls[0]["args"]
         mismatched = {
             key: {"expected": value, "sent": sent.get(key)}
@@ -432,6 +438,7 @@ def check_rpc(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
                 detail="" if not mismatched else f"argument mismatch: {sorted(mismatched)}",
             )
         )
+
     row_count = expected.get("row_count")
     if row_count is not None:
         checks.append(

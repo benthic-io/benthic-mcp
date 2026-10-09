@@ -294,12 +294,6 @@ def test_a_relation_outside_the_manifest_is_still_caught_alongside_syntax() -> N
     assert found == ["usaspending.fabricated_table"], f"the floor named {found}"
 
 
-def test_a_relation_outside_the_signed_manifest_fails() -> None:
-    result = grade.grade_case(case(), run("I read usaspending.invented_table for this."), {"usaspending.prime_awards"})
-    assert not result.passed
-    assert grade.UNMANIFESTED in failing(result)
-
-
 def test_only_manifested_relations_are_accepted() -> None:
     result = grade.grade_case(
         case(),
@@ -319,10 +313,83 @@ def test_the_floor_is_absent_when_no_manifest_is_supplied() -> None:
 # RPC arguments: a mismatch is a different failure from a missing count.
 
 
+def test_a_box_the_question_states_is_compared_exactly() -> None:
+    """The question names the extents, so the arguments are knowable and are compared exactly.
+
+    An earlier version excused the coordinates because the question said only "a small bounding box
+    around" a point. That was a defect in the suite - f2f0346 rewrote the question to state the box,
+    after a model passed a zero-height box and satisfied the case for the wrong reason - and excusing
+    it in the grader re-admitted the same hole.
+    """
+    c = case(
+        capability="districts_in_bbox_rpc",
+        required_tools=["benthic_rpc"],
+        expected={"arguments": dict(BBOX), "row_count": 1},
+    )
+    exact = grade.grade_case(
+        c,
+        run("1 row", tools=[("benthic_rpc", dict(BBOX, operation="districts_in_bbox"), True)]),
+    )
+    assert exact.passed, [c_.name for c_ in exact.failures()]
+
+    # The box the earlier run produced: a different extent that still contained the point. It now
+    # fails, because the question told the model which box to use.
+    grade_result = grade.grade_case(
+        c,
+        run(
+            "1 row",
+            tools=[
+                (
+                    "benthic_rpc",
+                    {
+                        "operation": "districts_in_bbox",
+                        "min_lat": 52.6235576,
+                        "max_lat": 52.6335576,
+                        "min_lon": 1.2873954,
+                        "max_lon": 1.2973954,
+                    },
+                    True,
+                )
+            ],
+        ),
+    )
+    assert not grade_result.passed
+    assert "rpc_arguments_match" in failing(grade_result)
+
+
+def test_a_point_rpc_is_compared_exactly() -> None:
+    """The point is given to seven decimal places in the question; pass it as given."""
+    c = case(
+        capability="find_district_rpc",
+        required_tools=["benthic_rpc"],
+        expected={"arguments": {"lat": 52.6285576, "lon": 1.2923954}, "row_count": 0},
+    )
+    good = grade.grade_case(
+        c,
+        run(
+            "0 rows", tools=[("benthic_rpc", {"operation": "find_district", "lat": 52.6285576, "lon": 1.2923954}, True)]
+        ),
+    )
+    assert good.passed, [x.name for x in good.failures()]
+    bad = grade.grade_case(
+        c,
+        run("0 rows", tools=[("benthic_rpc", {"operation": "find_district", "lat": 10.0, "lon": 99.0}, True)]),
+    )
+    assert not bad.passed
+    assert "rpc_arguments_match" in failing(bad)
+
+
+BBOX = {"min_lat": 52.6185576, "max_lat": 52.6385576, "min_lon": 1.2823954, "max_lon": 1.3023954}
+
+
 def test_rpc_argument_mismatch_is_named_as_such() -> None:
     result = grade.grade_case(
-        case(capability="find_district_rpc", expected={"arguments": {"lat": 52.6, "lon": 1.2}, "row_count": 1}),
-        run("1 row", tools=[("benthic_rpc", {"lat": 10.0, "lon": 99.0}, True)]),
+        case(
+            capability="find_district_rpc",
+            required_tools=["benthic_rpc"],
+            expected={"arguments": {"lat": 52.6, "lon": 1.2, "radius_meters": 1000}, "row_count": 1},
+        ),
+        run("1 row", tools=[("benthic_rpc", {"lat": 52.6, "lon": 1.2, "radius_meters": 500}, True)]),
     )
     assert "rpc_arguments_match" in failing(result)
     check = next(c for c in result.failures() if c.name == "rpc_arguments_match")
