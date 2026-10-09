@@ -16,11 +16,14 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-_spec = importlib.util.spec_from_file_location("numeric", ROOT / "eval" / "truth" / "numeric.py")
+# The check lives in grade.py with every other check, because grade.py owns the case shape and the
+# `Check` type. numeric.py held it first and needed a dict-to-Check adapter that existed only because
+# of the wrong module; a second loader duplicated grade.load_cases, and NumericCase was never called.
+_spec = importlib.util.spec_from_file_location("grade", ROOT / "eval" / "truth" / "grade.py")
 assert _spec is not None and _spec.loader is not None
-numeric = importlib.util.module_from_spec(_spec)
-sys.modules["numeric"] = numeric
-_spec.loader.exec_module(numeric)
+grade = importlib.util.module_from_spec(_spec)
+sys.modules["grade"] = grade
+_spec.loader.exec_module(grade)
 
 
 def case(**expected: Any) -> dict[str, Any]:
@@ -29,12 +32,19 @@ def case(**expected: Any) -> dict[str, Any]:
     return {"id": "n", "capability": "numeric_aggregate", "question": "q", "expected": base, "forbidden_claims": []}
 
 
-def graded(answer: str, **expected: Any) -> list[dict[str, Any]]:
-    return numeric.check_numeric(case(**expected), {"answer": answer}, answer)
+def graded(answer: str, reasoning: str = "", **expected: Any) -> list[dict[str, Any]]:
+    """Grade a case run the way the runner records one: an `answer` plus turns of `reasoning`."""
+    case_run: dict[str, Any] = {"answer": answer}
+    if reasoning:
+        case_run["turns"] = [{"reasoning": reasoning}]
+    return [
+        {"check": c.name, "ok": c.ok, "expected": c.expected, "found": c.found, "detail": c.detail}
+        for c in grade.check_numeric(case(**expected), case_run)
+    ]
 
 
-def failing(answer: str, **expected: Any) -> list[str]:
-    return [c["check"] for c in graded(answer, **expected) if not c["ok"]]
+def failing(answer: str, reasoning: str = "", **expected: Any) -> list[str]:
+    return [c["check"] for c in graded(answer, reasoning, **expected) if not c["ok"]]
 
 
 # --------------------------------------------------------------------------------------------
@@ -53,7 +63,7 @@ def failing(answer: str, **expected: Any) -> list[str]:
     ],
 )
 def test_ordinary_spellings_parse_to_the_right_number(text: str, expected: float) -> None:
-    assert expected in numeric.numbers_in(text)
+    assert expected in grade.numbers_in(text)
 
 
 @pytest.mark.parametrize(
@@ -67,20 +77,20 @@ def test_ordinary_spellings_parse_to_the_right_number(text: str, expected: float
 )
 def test_word_forms_parse(text: str, expected: float) -> None:
     """A model answering "373 billion" rather than the full figure is the same answer."""
-    assert expected in numeric.numbers_in(text)
+    assert expected in grade.numbers_in(text)
 
 
 def test_a_number_is_read_the_same_way_python_writes_it() -> None:
     """Round-trip, so the parser is checked against a formatter nobody here hand-tuned."""
     for value in (0, 1, 42, 1234, 999999, 1234567890, 373109113199, 2.5, 0.001):
         rendered = f"{value:,}"
-        assert float(value) in numeric.numbers_in(rendered), f"{value:,} did not round-trip"
-        assert float(value) in numeric.numbers_in(str(value))
+        assert float(value) in grade.numbers_in(rendered), f"{value:,} did not round-trip"
+        assert float(value) in grade.numbers_in(str(value))
 
 
 def test_currency_and_grouping_do_not_produce_two_numbers() -> None:
     """ "$1,234.56" is one number. Reading it as 1 and 1234.56 would let a wrong answer pass."""
-    assert numeric.numbers_in("$1,234.56") == [1234.56]
+    assert grade.numbers_in("$1,234.56") == [1234.56]
 
 
 def test_a_bare_year_is_a_number_the_grader_can_see() -> None:
@@ -89,7 +99,7 @@ def test_a_bare_year_is_a_number_the_grader_can_see() -> None:
     Stated as a fact about the instrument rather than papered over - `states_a_number` can be satisfied
     by a year in an otherwise answerless response, which is why the cases below require the value too.
     """
-    assert 117.0 in numeric.numbers_in("the 117th Congress")
+    assert 117.0 in grade.numbers_in("the 117th Congress")
 
 
 # --------------------------------------------------------------------------------------------
@@ -182,17 +192,57 @@ def test_the_column_check_does_match_a_standalone_word() -> None:
 
 
 # --------------------------------------------------------------------------------------------
+# The figure the user sees, against the figure somewhere in the record.
+
+
+def test_the_figure_in_the_final_answer_is_checked_separately_from_the_reasoning() -> None:
+    """A model can reach the right number in its reasoning and then report a different one.
+
+    `answer_text` includes reasoning for every other check in this grader, and a figure found only
+    there is real evidence. But the question asked for the figure, and what a reader is shown is the
+    final answer. Reading only the final answer would fail correct answers that place the figure in a
+    table or defer to an earlier turn; reading only the record would pass a model that misreports the
+    number it just computed. Both are graded.
+    """
+    wrong_to_the_user = "I queried prime_awards ordered by total_obligation descending."
+    right_but_only_in_reasoning = "ORDER BY total_obligation DESC LIMIT 1 returns 373109113199."
+    assert "figure_in_final_answer" in failing(
+        wrong_to_the_user, right_but_only_in_reasoning, value=373109113199, relative_tolerance=0.001
+    ), "a figure the model found but never reported is a figure the user never got"
+    assert "number_is_correct" not in failing(
+        wrong_to_the_user, right_but_only_in_reasoning, value=373109113199, relative_tolerance=0.001
+    ), "the record does contain it, so the permissive check must say so"
+
+
+def test_a_figure_in_the_final_answer_passes_both() -> None:
+    assert failing("The largest total_obligation is $373,109,113,199.00", value=373109113199) == []
+
+
+def test_no_figure_anywhere_fails_both() -> None:
+    """Reported as two failures rather than one, because the two say different things."""
+    checks = failing("I could not determine that.")
+    assert "states_a_number" in checks
+    assert "figure_in_final_answer" in checks
+
+
+def test_reasoning_alone_is_not_read_when_there_is_a_final_answer() -> None:
+    """The strict check reads the final answer. A figure next to it does not count."""
+    assert "figure_in_final_answer" in failing(
+        "I found a value of 42 elsewhere.", value=99, reasoning="the true maximum is 99"
+    )
+
+
+# --------------------------------------------------------------------------------------------
 # A case with no expected value must not grade as a pass.
 
 
 def test_a_numeric_case_with_no_value_is_reported_rather_than_passed() -> None:
-    checks = numeric.check_numeric(
+    checks = grade.check_numeric(
         {"id": "n", "capability": "numeric_aggregate", "question": "q", "expected": {"relation": "a.b"}},
         {"answer": "42"},
-        "42",
     )
-    assert not checks[0]["ok"]
-    assert checks[0]["check"] == "numeric_expected_present"
+    assert not checks[0].ok
+    assert checks[0].name == "numeric_expected_present"
 
 
 # --------------------------------------------------------------------------------------------
@@ -204,7 +254,7 @@ def test_every_numeric_case_declares_its_tolerances() -> None:
     path = ROOT / "eval" / "truth" / "numeric_cases.json"
     if not path.is_file():
         pytest.skip("no numeric cases generated yet")
-    for case_ in numeric.load_cases(str(path)):
+    for case_ in grade.load_cases(str(path)):
         expected = case_.get("expected") or {}
         assert "value" in expected, f"{case_['id']} has no derived value"
         assert (
@@ -217,7 +267,7 @@ def test_every_numeric_case_derives_its_value_and_says_how() -> None:
     path = ROOT / "eval" / "truth" / "numeric_cases.json"
     if not path.is_file():
         pytest.skip("no numeric cases generated yet")
-    for case_ in numeric.load_cases(str(path)):
+    for case_ in grade.load_cases(str(path)):
         assert case_.get("capability") == "numeric_aggregate"
         assert case_.get("derived_from"), f"{case_['id']} does not record where its value came from"
         assert case_.get("derived_at"), f"{case_['id']} does not record when it was derived"
