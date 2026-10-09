@@ -588,6 +588,183 @@ def check_sequential(case: dict[str, Any], case_run: dict[str, Any]) -> list[Che
     return checks
 
 
+# ---------------------------------------------------------------------------------------------
+# Numeric truth. The 30-case suite names relations, columns and signed paths, and reports how many
+# rows a join returned; not one asks the model to compute a figure and check it. That gap is why the
+# order= bug could report the largest total_obligation as 2,698,943 when the database says
+# 373,109,113,199 and pass every case. Expectations are derived from SQL by generate_numeric.py,
+# never through benthic_query - a number fetched by the server under test inherits every defect the
+# case exists to catch.
+
+# One pattern, one number. An earlier version ran four overlapping patterns and read "$1,234.56" as
+# four numbers - 1.0, 234.56 and 1234.56 twice - so a wrong answer containing any of those fragments
+# would pass. Order matters: the most specific form is tried first and scanning continues after it, so
+# "$373,109,113,199.00" yields one number rather than a dozen fragments.
+_NUMERIC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    # currency with grouping: $373,109,113,199.00
+    re.compile(r"\$\s*-?\d{1,3}(?:,\d{3})+(?:\.\d+)?"),
+    # word form with a magnitude: 373 billion
+    re.compile(r"-?\d+(?:\.\d+)?\s*(?:billion|million|thousand|bn|[bmk])\b", re.IGNORECASE),
+    # grouped integer or decimal: 1,234.56
+    re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?"),
+    # bare number: 42 or 42.5
+    re.compile(r"-?\d+(?:\.\d+)?"),
+)
+
+_MULTIPLIERS = {
+    "billion": 1_000_000_000,
+    "bn": 1_000_000_000,
+    "b": 1_000_000_000,
+    "million": 1_000_000,
+    "m": 1_000_000,
+    "thousand": 1_000,
+    "k": 1_000,
+}
+
+
+def numbers_in(text: str) -> list[float]:
+    """Every number the answer states, however it wrote it, with no duplicates and no fragments.
+
+    One left-to-right pass, most specific pattern first, so "$1,234.56" is one number rather than four.
+    Permissive about form and strict about value: "$373,109,113,199.00", "373 billion" and
+    "373109113199" are the same answer and all have to be readable, because a grader that demands one
+    spelling fails correct answers and gets switched off.
+    """
+    found: list[float] = []
+    position = 0
+    length = len(text)
+    while position < length:
+        best: tuple[int, re.Match[str]] | None = None
+        for pattern in _NUMERIC_PATTERNS:
+            match = pattern.search(text, position)
+            if match is not None and (best is None or match.start() < best[0]):
+                best = (match.start(), match)
+        if best is None:
+            break
+        start, match = best
+        raw = match.group(0)
+        digits = re.sub(r"[^\d.\-]", "", raw.replace("$", ""))
+        try:
+            value = float(digits)
+        except ValueError:
+            value = 0.0
+        unit = re.search(r"(billion|million|thousand|bn|[bmk])\b", raw, re.IGNORECASE)
+        if unit is not None:
+            value *= _MULTIPLIERS[unit.group(1).lower()]
+        found.append(value)
+        position = match.end()
+    return found
+
+
+def matches(value: float | int, candidate: float, relative: float, absolute: float) -> bool:
+    """Whether `candidate` is the same number as `value` within the declared tolerance.
+
+    Relative for anything large enough that the answer may be rounded, absolute for anything small
+    enough that it may not. Both apply when both are declared, because a case stating one is stating
+    the other as zero.
+    """
+    difference = abs(float(candidate) - float(value))
+    if difference <= absolute:
+        return True
+    if relative > 0 and difference <= relative * abs(float(value)):
+        return True
+    return False
+
+
+def check_numeric(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
+    """Grade one numeric case: did the model state the derived figure, and is it the right one."""
+    expected = case.get("expected") or {}
+    value = expected.get("value")
+    checks: list[Check] = []
+    if value is None:
+        return [
+            Check(
+                name="numeric_expected_present",
+                ok=False,
+                expected="a derived value",
+                found=None,
+                detail="a numeric case with no expected value cannot be graded",
+            )
+        ]
+
+    relative = float(expected.get("relative_tolerance") or 0.0)
+    absolute = float(expected.get("absolute_tolerance") or 0.0)
+    record = answer_text(case_run)
+    final = case_run.get("answer") if isinstance(case_run.get("answer"), str) else ""
+    candidates = numbers_in(record)
+    reported = numbers_in(final)
+
+    checks.append(
+        Check(
+            name="states_a_number",
+            ok=bool(candidates),
+            expected="at least one number in the answer",
+            found=candidates[:5] or "none",
+            detail="" if candidates else "the question asks for a figure and the answer states none",
+        )
+    )
+    hit = [candidate for candidate in candidates if matches(value, candidate, relative, absolute)]
+    checks.append(
+        Check(
+            name="number_is_correct",
+            ok=bool(hit),
+            expected=value,
+            found=candidates[:5] or "none",
+            detail=""
+            if hit
+            else (
+                f"the answer states {candidates[:5]} and none is {value} within "
+                f"rel={relative} abs={absolute}. A correct route with a wrong number fails here: "
+                "query_order_mixed passed for weeks while returning five recipients at $0.00"
+            ),
+        )
+    )
+
+    # The permissive check reads the record; this one reads the final answer. A model can compute the
+    # right figure, say so while reasoning, and then report a different one - and the figure the reader
+    # is shown is the final answer. Grading only the record would pass that, and grading only the final
+    # answer would fail a model that put the figure in a table and deferred to it.
+    shown = [candidate for candidate in reported if matches(value, candidate, relative, absolute)]
+    checks.append(
+        Check(
+            name="figure_in_final_answer",
+            ok=bool(shown),
+            expected=value,
+            found=reported[:5] or "none",
+            detail=""
+            if shown
+            else (
+                f"the final answer states {reported[:5] or 'no figure'}. "
+                + (
+                    "the figure is in the reasoning but not in the answer, so the reader never got it"
+                    if hit
+                    else "the question asked for the figure and the answer does not carry one"
+                )
+            ),
+        )
+    )
+    if expected.get("column"):
+        column = str(expected["column"])
+        # Two spellings, two boundaries. `_` has to count as a word character, or `duns` matches
+        # inside `duns_number` and the case credits a column that was never named. But the same column
+        # is also written in prose with spaces - "total obligation" - and for that spelling an
+        # underscore is a boundary. So the identifier form and the prose form are matched separately
+        # rather than by transforming one into the other.
+        named = bool(re.search(rf"(?<![A-Za-z0-9_]){re.escape(column)}(?![A-Za-z0-9_])", record)) or bool(
+            re.search(rf"(?<![A-Za-z0-9_]){re.escape(column.replace('_', ' '))}(?![A-Za-z0-9_])", record)
+        )
+        checks.append(
+            Check(
+                name="names_the_column",
+                ok=named,
+                expected=column,
+                found="named" if named else "not named",
+                detail="so a reader can tell which figure was asked for",
+            )
+        )
+    return checks
+
+
 _GRADERS = {
     "discovery": check_discovery,
     "sequential_lookup": check_sequential,
@@ -596,6 +773,7 @@ _GRADERS = {
     "find_district_rpc": check_rpc,
     "districts_in_bbox_rpc": check_rpc,
     "nonprofits_nearby_rpc": check_rpc,
+    "numeric_aggregate": check_numeric,
 }
 
 
