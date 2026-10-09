@@ -5,7 +5,7 @@
   },
   "cases": [
     {
-      "id": "count_irs_ng_bmf_organizations_ein_428885",
+      "id": "count_irs_ng_bmf_organizations_ein_100000023",
       "capability": "numeric_aggregate",
       "question": "How many rows in irs_ng.bmf_organizations have ein exactly 100000023? Give the number.",
       "expected": {
@@ -22,10 +22,10 @@
         "benthic_query"
       ],
       "derived_from": "HEAD bmf_organizations?ein=eq.100000023 with Prefer: count=exact",
-      "derived_at": "2026-10-09T11:59:06"
+      "derived_at": "2026-10-09T12:34:19"
     },
     {
-      "id": "count_usaspending_prime_awards_fiscal_year_91660",
+      "id": "count_usaspending_prime_awards_fiscal_year_1900",
       "capability": "numeric_aggregate",
       "question": "How many rows in usaspending.prime_awards have fiscal_year exactly 1900? Give the number.",
       "expected": {
@@ -42,7 +42,7 @@
         "benthic_query"
       ],
       "derived_from": "HEAD prime_awards?fiscal_year=eq.1900 with Prefer: count=exact",
-      "derived_at": "2026-10-09T11:59:06"
+      "derived_at": "2026-10-09T12:34:19"
     },
     {
       "id": "max_usaspending_prime_awards_total_obligation_fiscal_year",
@@ -64,7 +64,7 @@
         "benthic_query"
       ],
       "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
-      "derived_at": "2026-10-09T11:59:06"
+      "derived_at": "2026-10-09T12:34:19"
     },
     {
       "id": "max_usaspending_prime_awards_total_obligation_all",
@@ -84,20 +84,22 @@
         "benthic_query"
       ],
       "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
-      "derived_at": "2026-10-09T11:59:06"
+      "derived_at": "2026-10-09T12:34:19"
     },
     {
       "id": "group_usaspending_reporting_agency_overview_toptier_code",
       "capability": "numeric_aggregate",
-      "question": "Group usaspending.reporting_agency_overview by toptier_code and sum total_dollars_obligated_gtas. Which toptier_code has the largest total, and what is that total?",
+      "question": "Across every row in usaspending.reporting_agency_overview, group by toptier_code and sum total_dollars_obligated_gtas. Which toptier_code has the largest total over the whole relation, and what is that total? Sum across all periods, not one fiscal year or period.",
       "expected": {
         "relation": "usaspending.reporting_agency_overview",
         "kind": "grouped_max",
         "column": "total_dollars_obligated_gtas",
         "group_column": "toptier_code",
-        "value": 14669028370453.977,
-        "group": "012",
-        "rows_read": 200,
+        "value": 141641414906259.12,
+        "value_exact": "141641414906259.12",
+        "group": "075",
+        "rows_read": 10545,
+        "rows_total": 10545,
         "relative_tolerance": 0.001,
         "absolute_tolerance": 0.01
       },
@@ -105,8 +107,8 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET reporting_agency_overview?select=toptier_code,total_dollars_obligated_gtas&order=toptier_code.asc&limit=200, summed in the generator",
-      "derived_at": "2026-10-09T11:59:06"
+      "derived_from": "GET reporting_agency_overview?select=reporting_agency_overview_id,toptier_code,total_dollars_obligated_gtas, paged by offset until 10545 distinct reporting_agency_overview_id values were read, summed in the generator as Decimal",
+      "derived_at": "2026-10-09T12:34:19"
     }
   ]
 }

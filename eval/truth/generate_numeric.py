@@ -21,12 +21,21 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import re
 import sys
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
 import httpx
+
+from benthic_mcp.catalog import RelationDefinition  # type: ignore[import-not-found]
+from benthic_mcp.postgrest import PostgrestTransport  # type: ignore[import-not-found]
+
+# `Range` matters: without it PostgREST ignores the count on a HEAD and reports the full match
+# instead, which is the bug count_rows was written to avoid.
+_COUNT_HEADERS = {"Prefer": "count=exact", "Range": "0-0"}
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
@@ -44,7 +53,7 @@ def bearer() -> str:
     return ""
 
 
-async def endpoint_for(dataset: str, relation: str) -> str | None:
+async def definition_for(dataset: str, relation: str) -> RelationDefinition | None:
     from benthic_mcp.bdp import BdpRepository  # type: ignore[import-not-found]
     from benthic_mcp.catalog import Catalog  # type: ignore[import-not-found]
     from benthic_mcp.config import Settings  # type: ignore[import-not-found]
@@ -53,28 +62,47 @@ async def endpoint_for(dataset: str, relation: str) -> str | None:
     async with httpx.AsyncClient(timeout=30.0) as client:
         snapshot = await BdpRepository(settings, client).load()
     catalog = Catalog(snapshot)
-    definition = catalog.relations.get((dataset, relation))
-    return definition.endpoint if definition else None
+    return catalog.relations.get((dataset, relation))
 
 
-def relation_url(prefix: str, relation: str) -> str:
-    """The manifest's `endpoint` is a prefix, not a relation URL.
+def case_id(dataset: str, relation: str, column: str, sample: Any) -> str:
+    """A count case's id, carrying the value it counted.
 
-    `postgrest.py:_relation_url` appends the relation name to it, and a generator that skips that step
-    requests the site root instead - which answers 200 with the homepage HTML, and every derived value
-    becomes a JSON decode error rather than a wrong number.
+    The first version used `abs(hash(sample)) % 10**6`, and Python randomises string hashing per
+    process - so every regeneration minted new ids. A stored run keys its per-case results by id, so
+    the ids silently stopped matching and re-grading an old run against a corrected grader stopped
+    being possible. Nothing errored; a capability just quietly became unmeasurable.
+
+    The sample itself is the suffix. It is stable, it is readable, and it distinguishes two counts of
+    the same column, which the column name alone does not.
     """
-    return f"{prefix.rstrip('/')}/{relation}"
+    safe = re.sub(r"[^A-Za-z0-9]+", "_", str(sample)).strip("_") or "null"
+    return f"count_{dataset}_{relation}_{column}_{safe}"
+
+
+def relation_url(definition: RelationDefinition) -> str:
+    """The relation's URL, built by the same code the server under test builds it with.
+
+    This started as a local `f"{prefix.rstrip('/')}/{relation}"`, which happened to agree with
+    `PostgrestTransport._relation_url` and would not have said so. The manifest's `endpoint` is a prefix,
+    not a relation URL, and a generator that skips appending the relation name requests the site root
+    - which answers 200 with the homepage HTML, so every derived value becomes a JSON decode error
+    rather than a wrong number.
+
+    Reusing the server's own helper removes the possibility of the two drifting apart. If they did, the
+    generator would be establishing ground truth against a different URL than the server queries, and
+    the expectations would be confidently wrong - which is the one failure mode a generator exists to
+    rule out.
+    """
+    return PostgrestTransport._relation_url(definition)
 
 
 async def count_rows(client: httpx.AsyncClient, endpoint: str, filters: dict[str, str], column: str) -> int | None:
     params: dict[str, str] = {"select": column, "limit": "1"}
     params.update({key: f"eq.{value}" for key, value in filters.items()})
-    response = await client.head(endpoint, params=params, headers={"Prefer": "count=exact", "Range": "0-0"})
+    response = await client.head(endpoint, params=params, headers=_COUNT_HEADERS)
     if response.status_code >= 400:
         return None
-    import re
-
     match = re.search(r"/(\d+)$", response.headers.get("content-range", ""))
     return int(match.group(1)) if match else None
 
@@ -98,34 +126,98 @@ async def ordered_max(client: httpx.AsyncClient, endpoint: str, column: str, whe
 
 
 async def grouped_max(
-    client: httpx.AsyncClient, endpoint: str, group_column: str, value_column: str, limit: int
+    client: httpx.AsyncClient,
+    endpoint: str,
+    group_column: str,
+    value_column: str,
+    key: str,
+    page: int = 1000,
 ) -> dict[str, Any] | None:
-    """The group with the largest total, and that total.
+    """The group with the largest total, and that total, over every row.
 
-    Fetched in one ordered page and summed in Python rather than asking PostgREST to aggregate: this is
-    the generator establishing ground truth, so it uses the smallest surface that cannot be wrong in an
-    interesting way, and it is bounded by `limit` on purpose. Where the true answer needs more rows
-    than that, no case is emitted rather than a wrong one.
+    The first version read one ordered page of `limit` rows and summed it, on the reasoning that a
+    generator establishing ground truth should use the smallest surface that cannot be wrong in an
+    interesting way. That reasoning was wrong about which surface that is. `reporting_agency_overview`
+    holds 10,545 rows; reading 200 of them ordered by `toptier_code` and summing produced a total low
+    by an order of magnitude that **named the wrong winner**, and the first real run of this capability
+    graded a correct model as wrong because of it. The failure looked like a model failure because the
+    grader is not supposed to be the thing that is wrong.
+
+    So: read every row, prove it, and sum exactly.
+
+    - The exact row count comes from `Prefer: count=exact`, and without it no case is emitted - an
+      aggregate whose coverage cannot be verified is an assertion, not ground truth.
+    - Paging stops at that count. A page that comes back short means the two disagree, and the
+      aggregate is discarded rather than reported.
+    - Money is summed as `Decimal` built from the string PostgREST sent. Summing 10,545 currency rows
+      in float64 drifted by cents, and `psql` disagreed by exactly that.
+    - Completeness is measured in **distinct row identities**, not rows served. Counting served rows
+      is satisfied by repetition: a server that ignores `offset` returns the first page forever, and
+      the loop reached 10,545 "rows read" by summing one row ten thousand times.
     """
-    response = await client.get(
-        endpoint,
-        params={"select": f"{group_column},{value_column}", "limit": str(limit), "order": f"{group_column}.asc"},
-    )
-    if response.status_code >= 400:
+    total_rows = await count_all(client, endpoint)
+    if total_rows is None:
         return None
-    rows = response.json()
-    if not rows:
+    totals: dict[Any, Decimal] = {}
+    seen: set[Any] = set()
+    offset = 0
+    while len(seen) < total_rows:
+        response = await client.get(
+            endpoint,
+            params={
+                "select": f"{key},{group_column},{value_column}",
+                "limit": str(page),
+                "offset": str(offset),
+                "order": f"{key}.asc",
+            },
+        )
+        if response.status_code >= 400:
+            return None
+        rows = response.json()
+        if not rows:
+            return None
+        before = len(seen)
+        for row in rows:
+            identity = row.get(key)
+            if identity is None:
+                continue
+            # Coverage counts every row that exists, not every row that contributed to the sum. 3,353
+            # of this relation's 10,545 rows have a null `total_dollars_obligated_gtas`, and counting
+            # only the contributing ones capped coverage at 7,192 against a count of 10,545 - so the
+            # generator paged to the end and then, correctly, refused to report what it could not
+            # prove it had read.
+            seen.add(identity)
+            value = row.get(value_column)
+            group = row.get(group_column)
+            if group is None or not isinstance(value, (int, float)):
+                continue
+            totals[group] = totals.get(group, Decimal(0)) + Decimal(str(value))
+        # A page that introduces no new identity means the endpoint is not honouring `offset`, or the
+        # count is wrong. Either way there is nothing to gain by asking again, and without this the
+        # loop never terminates: `seen` cannot reach `total_rows` and `rows` is never empty.
+        if len(seen) == before:
+            return None
+        offset += len(rows)
+    if len(seen) != total_rows:
         return None
-    totals: dict[Any, float] = {}
-    for row in rows:
-        key, value = row.get(group_column), row.get(value_column)
-        if key is None or not isinstance(value, (int, float)):
-            continue
-        totals[key] = totals.get(key, 0.0) + float(value)
     if not totals:
         return None
     winner = max(totals, key=lambda k: totals[k])
-    return {"group": str(winner), "total": totals[winner], "rows_read": len(rows)}
+    return {
+        "group": str(winner),
+        "total": totals[winner],
+        "rows_read": len(seen),
+        "rows_total": total_rows,
+    }
+
+
+async def count_all(client: httpx.AsyncClient, endpoint: str) -> int | None:
+    """Every row in the relation, from the endpoint rather than from counting what we read."""
+    response = await client.head(endpoint, params={"select": "*", "limit": "1"}, headers=_COUNT_HEADERS)
+    if response.status_code >= 400:
+        return None
+    match = re.search(r"/(\d+)$", response.headers.get("content-range", ""))
+    return int(match.group(1)) if match else None
 
 
 def money(value: float) -> dict[str, Any]:
@@ -150,12 +242,12 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
     async with httpx.AsyncClient(timeout=120.0, headers=headers) as client:
         # --- filtered counts. A filter on the wrong column returns 0, and 0 is confident.
         for dataset, relation, column in args.count_targets:
-            endpoint = await endpoint_for(dataset, relation)
-            if endpoint is None:
+            definition = await definition_for(dataset, relation)
+            if definition is None or definition.endpoint is None:
                 print(f"  skip {dataset}.{relation}: not in the signed manifest", flush=True)
                 continue
             probe = await client.get(
-                relation_url(endpoint, relation),
+                relation_url(definition),
                 params={"select": column, "limit": "1", "order": f"{column}.asc"},
             )
             if probe.status_code >= 400 or not probe.json():
@@ -164,12 +256,12 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
             sample = probe.json()[0].get(column)
             if sample is None:
                 continue
-            total = await count_rows(client, relation_url(endpoint, relation), {column: str(sample)}, column)
+            total = await count_rows(client, relation_url(definition), {column: str(sample)}, column)
             if total is None:
                 continue
             cases.append(
                 {
-                    "id": f"count_{dataset}_{relation}_{column}_{abs(hash(str(sample))) % 10**6}",
+                    "id": case_id(dataset, relation, column, sample),
                     "capability": "numeric_aggregate",
                     "question": (
                         f"How many rows in {dataset}.{relation} have {column} exactly {sample}? Give the number."
@@ -192,11 +284,11 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
 
         # --- ordered maxima. The case that catches a page-local ORDER BY.
         for dataset, relation, column, where in args.max_targets:
-            endpoint = await endpoint_for(dataset, relation)
-            if endpoint is None:
+            definition = await definition_for(dataset, relation)
+            if definition is None or definition.endpoint is None:
                 print(f"  skip {dataset}.{relation}: not in the signed manifest", flush=True)
                 continue
-            value = await ordered_max(client, relation_url(endpoint, relation), column, where)
+            value = await ordered_max(client, relation_url(definition), column, where)
             if value is None:
                 print(f"  skip {dataset}.{relation}.{column}: no answer", flush=True)
                 continue
@@ -228,11 +320,31 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
             print(f"  max {dataset}.{relation}.{column} = {value:,.2f}", flush=True)
 
         # --- grouped totals. Catches an aggregate over a partial scan.
-        for dataset, relation, group_column, value_column, limit in args.group_targets:
-            endpoint = await endpoint_for(dataset, relation)
-            if endpoint is None:
+        for dataset, relation, group_column, value_column, declared_key in args.group_targets:
+            definition = await definition_for(dataset, relation)
+            if definition is None or definition.endpoint is None:
                 continue
-            outcome = await grouped_max(client, relation_url(endpoint, relation), group_column, value_column, limit)
+            # The primary key is what makes the aggregate verifiable: distinct identities are
+            # countable, so "did I read the whole relation" has an answer that repetition cannot fake.
+            # The manifest's key is authoritative where it exists. Where it is empty - and
+            # `reporting_agency_overview` declares none while plainly having
+            # `reporting_agency_overview_id` - an operator may name the column, and it is recorded in
+            # `derived_from` rather than being applied silently.
+            primary = definition.primary_key[0] if definition.primary_key else declared_key
+            if primary is None:
+                print(
+                    f"  skip {dataset}.{relation}: no primary key in the manifest and none declared, "
+                    "so coverage of the aggregate could not be verified",
+                    flush=True,
+                )
+                continue
+            if not definition.primary_key:
+                print(
+                    f"  note {dataset}.{relation}: manifest declares no primary key; "
+                    f"verifying coverage against declared column {primary}",
+                    flush=True,
+                )
+            outcome = await grouped_max(client, relation_url(definition), group_column, value_column, key=primary)
             if outcome is None:
                 continue
             cases.append(
@@ -240,24 +352,29 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
                     "id": f"group_{dataset}_{relation}_{group_column}",
                     "capability": "numeric_aggregate",
                     "question": (
-                        f"Group {dataset}.{relation} by {group_column} and sum {value_column}. "
-                        f"Which {group_column} has the largest total, and what is that total?"
+                        f"Across every row in {dataset}.{relation}, group by {group_column} and sum "
+                        f"{value_column}. Which {group_column} has the largest total over the whole "
+                        "relation, and what is that total? Sum across all periods, not one fiscal "
+                        "year or period."
                     ),
                     "expected": {
                         "relation": f"{dataset}.{relation}",
                         "kind": "grouped_max",
                         "column": value_column,
                         "group_column": group_column,
-                        "value": outcome["total"],
+                        "value": float(outcome["total"]),
+                        "value_exact": str(outcome["total"]),
                         "group": outcome["group"],
                         "rows_read": outcome["rows_read"],
+                        "rows_total": outcome["rows_total"],
                         **money(outcome["total"]),
                     },
                     "forbidden_claims": [],
                     "required_tools": ["benthic_query"],
                     "derived_from": (
-                        f"GET {relation}?select={group_column},{value_column}&order={group_column}.asc"
-                        f"&limit={limit}, summed in the generator"
+                        f"GET {relation}?select={primary},{group_column},{value_column}, paged by offset "
+                        f"until {outcome['rows_total']} distinct {primary} values were read, summed in "
+                        "the generator as Decimal"
                     ),
                     "derived_at": derived_at,
                 }
@@ -293,7 +410,7 @@ def main() -> None:
         "--group-target",
         action="append",
         default=[],
-        help="dataset,relation,group_column,value_column,limit - repeated",
+        help="dataset,relation,group_column,value_column[,key_column] - repeated",
     )
     args = parser.parse_args()
     args.count_targets = parse_targets(args.count_target, 3)
@@ -307,7 +424,7 @@ def main() -> None:
                 where[key] = value
         args.max_targets.append((parts[0], parts[1], parts[2], where))
     args.group_targets = [
-        (parts[0], parts[1], parts[2], parts[3], int(parts[4]) if len(parts) > 4 else 5000)
+        (parts[0], parts[1], parts[2], parts[3], parts[4] if len(parts) > 4 else None)
         for parts in (p.split(",") for p in args.group_target)
     ]
 
