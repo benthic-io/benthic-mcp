@@ -243,6 +243,57 @@ def test_prose_that_merely_hesitates_is_not_a_refusal() -> None:
 # The anti-hallucination floor.
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I read usaspending.invented_table for this.",
+        "The value came from irs_ng.made_up_relation, which has the column.",
+    ],
+)
+def test_a_relation_outside_the_signed_manifest_fails(answer: str) -> None:
+    result = grade.grade_case(case(), run(answer), {"usaspending.prime_awards"})
+    assert not result.passed
+    assert grade.UNMANIFESTED in failing(result)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        'Filter with uei=in.["A","B"] and congressional_district=eq.03.',
+        "Use not.is.null to include the nulls, then sort descending.",
+        "usp_cl.legislator_terms holds it, as does irs_ng.bmf_organizations.",
+        "The v.2 release changed the column order.",
+    ],
+)
+def test_the_floor_ignores_filter_syntax_and_fragments(answer: str) -> None:
+    """Filter syntax and abbreviations are not invented relations.
+
+    The first version of this check reported `eq.senate`, `not.is` and `u.s` - the last being what
+    falls out of matching inside `usp_cl.legislator_terms`. A floor that names relations nobody
+    mentioned converts real failures into noise, which is how a check gets ignored.
+    """
+    result = grade.grade_case(
+        case(),
+        run(answer),
+        {"usp_cl.legislator_terms", "irs_ng.bmf_organizations"},
+    )
+    assert grade.UNMANIFESTED not in failing(result), (
+        f"false positive: {next(c.found for c in result.failures() if c.name == grade.UNMANIFESTED)}"
+    )
+
+
+def test_a_relation_outside_the_manifest_is_still_caught_alongside_syntax() -> None:
+    """The filter must not become so permissive that a real invention slips through."""
+    result = grade.grade_case(
+        case(),
+        run('Filter uei=in.["A"] then read usaspending.fabricated_table.'),
+        {"usp_cl.legislator_terms"},
+    )
+    assert grade.UNMANIFESTED in failing(result)
+    found = next(c.found for c in result.failures() if c.name == grade.UNMANIFESTED)
+    assert found == ["usaspending.fabricated_table"], f"the floor named {found}"
+
+
 def test_a_relation_outside_the_signed_manifest_fails() -> None:
     result = grade.grade_case(case(), run("I read usaspending.invented_table for this."), {"usaspending.prime_awards"})
     assert not result.passed
