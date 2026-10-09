@@ -46,7 +46,12 @@ async def call_tool(name: str, arguments: dict[str, Any], timeout: float) -> dic
     return {"ok": True, "text": text}
 
 
-async def signed_relations() -> set[str]:
+async def manifest_names() -> tuple[set[str], set[str]]:
+    """Every relation and every column the manifest carries.
+
+    Both are needed by the anti-hallucination floor: relations to catch an invented table, and columns
+    so that a column alias is not mistaken for one.
+    """
     """Every relation the manifest carries, for the anti-hallucination floor."""
     sys.path.insert(0, str(ROOT / "src"))
     from benthic_mcp.bdp import BdpRepository  # type: ignore[import-not-found]
@@ -60,7 +65,9 @@ async def signed_relations() -> set[str]:
         repository = BdpRepository(settings, client)
         snapshot = await repository.load()
     catalog = Catalog(snapshot)
-    return {f"{dataset}.{relation}" for dataset, relation in catalog.relations}
+    relations = {f"{dataset}.{relation}" for dataset, relation in catalog.relations}
+    columns = {column for definition in catalog.relations.values() for column in definition.columns}
+    return relations, columns
 
 
 async def drive(case: dict[str, Any], max_turns: int, timeout: float, temperature: float) -> dict[str, Any]:
@@ -152,9 +159,10 @@ async def run(args: argparse.Namespace) -> int:
         cases = cases[: args.limit]
 
     relations: set[str] | None = None
+    columns: set[str] | None = None
     if not args.no_manifest_floor:
         try:
-            relations = await signed_relations()
+            relations, columns = await manifest_names()
         except Exception as exc:  # the floor is valuable but the run should still produce numbers
             print(f"  anti-hallucination floor unavailable: {exc}", file=sys.stderr)
 

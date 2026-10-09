@@ -282,6 +282,57 @@ def test_the_floor_ignores_filter_syntax_and_fragments(answer: str) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The evidence table shows left.state, right.state and right.district.",
+        "It paired left.congressional_district=03 to right.district=3.",
+        "No corresponding SAM.gov registration record exists.",
+        "The U.S. Congress is not in this dataset.",
+    ],
+)
+def test_the_floor_ignores_column_aliases_and_prose_dataset_names(answer: str) -> None:
+    """`left.state` is a column alias the model uses when reporting join evidence, not a relation.
+
+    Six of thirty cases in the first run failed this check for exactly that reason, and every one was a
+    false positive: the aliases, and `SAM.gov`, which is how the dataset is named in prose.
+    """
+    result = grade.grade_case(
+        case(),
+        run(answer),
+        {"usaspending.all_entities", "samer.sam_registrations", "usp_cl.legislator_terms"},
+        {"state", "uei", "district", "congressional_district"},
+    )
+    assert grade.UNMANIFESTED not in failing(result), (
+        f"false positive: {next(c.found for c in result.failures() if c.name == grade.UNMANIFESTED)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    ["usaspending.fabricated_table", "irs_ng.made_up_relation", "samer.invented"],
+)
+def test_a_lowercase_dotted_identifier_is_still_a_relation_reference(spelling: str) -> None:
+    """The lowercase requirement must not become so permissive that a real invention slips through.
+
+    `SAM.gov` is prose and `usaspending.fabricated_table` is an identifier, and the difference is the
+    case: a relation is written in lowercase snake case, an acronym in prose is not.
+    """
+    assert grade._looks_like_a_relation(spelling)
+
+
+def test_a_real_invention_is_still_caught_beside_column_aliases() -> None:
+    result = grade.grade_case(
+        case(),
+        run("left.state pairs to right.state in usaspending.fabricated_table."),
+        {"usaspending.all_entities"},
+        {"state", "uei", "district"},
+    )
+    assert grade.UNMANIFESTED in failing(result)
+    found = next(c.found for c in result.failures() if c.name == grade.UNMANIFESTED)
+    assert found == ["usaspending.fabricated_table"], f"the floor named {found}"
+
+
 def test_a_relation_outside_the_manifest_is_still_caught_alongside_syntax() -> None:
     """The filter must not become so permissive that a real invention slips through."""
     result = grade.grade_case(
