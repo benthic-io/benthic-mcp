@@ -970,6 +970,29 @@ that, in three kinds because they catch three different failures:
   own ORDER BY
 - **grouped_max** - catches an aggregate over a partial scan
 
+**A question above the ceiling is graded on the refusal, not on a figure.** `benthic_query` refuses an
+aggregate or join needing more than 10,000 rows (`BENTHIC_AGGREGATE_SCAN_LIMIT`), and a relation with
+no primary key is refused past one page **however far you narrow** - `usaspending.reporting_agency_overview`
+is both, at 10,545 rows. Such a case declares `answerable: false` and grades two things instead:
+`declines_rather_than_fabricating` - the derived total must be **absent**, and it stays in the case for
+exactly that check - and `names_the_constraint` - the answer must name the actual limit. "I cannot help
+with that" is not a pass: a user told only that information is unavailable cannot tell a tool limit from
+a missing feature, and that distinction decides whether they trust the tool. The ceiling is derived
+from the server's own configuration and the manifest, never from what a model happened to say, and a
+relation where the aggregate *is* reachable keeps grading the figure.
+
+**The second numeric run is why this exists.** The model counted the rows, read the refusal, and
+declined - and the case graded that as a failure. Twice in two runs the model was right and my
+expectation was wrong, for different reasons: once because my question was ambiguous, once because it
+was impossible.
+
+**The four answerable cases passed, and the route the model chose is the result worth keeping.** On
+both maxima it tried `max:total_obligation`, was refused by the complete-scan limit, and then used
+`order=total_obligation:desc, limit=1` instead - returning **373,109,113,199** and **52,175,204,418**,
+both exact. The `order=` fix is not merely correct; it is what the model reaches for when the aggregate
+route is closed. The two counts, 1 and 569, are exact. `numeric_aggregate 5/5`, all measured, none
+not-measured.
+
 Every value is derived from the database, never through `benthic_query`: a number fetched by the server
 under test inherits every defect the case exists to catch. Each case records `derived_from` and
 `derived_at`, and a contract requires both, so a stale expectation is visible rather than silently
