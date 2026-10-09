@@ -1,0 +1,112 @@
+{
+  "metadata": {
+    "generated": "2026-10-09",
+    "cases": 5
+  },
+  "cases": [
+    {
+      "id": "count_irs_ng_bmf_organizations_ein_428885",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in irs_ng.bmf_organizations have ein exactly 100000023? Give the number.",
+      "expected": {
+        "relation": "irs_ng.bmf_organizations",
+        "kind": "filtered_count",
+        "column": "ein",
+        "value": 1,
+        "sample": "100000023",
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD bmf_organizations?ein=eq.100000023 with Prefer: count=exact",
+      "derived_at": "2026-10-09T11:59:06"
+    },
+    {
+      "id": "count_usaspending_prime_awards_fiscal_year_91660",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in usaspending.prime_awards have fiscal_year exactly 1900? Give the number.",
+      "expected": {
+        "relation": "usaspending.prime_awards",
+        "kind": "filtered_count",
+        "column": "fiscal_year",
+        "value": 569,
+        "sample": "1900",
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD prime_awards?fiscal_year=eq.1900 with Prefer: count=exact",
+      "derived_at": "2026-10-09T11:59:06"
+    },
+    {
+      "id": "max_usaspending_prime_awards_total_obligation_fiscal_year",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest total_obligation in usaspending.prime_awards over fiscal_year=2023? Give the figure.",
+      "expected": {
+        "relation": "usaspending.prime_awards",
+        "kind": "ordered_max",
+        "column": "total_obligation",
+        "value": 52175204418.0,
+        "where": {
+          "fiscal_year": "2023"
+        },
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_at": "2026-10-09T11:59:06"
+    },
+    {
+      "id": "max_usaspending_prime_awards_total_obligation_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest total_obligation in usaspending.prime_awards over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "usaspending.prime_awards",
+        "kind": "ordered_max",
+        "column": "total_obligation",
+        "value": 373109113199.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_at": "2026-10-09T11:59:06"
+    },
+    {
+      "id": "group_usaspending_reporting_agency_overview_toptier_code",
+      "capability": "numeric_aggregate",
+      "question": "Group usaspending.reporting_agency_overview by toptier_code and sum total_dollars_obligated_gtas. Which toptier_code has the largest total, and what is that total?",
+      "expected": {
+        "relation": "usaspending.reporting_agency_overview",
+        "kind": "grouped_max",
+        "column": "total_dollars_obligated_gtas",
+        "group_column": "toptier_code",
+        "value": 14669028370453.977,
+        "group": "012",
+        "rows_read": 200,
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET reporting_agency_overview?select=toptier_code,total_dollars_obligated_gtas&order=toptier_code.asc&limit=200, summed in the generator",
+      "derived_at": "2026-10-09T11:59:06"
+    }
+  ]
+}
