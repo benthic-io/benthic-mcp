@@ -70,7 +70,9 @@ async def manifest_names() -> tuple[set[str], set[str]]:
     return relations, columns
 
 
-async def drive(case: dict[str, Any], max_turns: int, timeout: float, temperature: float) -> dict[str, Any]:
+async def drive(
+    case: dict[str, Any], max_turns: int, timeout: float, temperature: float, max_tokens: int
+) -> dict[str, Any]:
     """One case, one conversation, transcript kept whole.
 
     Reasoning is recorded because the grader reads it: a model can assert something in prose that it
@@ -87,23 +89,35 @@ async def drive(case: dict[str, Any], max_turns: int, timeout: float, temperatur
             {
                 "messages": messages,
                 "temperature": temperature,
-                "max_tokens": 2048,
+                "max_tokens": max_tokens,
                 "tools": await tool_schemas(),
             },
             timeout,
         )
         choice = (response.get("choices") or [{}])[0]
         message = choice.get("message") or {}
-        reasoning = str(message.get("content") or "")
+        # This server runs with --reasoning-preserve, so a thinking turn puts its output in
+        # `reasoning_content` and leaves `content` empty. Reading only `content` records a blank
+        # transcript, and the grader reads the reasoning by design - a model asserting something in its
+        # reasoning is exactly what it must be able to catch. sweep.py documents the same trap.
+        content = str(message.get("content") or "")
+        reasoning = str(message.get("reasoning_content") or "")
+        said = "\n".join(part for part in (reasoning, content) if part)
         calls = message.get("tool_calls") or []
-        record: dict[str, Any] = {"turn": turn_number, "reasoning": reasoning, "tool_results": []}
+        record: dict[str, Any] = {
+            "turn": turn_number,
+            "content": content,
+            "reasoning": reasoning,
+            "finish_reason": choice.get("finish_reason"),
+            "tool_results": [],
+        }
 
         if not calls:
-            answer = reasoning
+            answer = said
             turns.append(record)
             break
 
-        messages.append({"role": "assistant", "content": reasoning or None, "tool_calls": calls})
+        messages.append({"role": "assistant", "content": said or None, "tool_calls": calls})
         for call in calls:
             function = call.get("function") or {}
             name = str(function.get("name") or "")
@@ -171,7 +185,7 @@ async def run(args: argparse.Namespace) -> int:
     for index, case in enumerate(cases, 1):
         print(f"  [{index}/{len(cases)}] {case.get('id')} ({case.get('capability')})", flush=True)
         try:
-            runs.append(await drive(case, args.max_turns, args.request_timeout, args.temperature))
+            runs.append(await drive(case, args.max_turns, args.request_timeout, args.temperature, args.max_tokens))
         except Exception as exc:
             runs.append(
                 {
@@ -217,6 +231,10 @@ def main() -> None:
     parser.add_argument("--capability", help="comma-separated capability names")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-turns", type=int, default=8)
+    # 2048 truncated a reasoning turn on relation_trap: 8,590 characters of reasoning and
+    # finish_reason: length. sweep.py raised this to 8,000 for the same reason, after one turn spent its
+    # whole budget on reasoning. A truncated turn records as a failure that is not the model's.
+    parser.add_argument("--max-tokens", type=int, default=8000)
     parser.add_argument("--temperature", type=float, default=0.0)
     parser.add_argument("--request-timeout", type=float, default=180.0)
     parser.add_argument("--no-manifest-floor", action="store_true")
