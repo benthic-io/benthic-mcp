@@ -200,7 +200,9 @@ def check_forbidden_claims(case: dict[str, Any], case_run: dict[str, Any]) -> li
     return checks
 
 
-def check_manifested_relations(case_run: dict[str, Any], signed_relations: set[str]) -> Check:
+def check_manifested_relations(
+    case_run: dict[str, Any], signed_relations: set[str], column_names: set[str] | None = None
+) -> Check:
     """No relation the model named may be absent from the signed manifest.
 
     This is the anti-hallucination floor and it is the check that would catch a model inventing a
@@ -211,7 +213,9 @@ def check_manifested_relations(case_run: dict[str, Any], signed_relations: set[s
     invented = sorted(
         spelling
         for spelling in _relation_spellings(text)
-        if _looks_like_a_relation(spelling) and spelling.replace("`", "").lower() not in signed_relations
+        if _looks_like_a_relation(spelling)
+        and spelling.replace("`", "").lower() not in signed_relations
+        and not _is_a_column_alias(spelling, column_names)
     )
     return Check(
         name=UNMANIFESTED,
@@ -237,6 +241,21 @@ def _relation_spellings(text: str) -> set[str]:
     return {pair for pair in pairs if pair.split(".", 1)[0].lower() not in _NOT_A_RELATION}
 
 
+# `left.state` and `right.uei` are the column aliases a model uses when it reports a join's evidence
+# table. They are not invented relations, and treating them as such failed six of thirty cases in the
+# first run for no reason at all.
+_ALIAS_PREFIXES = {"left", "right", "s", "l", "r", "both", "lhs", "rhs"}
+
+
+def _is_a_column_alias(spelling: str, column_names: set[str] | None) -> bool:
+    dataset, _, relation = spelling.partition(".")
+    if dataset.lower() in _ALIAS_PREFIXES:
+        return True
+    if not column_names:
+        return False
+    return relation.lower() in column_names and dataset.lower() not in {p.split(".")[0] for p in column_names}
+
+
 def _looks_like_a_relation(spelling: str) -> bool:
     """Whether a dotted spelling is a relation reference rather than prose or a fragment.
 
@@ -245,6 +264,11 @@ def _looks_like_a_relation(spelling: str) -> bool:
     """
     dataset, _, relation = spelling.partition(".")
     if dataset.lower() in _NOT_A_RELATION or relation.lower() in _NOT_A_RELATION:
+        return False
+    # A relation is written in lowercase snake case and always names a relation on the right. A dot
+    # inside a capitalised token is an acronym written in prose: `SAM.gov` is the dataset's human name,
+    # and `U.S.` is not an identifier at all.
+    if not dataset.islower() or not relation.islower():
         return False
     return len(dataset) >= 3 and len(relation) >= 3
 
@@ -556,7 +580,12 @@ def check_nothing_was_verified(case: dict[str, Any], checks: list[Check]) -> lis
     ]
 
 
-def grade_case(case: dict[str, Any], case_run: dict[str, Any], signed_relations: set[str] | None = None) -> CaseResult:
+def grade_case(
+    case: dict[str, Any],
+    case_run: dict[str, Any],
+    signed_relations: set[str] | None = None,
+    column_names: set[str] | None = None,
+) -> CaseResult:
     """Grade one case. `signed_relations` powers the anti-hallucination floor when supplied."""
     capability = str(case.get("capability") or "")
     grader = _GRADERS.get(capability)
@@ -578,7 +607,7 @@ def grade_case(case: dict[str, Any], case_run: dict[str, Any], signed_relations:
     checks.extend(check_forbidden_claims(case, case_run))
     checks.extend(check_nothing_was_verified(case, checks))
     if signed_relations is not None:
-        checks.append(check_manifested_relations(case_run, signed_relations))
+        checks.append(check_manifested_relations(case_run, signed_relations, column_names))
     return CaseResult(
         id=str(case.get("id") or ""),
         capability=capability,
