@@ -336,7 +336,7 @@
         "unsigned join"
       ],
       "id": "join_usaspending_all_entities_usp_cl_legislator_terms_evidence",
-      "question": "Use the signed join path to find the relationship for usaspending.all_entities value '03' in usp_cl.legislator_terms, explain the match evidence, and report whether it is reliable, partial, or heuristic. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"].",
+      "question": "Use the signed join path to find the relationship for usaspending.all_entities value '03' in usp_cl.legislator_terms, explain the match evidence, and report whether it is reliable, partial, or heuristic. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"]. Report how many rows the join returned, so the size of the fan-out is stated and not just described as \"multiple\".",
       "required_tools": [
         "benthic_join"
       ]
@@ -368,7 +368,7 @@
         "unqualified exact match"
       ],
       "id": "join_usaspending_all_entities_usp_cl_legislator_terms_match",
-      "question": "Use the signed join path to check the usaspending.all_entities record with congressional_district equal to '03' against usp_cl.legislator_terms on district. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"].",
+      "question": "Use the signed join path to check the usaspending.all_entities record with congressional_district equal to '03' against usp_cl.legislator_terms on district. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=[\"congressional_district=eq.03\", \"uei=eq.ESELKUJSAM45\"]. context_conditions=[\"state=state\"]. Report how many rows the join returned, so the size of the fan-out is stated and not just described as \"multiple\".",
       "required_tools": [
         "benthic_join"
       ]

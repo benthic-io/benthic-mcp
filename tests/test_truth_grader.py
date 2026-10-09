@@ -665,3 +665,87 @@ def test_answer_text_includes_reasoning_as_well_as_the_final_answer() -> None:
     run_result = {"answer": "42", "turns": [{"turn": 1, "reasoning": "I did an unsigned join to get there."}]}
     text = grade.answer_text(run_result)
     assert "42" in text and "unsigned join" in text
+
+
+# --------------------------------------------------------------------------------------------
+# A count is a number, and a zero-row result is written in words more often than in digits.
+
+
+def _rpc_case(row_count: int | None) -> dict[str, Any]:
+    return {
+        "id": "r",
+        "capability": "find_district_rpc",
+        "question": "q",
+        "expected": {"relation": "a.b", "row_count": row_count},
+        "forbidden_claims": [],
+    }
+
+
+def _rpc_failing(answer: str, row_count: int | None) -> list[str]:
+    checks = grade.check_rpc(_rpc_case(row_count), {"answer": answer})
+    return [c.name for c in checks if not c.ok]
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The find_district RPC returned 0 rows.",  # the digit
+        "The find_district RPC returned zero rows.",  # the word
+        "No district was returned.",  # the result negated
+        "The result is empty.",  # the state
+        "It returned no rows for that point.",
+        "Nothing matched.",
+    ],
+)
+def test_a_count_of_zero_is_stated_in_six_ordinary_ways(answer: str) -> None:
+    """`reports_row_count` searched for `str(row_count)` and graded six correct answers as silent.
+
+    A zero-row result is exactly what a point outside a dataset's coverage produces, so the answer
+    that most needs checking - "there is nothing here" - was the one that failed. The model wrote
+    "returned zero rows" and was marked as not stating a count.
+    """
+    assert "reports_row_count" not in _rpc_failing(answer, 0), answer
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "The find_district RPC returned 3 rows.",
+        "It returned one district.",
+        "There were 127 matches.",
+    ],
+)
+def test_a_different_count_is_still_a_failure(answer: str) -> None:
+    """Reading the count as a number must not admit a wrong one."""
+    assert "reports_row_count" in _rpc_failing(answer, 0), answer
+
+
+def test_a_count_stated_with_a_thousands_separator_is_read() -> None:
+    assert "reports_row_count" not in _rpc_failing("The join returned 1,234 rows.", 1234)
+
+
+def test_the_join_count_check_reads_numbers_the_same_way() -> None:
+    """`check_signed_path` and `check_sequential` each had their own copy of the digit search."""
+    case = {
+        "id": "j",
+        "capability": "identifier_partial_join",
+        "question": "q",
+        "expected": {
+            "join_path": {
+                "join_type": "identifier",
+                "left": "usaspending.all_entities",
+                "left_column": "congressional_district",
+                "reliability": "partial",
+                "right": "usp_cl.legislator_terms",
+                "right_column": "district",
+            },
+            "right_count": 127,
+        },
+        "forbidden_claims": [],
+        "required_tools": ["benthic_join"],
+    }
+    # The signed-edge check fires on these bare answers, so this asserts only about the count.
+    stated = grade.check_signed_path(case, {"answer": "The join returned 127 rows."})
+    assert [c.name for c in stated if c.name == "reports:right_count" and not c.ok] == []
+    vague = grade.check_signed_path(case, {"answer": "The join returned multiple rows."})
+    assert [c.name for c in vague if not c.ok and c.name.startswith("reports:")] == ["reports:right_count"]
