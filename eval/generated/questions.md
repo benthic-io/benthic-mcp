@@ -1,7 +1,7 @@
 # Benthic MCP evaluation questions
 
-Generated cases: 33
-Signed join paths: 6
+Generated cases: 35
+Signed join paths: 9
 RPC operations: districts_in_bbox, find_district, nonprofits_nearby
 
 ## discover_irs_ng_bmf_organization_snapshots
@@ -83,6 +83,16 @@ Use the signed join path to find the relationship for usaspending.all_entities v
 Capability: `identifier_partial_join`
 
 Use the signed join path to check the usaspending.all_entities record with congressional_district equal to '03' against usp_cl.legislator_terms on district. Include the signed join evidence and state its reliability. Use the sampled state='MD' context, then call benthic_join. Include the context fields and distinguish partial evidence. Bound the left side with uei='ESELKUJSAM45'. Call benthic_join with left_source='usaspending.all_entities', right_source='usp_cl.legislator_terms', left_column='congressional_district', right_column='district', left_where=["congressional_district=eq.03", "uei=eq.ESELKUJSAM45"]. context_conditions=["state=state"].
+
+## join_usp_cl_legislators_usp_cl_legislator_terms_evidence
+Capability: `identifier_reliable_join_evidence`
+
+Use the signed join path to find the relationship for usp_cl.legislators value 'S001009' in usp_cl.legislator_terms, explain the match evidence, and report whether it is reliable, partial, or heuristic. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usp_cl.legislators', right_source='usp_cl.legislator_terms', left_column='bioguide_id', right_column='bioguide_id', left_where=["bioguide_id=eq.S001009"].
+
+## join_usp_cl_legislators_usp_cl_legislator_terms_match
+Capability: `identifier_reliable_join`
+
+Use the signed join path to check the usp_cl.legislators record with bioguide_id equal to 'S001009' against usp_cl.legislator_terms on bioguide_id. Include the signed join evidence and state its reliability. Retrieve a bounded context row first, then call benthic_join. Call benthic_join with left_source='usp_cl.legislators', right_source='usp_cl.legislator_terms', left_column='bioguide_id', right_column='bioguide_id', left_where=["bioguide_id=eq.S001009"].
 
 ## multi_step_0_0_usaspending_irs_ng
 Capability: `multi_step_join`
