@@ -22,7 +22,7 @@
         "benthic_query"
       ],
       "derived_from": "HEAD bmf_organizations?ein=eq.100000023 with Prefer: count=exact",
-      "derived_at": "2026-10-09T12:34:19"
+      "derived_at": "2026-10-09T12:45:48"
     },
     {
       "id": "count_usaspending_prime_awards_fiscal_year_1900",
@@ -42,7 +42,7 @@
         "benthic_query"
       ],
       "derived_from": "HEAD prime_awards?fiscal_year=eq.1900 with Prefer: count=exact",
-      "derived_at": "2026-10-09T12:34:19"
+      "derived_at": "2026-10-09T12:45:48"
     },
     {
       "id": "max_usaspending_prime_awards_total_obligation_fiscal_year",
@@ -64,7 +64,7 @@
         "benthic_query"
       ],
       "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
-      "derived_at": "2026-10-09T12:34:19"
+      "derived_at": "2026-10-09T12:45:48"
     },
     {
       "id": "max_usaspending_prime_awards_total_obligation_all",
@@ -84,7 +84,7 @@
         "benthic_query"
       ],
       "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
-      "derived_at": "2026-10-09T12:34:19"
+      "derived_at": "2026-10-09T12:45:48"
     },
     {
       "id": "group_usaspending_reporting_agency_overview_toptier_code",
@@ -98,6 +98,8 @@
         "value": 141641414906259.12,
         "value_exact": "141641414906259.12",
         "group": "075",
+        "answerable": false,
+        "ceiling": "usaspending.reporting_agency_overview declares no primary key, so its rows cannot be paged deterministically and an aggregate over them is refused however far you narrow and 10,545 rows exceed the complete-scan limit of 10,000",
         "rows_read": 10545,
         "rows_total": 10545,
         "relative_tolerance": 0.001,
@@ -108,7 +110,7 @@
         "benthic_query"
       ],
       "derived_from": "GET reporting_agency_overview?select=reporting_agency_overview_id,toptier_code,total_dollars_obligated_gtas, paged by offset until 10545 distinct reporting_agency_overview_id values were read, summed in the generator as Decimal",
-      "derived_at": "2026-10-09T12:34:19"
+      "derived_at": "2026-10-09T12:45:48"
     }
   ]
 }

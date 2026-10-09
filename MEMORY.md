@@ -959,7 +959,7 @@ It misses a rejection whose only negation is the verb, as in "I avoided X". Wide
 catch that would admit phrasings where the model *did* rely on the trap, and a false pass is worse
 than a miss. Asserted in a contract and stated in the function rather than engineered away.
 
-### Numeric truth, `eval/truth/numeric.py` and `generate_numeric.py`
+### Numeric truth: `grade.py:check_numeric` and `generate_numeric.py`
 
 **Nothing in the 30-case suite asks the model for a number**, which is the whole reason the `order=` bug
 could report the largest `total_obligation` as 2,698,943 and pass every case. Five numeric cases close
@@ -973,15 +973,63 @@ that, in three kinds because they catch three different failures:
 Every value is derived from the database, never through `benthic_query`: a number fetched by the server
 under test inherits every defect the case exists to catch. Each case records `derived_from` and
 `derived_at`, and a contract requires both, so a stale expectation is visible rather than silently
-wrong. Three spot-checks against `psql` on production all matched.
+wrong.
 
-**Four defects in the generator, two of which would have produced wrong expectations silently:**
+**A figure is not like a relation, so it gets two checks.** Every other check reads `answer_text`,
+which includes the reasoning on purpose, and that is right for a claim about what a relation is. But a
+model can compute the right number, say so while reasoning, and then report a different one - and what
+the reader is shown is the final answer. `number_is_correct` reads the record, `figure_in_final_answer`
+reads the final answer, and the failure detail says which of the two happened. A `grouped_max` case has
+a second answer that is not a number at all, so `group_is_correct` asserts the key: the first real run
+had a model stating the right sum for the wrong group, which every numeric check passed.
+
+**The first numeric run's only failure was a wrong expectation of mine.** The model answered
+`toptier_code 075 = 5,588,699,606,177.20` for FY2025 period 12 and said in as many words that the
+relation has no single answer without fixing a period. It was right about the ambiguity, and it was
+graded wrong because `grouped_max` read one page of 200 rows out of 10,545 and summed it - low by an
+order of magnitude, and naming the wrong winner. `psql` gives 075 = 141,641,414,906,259.12. The defect
+was in the generator whose job is to catch exactly that class of error, and it presented as a model
+failure because the grader is not supposed to be the thing that is wrong.
+
+**Four defects in the generator's aggregate, each with a contract that failed first:**
+
+- **read every row, and prove it.** The exact count comes from `Prefer: count=exact`, and without it no
+  case is emitted - an aggregate whose coverage cannot be verified is an assertion, not ground truth
+- **completeness counts distinct row identities, not rows served.** A server that ignores `offset`
+  returns the first page forever, and the original loop reported 10,545 rows read by summing one row
+  ten thousand times. The `rows_read`/`rows_total` pair in each case is this check's own receipt
+- **a page that adds no new identity ends the loop.** Without that guard it never terminates: `seen`
+  cannot reach the count and `rows` is never empty
+- **money is summed as `Decimal` from the string PostgREST sent.** float64 drifted by cents across
+  10,545 currency rows, and `psql` disagreed by exactly that
+
+Two of my own checks were wrong in opposite directions before this held still. The completeness
+threshold first admitted repetition, and then refused to accept a complete read: coverage must count
+every row that **exists**, not every row that contributed to the sum, because **3,353 of this
+relation's 10,545 rows have a null `total_dollars_obligated_gtas`**. Counting only contributing rows
+capped coverage at 7,192 against a count of 10,545, so the generator paged to the end and then
+correctly refused to report what it could not prove it had read.
+
+**`reporting_agency_overview` declares no primary key in the manifest while plainly having
+`reporting_agency_overview_id`.** So coverage cannot be verified from the manifest alone for that
+relation. `generate_numeric.py` takes a declared key column as a fifth `--group-target` field and says
+so in the log and in `derived_from` rather than applying it silently.
+
+**Case ids must be stable across regeneration, because a stored run keys its results by them.** The
+first version used `abs(hash(sample)) % 10**6`, and Python randomises string hashing per process, so
+every regeneration minted new ids, stopped a stored run from matching its cases, and silently broke
+the property that re-grading an old run against a corrected grader is free. A contract runs the
+generator's id builder under three `PYTHONHASHSEED` values and requires one answer.
+
+**Four more defects in the generator, two of which would have produced wrong expectations silently:**
 `httpx.QueryParams` stringifies with no leading `?` so `f"{url}{query}"` requested
 `.../prime_awardsselect=...` and PostgREST answered PGRST205, a missing table; the manifest `endpoint`
 is a prefix and omitting the relation name fetched the site root, which returns 200 with the homepage
 HTML; sending the MCP bearer token to an **anonymous** endpoint makes PostgREST try to verify a JWT it
 has no secret for, so a credential the endpoint does not want fails the whole request; and a filtered
-and an unfiltered maximum over one column produced two cases with the same id.
+and an unfiltered maximum over one column produced two cases with the same id. The URL is now built by
+`PostgrestTransport._relation_url`, the same helper the server uses, because two copies agreeing today
+is not the same as one copy being able to drift.
 
 ### Regenerating the suite reverts three deliberate decisions
 

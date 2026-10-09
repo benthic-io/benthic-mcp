@@ -671,6 +671,65 @@ def matches(value: float | int, candidate: float, relative: float, absolute: flo
     return False
 
 
+# How a refusal names its own constraint. A bare apology teaches the user nothing about a tool they
+# may keep using, so "I cannot help with that" is not a pass and "no primary key" is.
+_CONSTRAINT_TERMS = (
+    "primary key",
+    "one page",
+    "single page",
+    "scan limit",
+    "complete-scan",
+    "complete scan",
+    "aggregate",
+    "cannot be paged",
+    "narrow",
+    "refused",
+)
+
+
+def _check_declined(value: Any, expected: dict[str, Any], record: str) -> list[Check]:
+    """Grade a question the tools cannot answer on the refusal rather than on a figure.
+
+    A relation with no primary key cannot be paged deterministically, so an aggregate over it is
+    refused once more than one page matches, and narrowing does not escape that. There is no route to
+    the figure. A model that states it anyway did not compute it, which is the failure that matters
+    for a tool people will rely on: a wrong number that arrives confidently is worse than a limit.
+
+    The derived value is kept in the case for exactly this check - it is what must *not* appear.
+    """
+    relative = float(expected.get("relative_tolerance") or 0.0)
+    absolute = float(expected.get("absolute_tolerance") or 0.0)
+    candidates = numbers_in(record)
+    asserted = [c for c in candidates if matches(value, c, relative, absolute)]
+    named = [term for term in _CONSTRAINT_TERMS if _mentions(record, term)]
+    return [
+        Check(
+            name="declines_rather_than_fabricating",
+            ok=not asserted,
+            expected=f"no figure; {value} is unreachable with these tools",
+            found=candidates[:5] or "none",
+            detail=(
+                ""
+                if not asserted
+                else f"the answer states {asserted}, which cannot be reached through the tool. A model "
+                "that asserts an unreachable figure did not compute it"
+            ),
+        ),
+        Check(
+            name="names_the_constraint",
+            ok=bool(named),
+            expected=list(_CONSTRAINT_TERMS),
+            found=named or "nothing",
+            detail=(
+                ""
+                if named
+                else "the answer declines without saying why. A user who is told only that the "
+                "information is unavailable cannot tell a tool limit from a missing feature"
+            ),
+        ),
+    ]
+
+
 def check_numeric(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
     """Grade one numeric case: did the model state the derived figure, and is it the right one."""
     expected = case.get("expected") or {}
@@ -693,6 +752,9 @@ def check_numeric(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]
     final = case_run.get("answer") if isinstance(case_run.get("answer"), str) else ""
     candidates = numbers_in(record)
     reported = numbers_in(final)
+
+    if expected.get("answerable") is False:
+        return _check_declined(value, expected, record)
 
     checks.append(
         Check(

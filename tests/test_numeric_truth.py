@@ -496,6 +496,70 @@ def test_a_relation_the_endpoint_cannot_count_emits_no_case() -> None:
 
 
 # --------------------------------------------------------------------------------------------
+# A question the tools cannot answer is graded on the refusal, not on a figure.
+
+
+def _declined(answer: str, **expected: Any) -> list[str]:
+    return failing(answer, answerable=False, **expected)
+
+
+def test_a_declined_case_requires_the_figure_to_be_absent() -> None:
+    """`usaspending.reporting_agency_overview` has no primary key, so an aggregate over it is refused.
+
+    10,545 rows exceed the 10,000 complete-scan limit, and narrowing does not escape the missing key.
+    There is no route to the figure, so a model that states it did not compute it - it guessed, or it
+    read it somewhere else and cannot say where. That is the failure worth catching.
+    """
+    assert "declines_rather_than_fabricating" in _declined(
+        "The largest total is $141,641,414,906,259.12 for toptier_code 075.", value=141_641_414_906_259.12
+    )
+
+
+def test_a_declined_case_passes_on_an_explanation_without_the_figure() -> None:
+    """What the model actually did: counted the rows, found the refusal, and said why it cannot."""
+    declined = (
+        "This cannot be computed with these tools. usaspending.reporting_agency_overview has 10,545 "
+        "rows and declares no primary key, so an aggregate over it is refused however far you narrow. "
+        "The figure is only available for a single fiscal period at a time."
+    )
+    assert _declined(declined, value=141_641_414_906_259.12) == []
+
+
+def test_a_declined_case_must_name_the_constraint_not_merely_apologise() -> None:
+    """ "I cannot help with that" teaches the user nothing about a tool they may keep using."""
+    assert "names_the_constraint" in _declined("I'm sorry, I don't have that information.", value=1.0)
+
+
+@pytest.mark.parametrize(
+    ("answer", "names"),
+    [
+        ("It is refused because the relation declares no primary key.", True),
+        ("You would need to narrow until the result fits in one page.", True),
+        ("That is more than the complete-scan limit of 10000.", True),
+        ("The aggregate cannot be computed over the whole relation.", True),
+        ("This information is not available.", False),
+    ],
+)
+def test_naming_the_constraint_is_word_shaped(answer: str, names: bool) -> None:
+    ok = "names_the_constraint" not in _declined(answer, value=1.0)
+    assert ok is names, answer
+
+
+def test_a_declined_case_does_not_ask_for_the_column_or_the_group() -> None:
+    """Those checks are about attributing a figure. There is no figure to attribute."""
+    checks = failing(
+        "The relation has no primary key so the aggregate is refused.",
+        answerable=False,
+        value=1.0,
+        column="amt",
+        group="075",
+    )
+    assert "names_the_column" not in checks
+    assert "group_is_correct" not in checks
+    assert "number_is_correct" not in checks
+
+
+# --------------------------------------------------------------------------------------------
 # A case with no expected value must not grade as a pass.
 
 
