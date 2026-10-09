@@ -346,7 +346,7 @@ def check_signed_path(case: dict[str, Any], case_run: dict[str, Any]) -> list[Ch
         value = expected.get(key_name)
         if value is None:
             continue
-        present = _mentions(text, str(value))
+        present = states_count(text, value) if key_name.endswith("_count") else _mentions(text, str(value))
         checks.append(
             Check(
                 name=f"reports:{key_name}",
@@ -421,6 +421,61 @@ def check_rejection(case: dict[str, Any], case_run: dict[str, Any]) -> list[Chec
     ]
 
 
+# The ways an answer reports that nothing matched. These are not numbers, so `numbers_in` does not
+# see them, and a zero-row result is exactly what a point outside a dataset's coverage produces - so
+# the phrasing that most needs checking was the one that failed.
+_EMPTY_PHRASES = (
+    "no rows",
+    "no results",
+    "no matches",
+    "no match",
+    "no district",
+    "nothing matched",
+    "nothing returned",
+    "empty",
+    "none",
+    "zero",
+    "nil",
+)
+
+_NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def states_count(text: str, expected: Any) -> bool:
+    """Whether the answer states `expected` as a count, however it was written.
+
+    Three call sites each searched for `str(expected)` and each graded a correct answer as silent. A
+    count is a number, so it is read with the same machinery as any other number - digits, grouping,
+    currency, magnitude - and the zero case is read in words as well, because a zero-row result is
+    reported as "zero rows", "no rows" or "empty" far more often than as a digit.
+    """
+    try:
+        want = float(expected)
+    except (TypeError, ValueError):
+        return _mentions(text, str(expected))
+    if any(matches(want, candidate, 0.0, 0.0) for candidate in numbers_in(text)):
+        return True
+    lowered = text.lower()
+    if want == 0:
+        return any(_mentions(lowered, phrase) for phrase in _EMPTY_PHRASES)
+    word = next((w for w, v in _NUMBER_WORDS.items() if float(v) == want), None)
+    return bool(word) and _mentions(lowered, word)
+
+
 def check_rpc(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
     """The RPC must have been called with the expected arguments and the row count must be stated.
 
@@ -465,13 +520,14 @@ def check_rpc(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
 
     row_count = expected.get("row_count")
     if row_count is not None:
+        stated = states_count(answer_text(case_run), row_count)
         checks.append(
             Check(
                 name="reports_row_count",
-                ok=_mentions(answer_text(case_run), str(row_count)),
+                ok=stated,
                 expected=row_count,
-                found="stated" if _mentions(answer_text(case_run), str(row_count)) else "not stated",
-                detail="",
+                found="stated" if stated else "not stated",
+                detail="" if stated else "the answer does not state the row count in any form",
             )
         )
     return checks
@@ -576,7 +632,7 @@ def check_sequential(case: dict[str, Any], case_run: dict[str, Any]) -> list[Che
         value = expected.get(key_name)
         if value is None:
             continue
-        present = _mentions(text, str(value))
+        present = states_count(text, value) if key_name.endswith("_count") else _mentions(text, str(value))
         checks.append(
             Check(
                 name=f"reports:{key_name}",
