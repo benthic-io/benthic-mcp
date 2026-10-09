@@ -310,6 +310,29 @@ def _count_is_the_answer(request: QueryRequest, widest: FetchedSource) -> tuple[
     return True, None
 
 
+def _scan_exit(definition: RelationDefinition, scan_limit: int) -> str:
+    """The way out of a scan refusal, which is not the same exit for every relation.
+
+    A relation declaring no primary key cannot be paged deterministically, so `fetch_complete` refuses
+    an aggregate over it once more than one page of rows matches - a rule separate from the
+    complete-scan cap, and one that narrowing below the cap does not escape. Measured on
+    `usaspending.reporting_agency_overview`: 10,545 rows is refused by the scan cap, and 1,221 - well
+    under it - is still refused for the missing primary key. Telling that caller to narrow below the
+    cap is a dead end, and it is the dead end `query_having_text` sat in for 35 cycles.
+    """
+    if not definition.primary_key:
+        return (
+            f"{definition.dataset}.{definition.name} declares no primary key, so its rows cannot be "
+            "paged deterministically and an aggregate over them is refused however far you narrow - "
+            "getting under the scan limit will not help. Narrow until the result fits in one page, "
+            "which for this relation means naming a period rather than a whole year."
+        )
+    return (
+        f"narrow the filters until each source matches at most {scan_limit} rows, or raise "
+        "BENTHIC_AGGREGATE_SCAN_LIMIT."
+    )
+
+
 def _scan_refusal(
     fetched: list[FetchedSource], scan_limit: int, max_rows: int, request: QueryRequest | None = None
 ) -> str:
@@ -333,6 +356,7 @@ def _scan_refusal(
 
     widest = max(over, key=lambda item: item.matched_rows or 0)
     source_name = f"{widest.definition.dataset}.{widest.definition.name}"
+    exit_advice = _scan_exit(widest.definition, scan_limit)
     if widest.matched_rows is None:
         # The count did not come back, so the cap is the only size known. Naming it is still worth
         # more than silence: the caller can see that a gap exists even if not how wide it is.
@@ -340,11 +364,7 @@ def _scan_refusal(
             f"More than {scan_limit} rows match the filters in {source_name}, "
             f"past the complete-scan limit of {scan_limit}"
         )
-        return (
-            f"{magnitude}. Aggregating or joining needs every source scanned in full, so narrow the "
-            f"filters until each source matches at most {scan_limit} rows, or raise "
-            f"BENTHIC_AGGREGATE_SCAN_LIMIT."
-        )
+        return f"{magnitude}. Aggregating or joining needs every source scanned in full, so {exit_advice}"
 
     answered, nullable = (False, None)
     if request is not None:
@@ -371,10 +391,7 @@ def _scan_refusal(
             f"at the cost of a narrower filter."
         )
     others = f", the widest of the {len(over)} sources over it" if len(over) > 1 else ""
-    return (
-        f"{magnitude}{others}. Aggregating or joining needs every source scanned in full, so narrow the "
-        f"filters until each source matches at most {scan_limit} rows, or raise BENTHIC_AGGREGATE_SCAN_LIMIT."
-    )
+    return f"{magnitude}{others}. Aggregating or joining needs every source scanned in full, so {exit_advice}"
 
 
 def _unique_strings(values: list[str]) -> list[str]:

@@ -47,12 +47,11 @@ SEED_RELATION_HINTS: dict[str, RelationGuide] = {
         },
         preferred_columns=["toptier_code", "fiscal_year", "fiscal_period", "total_dollars_obligated_gtas"],
         description="Obligations by awarding agency, one row per agency per fiscal year and fiscal "
-        "period, 10,545 rows. There is no agency name column: join or look up toptier_code in "
-        "vw_published_dabs_toptier_agency. Use this instead of summing an award table by agency.",
+        "period, 10,545 rows. There is no agency name column: look toptier_code up in "
+        "vw_published_dabs_toptier_agency. Aggregate only within one fiscal year and period: this "
+        "relation declares no primary key, so an aggregate over more than one page of rows is refused "
+        "however far you narrow, and getting under the scan limit does not help.",
         anti_patterns=[
-            "This relation declares no primary key, so an aggregate over it is refused as unreliable "
-            "unless the filter leaves fewer rows than one page. A whole fiscal year is 1,221 rows and is "
-            "refused; a fiscal year and period is about 102 and works.",
             "It holds one row per agency per period, so 'the largest total obligation' has no single "
             "answer until the period is fixed. Narrow by fiscal_year and fiscal_period first.",
         ],

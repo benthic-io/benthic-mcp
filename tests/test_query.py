@@ -446,6 +446,101 @@ async def test_a_join_over_the_row_limit_does_not_blame_the_scan_limit(
 
 
 @pytest.mark.asyncio
+async def test_the_scan_refusal_does_not_promise_narrowing_that_cannot_work(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """A refusal that names an exit which does not exist costs the caller the turns it spends finding out.
+
+    `usaspending.reporting_agency_overview` declares no primary key, so `fetch_complete` refuses an
+    aggregate over it once the filter leaves more than one page of rows - a different rule from the
+    complete-scan cap, and one that narrowing below the scan cap does not escape. Measured live:
+
+        no filter (10,545 rows)   -> "...narrow the filters until each source matches at most 10000 rows"
+        fiscal_year=2025 (1,221)   -> "...declares no primary key... narrow the filter so the result
+                                     fits in one page of 1000 rows"
+
+    So the first message advises exactly the action that produces the second. `query_having_text` took
+    it, spent its remaining turns, and failed - in all 35 complete cycles in the corpus, before the
+    relation was findable at all.
+
+    For a source that declares a primary key the advice stands, because there narrowing does work. This
+    asserts the difference rather than banning the sentence.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        return httpx.Response(200, headers={"Content-Range": "0-10544/10545"})
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings, BdpRepository(small_settings, client), PostgrestTransport(small_settings, client)
+        )
+        with pytest.raises(QueryValidationError) as caught:
+            await service.execute(
+                build_single_query(
+                    question="total obligation by agency",
+                    source="usaspending.reporting_agency_overview",
+                    select=None,
+                    where=None,
+                    group_by=["toptier_code"],
+                    metrics=["total=sum:total_dollars_obligated_gtas"],
+                    having=None,
+                    order=None,
+                    limit=10,
+                    offset=0,
+                )
+            )
+    message = str(caught.value)
+    assert "narrow the filters until each source matches at most" not in message, (
+        "for a relation with no primary key, narrowing below the scan cap cannot work - the aggregate is "
+        f"refused for a different reason entirely. Message: {message}"
+    )
+    assert "primary key" in message, f"the refusal has to name the constraint it actually hit: {message}"
+
+
+@pytest.mark.asyncio
+async def test_the_scan_refusal_still_advises_narrowing_when_narrowing_works(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """The companion to the contract above, so the fix cannot be made by deleting the advice.
+
+    `usaspending.all_entities` declares a primary key, so getting under the cap genuinely does let the
+    aggregate proceed. Removing the exit from every refusal would trade one dead end for another.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        return httpx.Response(200, headers={"Content-Range": "0-10544/10545"})
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings, BdpRepository(small_settings, client), PostgrestTransport(small_settings, client)
+        )
+        with pytest.raises(QueryValidationError) as caught:
+            await service.execute(
+                build_single_query(
+                    question="count by state",
+                    source="usaspending.all_entities",
+                    select=None,
+                    where=None,
+                    group_by=["state"],
+                    metrics=["n=count:*"],
+                    having=None,
+                    order=None,
+                    limit=10,
+                    offset=0,
+                )
+            )
+    assert "narrow the filters" in str(caught.value)
+
+
+@pytest.mark.asyncio
 async def test_rejects_multiple_unjoined_sources(settings: Any, bdp_documents: dict[str, Any]) -> None:
     client = _query_client(
         bdp_documents,

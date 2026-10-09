@@ -1050,9 +1050,16 @@ def test_the_playbook_names_the_agency_obligation_route_and_its_narrowing_constr
         "the guidance has to say the relation is per agency, fiscal year and period; without that the "
         "question has no single answer and the model cannot scope it"
     )
-    assert "primary key" in prose, (
-        "the relation declares no primary key, so an aggregate over it is refused unless narrowed "
-        "below one page. That is a trap the model will otherwise walk into"
+
+    # The narrowing constraint belongs in the *description*, specifically. `render_core` puts only
+    # BASE_CORE, three core lines and one summary line per dataset into the system prompt, so
+    # `when_to_use` and `anti_patterns` never reach the model unless it calls the playbook tool - which
+    # it did not do for this relation. `discover` does serve the description, in the payload the model
+    # reads at the moment it picks the relation, so that is the only surface this lands on in time.
+    description = (guide.description or "").lower()
+    assert "primary key" in description, (
+        "the no-primary-key constraint has to be in the description, which discover serves; in "
+        f"anti_patterns or when_to_use it is only reachable if the model happens to ask. Got: {description}"
     )
 
 
