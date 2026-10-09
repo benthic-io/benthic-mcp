@@ -47,6 +47,15 @@ def failing(answer: str, reasoning: str = "", **expected: Any) -> list[str]:
     return [c["check"] for c in graded(answer, reasoning, **expected) if not c["ok"]]
 
 
+def grade_case_id(dataset: str, relation: str, column: str, sample: Any) -> str:
+    """generate_numeric's id builder, imported the way the generator itself reaches it."""
+    sys.path.insert(0, str(ROOT / "eval" / "truth"))
+    sys.path.insert(0, str(ROOT / "src"))
+    import generate_numeric  # type: ignore[import-not-found]
+
+    return generate_numeric.case_id(dataset, relation, column, sample)
+
+
 # --------------------------------------------------------------------------------------------
 # The parser, round-tripped against Python's own formatting.
 
@@ -230,6 +239,260 @@ def test_reasoning_alone_is_not_read_when_there_is_a_final_answer() -> None:
     assert "figure_in_final_answer" in failing(
         "I found a value of 42 elsewhere.", value=99, reasoning="the true maximum is 99"
     )
+
+
+# --------------------------------------------------------------------------------------------
+# Case ids must survive regeneration, because a stored run is keyed by them.
+
+
+def test_case_ids_do_not_depend_on_the_hash_seed() -> None:
+    """`hash()` of a string is randomised per process, so an id built from it changes every run.
+
+    The symptom is not a wrong number. A regenerated suite mints new ids, a stored run's per-case
+    results no longer match any case, and the property that re-grading an old run against a corrected
+    grader is free stops holding - silently, because nothing errors.
+    """
+    import os
+    import subprocess
+
+    script = (
+        f"import sys; sys.path.insert(0, {str(ROOT / 'eval' / 'truth')!r}); sys.path.insert(0, {str(ROOT / 'src')!r});"
+        "import generate_numeric as g;"
+        "print(g.case_id('usaspending', 'prime_awards', 'fiscal_year', 1900))"
+    )
+    outputs = set()
+    for seed in ("0", "1", "12345"):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True, env=env, check=True, timeout=120
+        )
+        outputs.add(result.stdout.strip())
+    assert len(outputs) == 1, f"case id changed with the hash seed: {sorted(outputs)}"
+
+
+def test_a_case_id_is_readable_and_distinguishes_its_inputs() -> None:
+    """The sample is in the id, so an id says what it counted and two samples do not collide."""
+    first = grade_case_id("usaspending", "prime_awards", "fiscal_year", 1900)
+    second = grade_case_id("usaspending", "prime_awards", "fiscal_year", 2023)
+    assert first == "count_usaspending_prime_awards_fiscal_year_1900"
+    assert first != second
+
+
+def test_a_sample_that_is_not_identifier_safe_still_produces_an_id() -> None:
+    """A date or a value with punctuation cannot become a path, a key or a log line that misleads."""
+    built = grade_case_id("irs_ng", "bmf_organizations", "ein", "12-3456789 / x")
+    assert built.replace("_", "").isalnum(), built
+    assert " " not in built and "/" not in built
+
+
+# --------------------------------------------------------------------------------------------
+# A grouped case has two answers, and the key is one of them.
+
+
+def test_the_winning_group_must_be_named_and_must_be_the_right_one() -> None:
+    """A total with the wrong group attached to it is a wrong answer, and 075 vs 012 is not rounding.
+
+    `number_is_correct` cannot see this: the model can state the right sum for the wrong group and
+    pass every numeric check.
+    """
+    assert (
+        failing(
+            "toptier_code 075 has the largest total, $141,641,414,906,259.12", group="075", value=141_641_414_906_259.12
+        )
+        == []
+    )
+    assert "group_is_correct" in failing(
+        "toptier_code 012 has the largest total, $141,641,414,906,259.12", group="075", value=141_641_414_906_259.12
+    )
+
+
+def test_a_right_total_for_a_group_the_question_did_not_ask_about_fails() -> None:
+    """The model scoped a whole-relation question to one fiscal period and got the right total.
+
+    That is a real failure to report - the answer is to a different question - and it is only visible
+    because the group is checked. The number alone passes.
+    """
+    scoped = "For FY2025 period 12, toptier_code 075 has the largest total: $141,641,414,906,259.12"
+    assert "number_is_correct" not in failing(scoped, group="075", value=141_641_414_906_259.12)
+    assert "group_is_correct" not in failing(scoped, group="075", value=141_641_414_906_259.12)
+
+
+def test_the_group_check_does_not_match_a_longer_token() -> None:
+    """`075` inside `0075` or `10750` is not the group that won."""
+    assert "group_is_correct" in failing(
+        "toptier code 10750 leads with $141,641,414,906,259.12", group="075", value=141_641_414_906_259.12
+    )
+
+
+def test_a_grouped_case_with_no_expected_group_still_grades() -> None:
+    """The check is conditional on the case carrying a group, so a filtered count is unaffected."""
+    checks = failing("The count is 569.")
+    assert "group_is_correct" not in checks
+
+
+# --------------------------------------------------------------------------------------------
+# The generator's own aggregate must be exact, or it is not ground truth.
+
+
+def _transport(rows: list[dict[str, object]], count: int | None = None) -> Any:
+    """A PostgREST that pages, and reports `count` rows however many it is actually given to serve."""
+    import httpx
+
+    served = {"offset": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        if request.method == "HEAD":
+            total = len(rows) if count is None else count
+            return httpx.Response(200, headers={"content-range": f"0-0/{total}"})
+        offset = int(params.get("offset", "0"))
+        page = int(params.get("limit", "1000"))
+        batch = rows[offset : offset + page]
+        served["offset"] = offset + len(batch)
+        return httpx.Response(200, json=batch)
+
+    return httpx.MockTransport(handler)
+
+
+async def _grouped(rows: list[dict[str, object]], count: int | None = None) -> Any:
+    sys.path.insert(0, str(ROOT / "eval" / "truth"))
+    sys.path.insert(0, str(ROOT / "src"))
+    import generate_numeric as gn  # type: ignore[import-not-found]
+    import httpx
+
+    async with httpx.AsyncClient(transport=_transport(rows, count)) as client:
+        return await gn.grouped_max(client, "http://x/rel", "toptier_code", "amt", key="id")
+
+
+def test_a_fully_read_relation_gives_the_right_winner_and_total() -> None:
+    import asyncio
+
+    rows = [
+        {"id": 1, "toptier_code": "020", "amt": 98_266_044_085_564.72},
+        {"id": 2, "toptier_code": "075", "amt": 141_641_414_906_259.12},
+        {"id": 3, "toptier_code": "075", "amt": 1.0},
+        {"id": 4, "toptier_code": "020", "amt": 2.0},
+    ]
+    outcome = asyncio.run(_grouped(rows))
+    assert outcome is not None
+    assert outcome["group"] == "075", outcome
+    # compared as Decimal, not float: this figure has no exact float64 representation, which is the
+    # reason the sum is not done in one
+    from decimal import Decimal
+
+    assert outcome["total"] == Decimal("141641414906260.12"), outcome
+
+
+def test_a_partial_read_emits_no_case_rather_than_a_partial_sum() -> None:
+    """The defect this capability exists to catch, committed by the generator that was to catch it.
+
+    `reporting_agency_overview` has 10,545 rows. Reading 200 of them ordered by `toptier_code` and
+    summing produced a total that was low by an order of magnitude *and named the wrong winner*, and
+    the first real run graded a correct model as wrong because of it. A generator that cannot read
+    every row must return None, and the established convention is that no case is emitted rather than
+    a wrong one.
+    """
+    import asyncio
+
+    rows = [{"id": i, "toptier_code": "075", "amt": 1.0} for i in range(5)]
+    # the server claims 10,545 rows but stops serving after the first page
+    assert asyncio.run(_grouped(rows, count=10545)) is None
+
+
+def test_the_aggregate_is_exact_rather_than_a_float_sum() -> None:
+    """Summing 10,545 currency rows in float64 drifts by cents, and psql disagrees.
+
+    The runner-up totals came back a cent and two cents off `psql`, which is small enough to hide
+    inside a tolerance and large enough to make a hand-checked expectation look like drift. Money is
+    summed as `Decimal` from the string PostgREST sent, which is exact.
+    """
+    import asyncio
+    from decimal import Decimal
+
+    rows = [{"id": i, "toptier_code": "020", "amt": 0.1} for i in range(3)]
+    outcome = asyncio.run(_grouped(rows))
+    assert outcome is not None
+    # 0.1 + 0.1 + 0.1 is 0.30000000000000004 in float64
+    assert Decimal(str(outcome["total"])) == Decimal("0.3"), outcome
+
+
+def test_the_aggregate_reports_how_much_it_read_and_how_much_exists() -> None:
+    """A ground-truth value with no coverage figure cannot be checked for completeness later."""
+    import asyncio
+
+    rows = [{"id": 1, "toptier_code": "020", "amt": 1.0}, {"id": 2, "toptier_code": "020", "amt": 2.0}]
+    outcome = asyncio.run(_grouped(rows))
+    assert outcome is not None
+    assert outcome["rows_read"] == outcome["rows_total"] == 2, outcome
+
+
+def test_an_endpoint_that_ignores_offset_emits_no_case() -> None:
+    """`read` counts rows *served*, so an endpoint that ignores `offset` satisfies any completeness check.
+
+    A mock that answers every request with the first page made `grouped_max` report 10,545 rows read
+    and a total of 10,545.0 - summing one row ten thousand times and calling the aggregate complete.
+    The count is not the fix; distinct row identities are.
+    """
+    import asyncio
+
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"content-range": "0-0/3"})
+        return httpx.Response(200, json=[{"id": 1, "toptier_code": "075", "amt": 1.0}])
+
+    import generate_numeric as gn  # type: ignore[import-not-found]
+
+    async def go() -> Any:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await gn.grouped_max(client, "http://x/rel", "toptier_code", "amt", key="id")
+
+    assert asyncio.run(go()) is None, "the same page served three times is not three rows"
+
+
+def test_distinct_rows_are_what_counts_as_read() -> None:
+    """The reported coverage is distinct identities, so it is comparable to the endpoint's count."""
+    import asyncio
+
+    rows = [
+        {"id": 1, "toptier_code": "020", "amt": 5.0},
+        {"id": 2, "toptier_code": "020", "amt": 7.0},
+        {"id": 3, "toptier_code": "075", "amt": 11.0},
+    ]
+
+    async def go() -> Any:
+        import generate_numeric as gn  # type: ignore[import-not-found]
+        import httpx
+
+        async with httpx.AsyncClient(transport=_transport(rows)) as client:
+            return await gn.grouped_max(client, "http://x/rel", "toptier_code", "amt", key="id")
+
+    outcome = asyncio.run(go())
+    assert outcome is not None
+    assert outcome["rows_read"] == 3 and outcome["rows_total"] == 3, outcome
+    # 020 takes 5 + 7 = 12 and 075 takes 11, so 020 wins. The point of the case is the coverage
+    # figure, not the argmax; reading it as "075 wins" was my own arithmetic slip.
+    assert outcome["group"] == "020", outcome
+    assert outcome["total"] == 12, outcome
+
+
+def test_a_relation_the_endpoint_cannot_count_emits_no_case() -> None:
+    """No count means no completeness check, and an unverifiable total is not ground truth."""
+    import asyncio
+
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"id": 1, "toptier_code": "020", "amt": 1.0}])
+
+    import generate_numeric as gn  # type: ignore[import-not-found]
+
+    async def go() -> Any:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await gn.grouped_max(client, "http://x/rel", "toptier_code", "amt", key="id")
+
+    assert asyncio.run(go()) is None
 
 
 # --------------------------------------------------------------------------------------------

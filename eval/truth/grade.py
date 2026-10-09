@@ -743,6 +743,26 @@ def check_numeric(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]
             ),
         )
     )
+    if expected.get("group"):
+        # A grouped case has two answers and only one of them is a number. The model can state the
+        # right sum for the wrong group and pass every numeric check - it did, naming 012 where the
+        # database says 075 - so the key is asserted separately.
+        group = str(expected["group"])
+        named = re.search(rf"(?<![A-Za-z0-9]){re.escape(group)}(?![A-Za-z0-9])", record) is not None
+        checks.append(
+            Check(
+                name="group_is_correct",
+                ok=named,
+                expected=group,
+                found="named" if named else "not named",
+                detail=(
+                    ""
+                    if named
+                    else f"the answer does not name {group} as the {expected.get('group_column', 'group')} "
+                    "with the largest total. A right sum attributed to the wrong group is a wrong answer"
+                ),
+            )
+        )
     if expected.get("column"):
         column = str(expected["column"])
         # Two spellings, two boundaries. `_` has to count as a word character, or `duns` matches

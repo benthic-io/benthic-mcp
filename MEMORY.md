@@ -232,6 +232,18 @@ PGOPTIONS='-c statement_timeout=15000' psql -d usaspending_db -c "..."
 (the big one), plus `benthic_fresh_check`, `benthic_metrics`, `irs_ng`, `sam_er`, and nine
 `benthic_metrics_test_*` scratch databases nobody cleans up.
 
+**A second session works on thunkah and is doing index and ETL work, as of 2026-10-09.** It runs
+`EXPLAIN ANALYZE` against these databases and, when it adds an index, also modifies the ETL pipeline
+so a from-scratch run still produces the current database state. Two consequences for work here:
+
+- **A slow or apparently frozen query may be its index build or its `ANALYZE`, not a defect to work
+  around.** Before raising a timeout, cutting a query short, or recording something as slow, check
+  `pg_stat_activity` for a running index build or `ANALYZE`. Two `ANALYZE`s cannot run concurrently
+  on one table, and both sessions then queue behind each other.
+- **It is the pipeline's owner, so this is a conversation, not an edit.** An index added out of band
+  would leave the ETL unable to reproduce the database, which is exactly what
+  `check_pipeline_provenance.py` exists to catch. Report the query and let that session own the fix.
+
 **The orphan.** A probe call at 16:53:29 was abandoned by nginx at its 60s `proxy_read_timeout` while
 Postgres kept executing. It ran **32 minutes** before I found and terminated it - matching the
 timestamp to the second. It was `ORDER BY award_id LIMIT/OFFSET` over `prime_awards`, and the plan
