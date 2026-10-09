@@ -537,7 +537,7 @@ async def test_the_scan_refusal_still_advises_narrowing_when_narrowing_works(
                     offset=0,
                 )
             )
-    assert "narrow the filters" in str(caught.value)
+    assert "narrow the filters" in str(caught.value).lower()
 
 
 @pytest.mark.asyncio
@@ -1427,4 +1427,4 @@ async def test_a_refusal_makes_no_claim_when_grouping_or_a_non_count_is_asked_fo
     # And the message the model needs either way still stands.
     for message in (grouped, summed):
         assert "50284" in message
-        assert "narrow the filters" in message
+        assert "narrow the filters" in message.lower()

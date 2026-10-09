@@ -323,12 +323,12 @@ def _scan_exit(definition: RelationDefinition, scan_limit: int) -> str:
     if not definition.primary_key:
         return (
             f"{definition.dataset}.{definition.name} declares no primary key, so its rows cannot be "
-            "paged deterministically and an aggregate over them is refused however far you narrow - "
-            "getting under the scan limit will not help. Narrow until the result fits in one page, "
-            "which for this relation means naming a period rather than a whole year."
+            "paged deterministically and an aggregate over them is refused however far you narrow. "
+            "Getting under the scan limit will not help: narrow until the result fits in one page, "
+            "which here means naming a single period rather than a whole year."
         )
     return (
-        f"narrow the filters until each source matches at most {scan_limit} rows, or raise "
+        f"Narrow the filters until each source matches at most {scan_limit} rows, or raise "
         "BENTHIC_AGGREGATE_SCAN_LIMIT."
     )
 
@@ -364,7 +364,7 @@ def _scan_refusal(
             f"More than {scan_limit} rows match the filters in {source_name}, "
             f"past the complete-scan limit of {scan_limit}"
         )
-        return f"{magnitude}. Aggregating or joining needs every source scanned in full, so {exit_advice}"
+        return f"{magnitude}. Aggregating or joining needs every source scanned in full. {exit_advice}"
 
     answered, nullable = (False, None)
     if request is not None:
@@ -391,7 +391,7 @@ def _scan_refusal(
             f"at the cost of a narrower filter."
         )
     others = f", the widest of the {len(over)} sources over it" if len(over) > 1 else ""
-    return f"{magnitude}{others}. Aggregating or joining needs every source scanned in full, so {exit_advice}"
+    return f"{magnitude}{others}. Aggregating or joining needs every source scanned in full. {exit_advice}"
 
 
 def _unique_strings(values: list[str]) -> list[str]:
