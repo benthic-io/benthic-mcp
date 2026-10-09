@@ -856,9 +856,15 @@ These are **corpus** figures and mostly predate the fixes. The two cycles after 
 failures) and `query_aggregate` (17 of 19) now answer, and `query_having_text` - which had **0 passes in
 35 complete cycles** - passed on the first cycle after the refusal fix.
 
-**The one probe still worth attacking is `join_partial`, at 4/40.** It is the lowest and it is not
-explained by anything fixed today. Note it has only 40 runs against 80+ for the others, so its rate
-rests on half the evidence and should be attributed before it is trusted.
+**`join_partial` at 4/40 is retired and must not be attacked.** It was dropped from the probe set on
+2026-09-30 - every one of its 40 runs predates that, and it exists in no current probe file. It only
+looked like the worst live probe because I read historical records as current. The lowest *live* rates
+are `query_having_text` (14%), `deadend_empty` (37%) and `truncation` (40%), and all three had their
+cause fixed today; the two cycles since read 16/17 and 17/17.
+
+`truncation` at 40% is the one I have not explained. It answers in the last two cycles, so whatever it
+was has been overtaken, and the truncation-warning fix that would have targeted it was deliberately not
+made - that defect was a consequence of the broken `order=`, so there may be nothing left to fix.
 
 ## The `discover` payload, measured 2026-10-07
 
