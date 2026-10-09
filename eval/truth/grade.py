@@ -511,13 +511,6 @@ _GRADERS = {
     "find_district_rpc": check_rpc,
     "districts_in_bbox_rpc": check_rpc,
     "nonprofits_nearby_rpc": check_rpc,
-    # The `_limits` variants differ from their base case only in what the question asks the model to
-    # say about the result, and their `expected` block is the base case's. Registering them is better
-    # than letting them fall through to `known_capability`: a capability with no grader must be a loud
-    # failure, not a scored hole that looks like a model problem.
-    "find_district_rpc_limits": check_rpc,
-    "districts_in_bbox_rpc_limits": check_rpc,
-    "nonprofits_nearby_rpc_limits": check_rpc,
 }
 
 

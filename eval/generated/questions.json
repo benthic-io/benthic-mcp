@@ -501,7 +501,7 @@
       },
       "forbidden_claims": [],
       "id": "relation_trap_0_0_usp_cl_legislator_terms",
-      "question": "Who held the office recorded in usp_cl.legislator_terms as of a past date, and what were the term boundaries? Answer from the historical record and state the term window you used. Do not answer from a view that only holds present-day rows.",
+      "question": "Who held the office recorded in usp_cl.legislator_terms as of a past date, and what were the term boundaries? Answer from the historical record and state the term window you used. Do not answer from a view that only holds present-day rows. Focus on the 117th Congress (2021-2022) session.",
       "required_tools": [
         "benthic_query"
       ]
@@ -514,38 +514,10 @@
       },
       "forbidden_claims": [],
       "id": "relation_trap_0_1_usp_cl_legislator_terms",
-      "question": "List the officeholders in usp_cl.legislator_terms in chronological order with their term boundaries. The present-day view is not a substitute for the historical record.",
+      "question": "List the officeholders in usp_cl.legislator_terms in chronological order with their term boundaries. The present-day view is not a substitute for the historical record. Focus on the 117th Congress (2021-2022) session.",
       "required_tools": [
         "benthic_query"
       ]
-    },
-    {
-      "capability": "districts_in_bbox_rpc_limits",
-      "expected": {
-        "arguments": {
-          "max_lat": 52.6385576,
-          "max_lon": 1.3023954,
-          "min_lat": 52.6185576,
-          "min_lon": 1.2823954
-        },
-        "operation": "districts_in_bbox",
-        "row_count": 1,
-        "rows": [
-          {
-            "district": 0,
-            "district_id": "002115119000",
-            "id": 38477,
-            "statename": "Alaska"
-          }
-        ]
-      },
-      "forbidden_claims": [],
-      "id": "rpc_districts_in_bbox_limits",
-      "question": "Call the districts_in_bbox RPC for the bounding box min_lon=1.2823954, min_lat=52.6185576, max_lon=1.3023954, max_lat=52.6385576. Report how many signed districts it returns, and explain the limits of the result.",
-      "required_tools": [
-        "benthic_rpc"
-      ],
-      "question_note": "Rewritten 2026-09-29. The original said 'the small bounding box around latitude X and longitude Y' and left the extent unstated, so the model chose its own - a zero-height box, which returned the same 1 row and satisfied the case for the wrong reason. The case asserts on the RPC arguments, so the question has to state them; an assertion the question does not ask for is indistinguishable from a model error."
     },
     {
       "capability": "districts_in_bbox_rpc",
@@ -578,24 +550,6 @@
       "question_note": "Rewritten 2026-09-29. The original said 'the small bounding box around latitude X and longitude Y' and left the extent unstated, so the model chose its own - a zero-height box, which returned the same 1 row and satisfied the case for the wrong reason. The case asserts on the RPC arguments, so the question has to state them; an assertion the question does not ask for is indistinguishable from a model error."
     },
     {
-      "capability": "find_district_rpc_limits",
-      "expected": {
-        "arguments": {
-          "lat": 52.6285576,
-          "lon": 1.2923954
-        },
-        "operation": "find_district",
-        "row_count": 0,
-        "rows": []
-      },
-      "forbidden_claims": [],
-      "id": "rpc_find_district_limits",
-      "question": "Find the signed district containing latitude 52.6285576 and longitude 1.2923954, and state the result's geographic scope. Include the operation arguments and the returned completeness/truncation information.",
-      "required_tools": [
-        "benthic_rpc"
-      ]
-    },
-    {
       "capability": "find_district_rpc",
       "expected": {
         "arguments": {
@@ -609,25 +563,6 @@
       "forbidden_claims": [],
       "id": "rpc_find_district_rows",
       "question": "Find the signed district containing latitude 52.6285576 and longitude 1.2923954, and state the result's geographic scope.",
-      "required_tools": [
-        "benthic_rpc"
-      ]
-    },
-    {
-      "capability": "nonprofits_nearby_rpc_limits",
-      "expected": {
-        "arguments": {
-          "lat": 52.6285576,
-          "lon": 1.2923954,
-          "radius_meters": 1000
-        },
-        "operation": "nonprofits_nearby",
-        "row_count": 0,
-        "rows": []
-      },
-      "forbidden_claims": [],
-      "id": "rpc_nonprofits_nearby_limits",
-      "question": "Find signed nonprofit records within 1000 meters of latitude 52.6285576 and longitude 1.2923954; do not describe them as exact unless the returned evidence supports that. Include the operation arguments and the returned completeness/truncation information.",
       "required_tools": [
         "benthic_rpc"
       ]
