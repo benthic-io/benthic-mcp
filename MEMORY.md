@@ -644,11 +644,16 @@ building the contract through `QueryService` with the same qualified form the se
 which is what `tests/test_query.py` does now.
 
 **Verified but not yet shown to change an answer.** The refusal wording is confirmed correct live in
-both branches, but that is a message, not a behaviour. The honest accuracy baseline is still the
-combination suite's **87/100** from the clean 2026-10-04 run. The observer's most recent complete cycle
+both branches, but that is a message, not a behaviour. The only baseline number is **87/100** from the
+clean 2026-10-04 run - and that counts *answered*, not correct, because the combination suite
+deliberately does not score. See "'87/100' was never a correctness score" below before quoting it. The observer's most recent complete cycle
 (`20261007T200544`) answered **14/17**, failing `deadend_empty` and `query_aggregate` at the full
 12-turn budget and `query_having_text` at four - the same three as the cycle before, so these are stable
 rather than noise.
+
+**Accuracy is unmeasured, not merely unmeasured-since.** The suite has no expected values by design,
+so no run of it can say whether an answer was right. The gap below is about a refusal carrying no
+number, which is countable without a grader.
 
 **The largest remaining accuracy gap is refusals with no number in them.** `matched_rows` is set in
 `PostgrestTransport.fetch` (`src/benthic_mcp/postgrest.py:36`) and is `None` when the count request did
@@ -773,6 +778,87 @@ The shared cause is that each message was written to be unmissable in isolation 
 checked against what the model does next. `deadend_empty` has failed in **33 consecutive** cycles since
 2026-10-06 01:17 and `query_having_text` in **all 35** complete cycles in the corpus - neither has a
 passing cycle to point at except via a different route.
+
+## "87/100" was never a correctness score, and it is quoted everywhere
+
+`eval/combination/classify.py` **does not score**. Its own module docstring says why:
+
+> "The suite arrives as 100 English questions ... with no expected values. That is deliberate and
+> correct: an `expected` written by whoever ran the tool last would describe whatever the server
+> happened to do, which is how a suite becomes a rubber stamp. This script therefore does not score.
+> It drives every question, keeps the whole transcript including reasoning, and leaves the judgement
+> to a reader."
+
+The refusal record is separated from the failure record for the same reason, and the observer reads
+refusals from the server's own error text rather than the model's prose, "because prose matching finds
+filler". This is the project's best existing discipline and it is why nothing here is self-graded.
+
+**So 87/100 means 87 produced *an* answer.** Correctness is unmeasured and, without expected values,
+unmeasurable from that suite. The cases carry `answered`, `tools_called`, `server_refused`, `length_cut`
+and `missing_hop` - no grade field, and no judge anywhere in `eval/`.
+
+Two consequences, both of which I got wrong earlier in the session and had to be corrected:
+
+- **It measures coverage, not accuracy.** Every "the MCP is at 87%" style statement, including ones I
+  wrote today, overstates what is known.
+- **That run predates every fix in this session and `order=` was broken during it**, so an unknown
+  share of those 87 answers were confidently wrong - `query_order_mixed` style cases scored
+  `answered=True` on a sorted page.
+
+**Read `answered` as "did not refuse and did not run out of turns", never as "was right."** If a real
+accuracy number is wanted, it needs expected values written from something other than the server's own
+last behaviour, which is a deliberate piece of work and not a threshold tweak.
+
+## Two negative results, 2026-10-08, both from hypotheses that died on measurement
+
+Recorded so nobody re-derives them. Both looked like findings until the follow-up measurement.
+
+**The 19 "new" hallucinated identifiers are real model guesses, not instrument noise.** `findings.py`
+extracts identifiers from *refusal text*, so I expected the server's own vocabulary to be leaking in -
+`eq` is a filter operator it names in its own syntax text, and `count` is its own suggestion word. Both
+are real server text. But the source messages are the model guessing: `chamber` and `fname` against
+`usp_cl.legislator_terms`, `awards` and `districts` as relation names. `eq` came from the model writing
+`eq.MA` as if it were a column. **`findings.py` is working correctly.**
+
+**The 12-column inline cap costs no turns, so "did you mean" closers would buy nothing.** The refusal
+tail already says *"This relation has 22 columns and discovery lists only 12; call discover with
+`detail='full'`"*, and the model acts on it: of 97 such refusals, **80 (82%) were followed by exactly
+that fetch**. The tempting statistic was that 70 of 130 refusals give no inline suggestion and 70% of
+"suggestion-only" refusals are followed by giving up - but that is confounded. Suggestion-only refusals
+concentrate in the probes that fail for unrelated reasons (`truncation` and `deadend_empty` burn the
+full 12-turn budget and answer 0% of the time), while `join_signed_both` answers 71% *despite* them. The
+metric measured the probe's baseline pass rate, not the suggestion's quality.
+
+Net effect: **no fix, and M3's `discover` column budget is safer on this axis than it looked.** The cap
+directs the model to a follow-up call that works; tightening it to 6 columns would widen the set of
+relations where a guess-then-fetch round trip is needed. The `discover` bound remains a prompt-token
+saving with `b5344f5`'s negative result behind it and no accuracy benefit I could demonstrate - which
+is why it is last in the queue rather than first.
+
+## Where the probe set actually stands
+
+Per-probe across all cycles, invalid excluded:
+
+```
+disc_qualified     91/ 91  100%      query_order_mixed   80/ 81   99%
+disc_typo          90/ 90  100%      join_wrong_edge     81/ 84   96%
+playbook_need      75/ 78   96%      rpc_out_of_coverage 80/ 83   96%
+rpc_box            80/ 83   96%      wrong_column        74/ 78   95%
+rpc_point          77/ 83   93%      historical_terms    73/ 80   91%
+query_group_by     72/ 81   89%      self_report         59/ 71   83%
+join_signed_both   70/ 81   86%      query_aggregate     54/ 83   65%
+truncation         30/ 75   40%      deadend_empty       30/ 82   37%
+query_having_text  11/ 81   14%      join_partial         4/ 40   10%
+```
+
+These are **corpus** figures and mostly predate the fixes. The two cycles after the fixes read 16/17 and
+**17/17**, and the three that had been stable failures all broke: `deadend_empty` (33 consecutive
+failures) and `query_aggregate` (17 of 19) now answer, and `query_having_text` - which had **0 passes in
+35 complete cycles** - passed on the first cycle after the refusal fix.
+
+**The one probe still worth attacking is `join_partial`, at 4/40.** It is the lowest and it is not
+explained by anything fixed today. Note it has only 40 runs against 80+ for the others, so its rate
+rests on half the evidence and should be attributed before it is trusted.
 
 ## The `discover` payload, measured 2026-10-07
 
