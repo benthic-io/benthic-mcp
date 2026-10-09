@@ -749,3 +749,80 @@ def test_the_join_count_check_reads_numbers_the_same_way() -> None:
     assert [c.name for c in stated if c.name == "reports:right_count" and not c.ok] == []
     vague = grade.check_signed_path(case, {"answer": "The join returned multiple rows."})
     assert [c.name for c in vague if not c.ok and c.name.startswith("reports:")] == ["reports:right_count"]
+
+
+# --------------------------------------------------------------------------------------------
+# The runner must arm the whole anti-hallucination floor, not half of it.
+
+
+def _floor_suite() -> Any:
+    """The runner's own grading seam, loaded the way run_suite loads the grader."""
+    spec = importlib.util.spec_from_file_location("run_suite", ROOT / "eval" / "truth" / "run_suite.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["run_suite"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_the_runner_grades_with_the_column_names_and_not_only_the_relations() -> None:
+    """`manifest_names()` returns 1,488 columns and the runner discarded them.
+
+    `grade_case` takes `column_names` to recognise a column alias - `left.state`, `right.uei` - as
+    something a model writes when reporting join evidence rather than an invented relation. The
+    runner fetched the columns, bound them to a local, and passed only the relations. So the alias
+    protection was inert at run time: it worked whenever a person graded interactively and did
+    nothing whenever the runner graded, which is the only way a number gets recorded.
+
+    Rep 2 failed `multi_step_join 0/2` on `unmanifested_relation` for exactly this reason, and the
+    same transcripts pass once the columns are supplied.
+    """
+    run_suite = _floor_suite()
+    suite_case = {
+        "id": "m",
+        "capability": "multi_step_join",
+        "question": "q",
+        "expected": {"join_path": {"left": "a.b", "left_column": "uei", "right": "c.d", "right_column": "uei"}},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_join"],
+    }
+    recorded = {
+        "id": "m",
+        "answer": "left.state is MD and right.uei is ESELKUJSAM45",
+        "turns": [
+            {
+                "tool_results": [
+                    {
+                        "name": "benthic_join",
+                        "args": {},
+                        "ok": True,
+                        "text": "{}",
+                    }
+                ]
+            }
+        ],
+    }
+    results = run_suite.grade_runs([recorded], [suite_case], {"a.b", "c.d"}, {"state", "uei", "congressional_district"})
+    alias = [c for r in results for c in r.checks if c.name == "unmanifested_relation"]
+    assert alias and alias[0].ok, f"the floor rejected a column alias: {[c.found for c in alias]}"
+
+
+def test_the_floor_still_rejects_an_invented_relation_through_the_runner() -> None:
+    """The same seam, so the pass above is the alias check working and not the floor being off."""
+    run_suite = _floor_suite()
+    suite_case = {
+        "id": "m",
+        "capability": "multi_step_join",
+        "question": "q",
+        "expected": {"join_path": {"left": "a.b", "left_column": "uei", "right": "c.d", "right_column": "uei"}},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_join"],
+    }
+    recorded = {
+        "id": "m",
+        "answer": "I read usaspending.invented_table and samer.ghost_relation",
+        "turns": [{"tool_results": [{"name": "benthic_join", "args": {}, "ok": True, "text": "{}"}]}],
+    }
+    results = run_suite.grade_runs([recorded], [suite_case], {"a.b", "c.d"}, {"state", "uei"})
+    floor = [c for r in results for c in r.checks if c.name == "unmanifested_relation"]
+    assert floor and not floor[0].ok, floor

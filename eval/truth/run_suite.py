@@ -164,6 +164,28 @@ async def tool_schemas() -> list[dict[str, Any]]:
     ]
 
 
+def grade_runs(
+    runs: list[dict[str, Any]],
+    cases: list[dict[str, Any]],
+    relations: set[str],
+    columns: set[str],
+) -> list[Any]:
+    """Grade recorded runs against the manifest floor.
+
+    Both sets are arguments rather than one being defaulted. `grade_case` uses the column names to
+    recognise a column alias - `left.state`, `right.uei` - as something a model writes when
+    reporting join evidence rather than an invented relation. This used to be an inline list
+    comprehension passing only `relations`, having already bound `columns` from `manifest_names()`:
+    the alias protection was inert at run time and active whenever a person graded by hand, which is
+    the worst arrangement available - it looked measured and was not. Rep 2 failed `multi_step_join
+    0/2` on `unmanifested_relation` for exactly this reason.
+    """
+    by_id = {str(c.get("id")): c for c in cases}
+    return [
+        grader.grade_case(by_id[str(run["id"])], run, relations, columns) for run in runs if str(run["id"]) in by_id
+    ]
+
+
 async def run(args: argparse.Namespace) -> int:
     cases = grader.load_cases(str(args.questions))
     if args.capability:
@@ -199,8 +221,7 @@ async def run(args: argparse.Namespace) -> int:
                 }
             )
 
-    by_id = {str(c.get("id")): c for c in cases}
-    results = [grader.grade_case(by_id[str(run_["id"])], run_, relations) for run_ in runs if str(run_["id"]) in by_id]
+    results = grade_runs(runs, cases, relations, columns)
     summary = grader.summarise(results)
 
     args.output.mkdir(parents=True, exist_ok=True)
@@ -236,7 +257,13 @@ def main() -> None:
     # whole budget on reasoning. A truncated turn records as a failure that is not the model's.
     parser.add_argument("--max-tokens", type=int, default=8000)
     parser.add_argument("--temperature", type=float, default=0.0)
-    parser.add_argument("--request-timeout", type=float, default=180.0)
+    # Measured across two 30-case reps: a passing case takes a median of 34s and the slowest took
+    # 266s. At 180s this fired on `relation_trap` twice in each rep - four of four attempts, never
+    # measured - and on one `discovery` case. Those are the cases that reason longest, because a trap
+    # question invites a model to enumerate what it is not looking at. A timeout that discards the
+    # slowest cases is not a timeout, it is a selection effect, and it was hiding a whole capability
+    # behind `not_measured`.
+    parser.add_argument("--request-timeout", type=float, default=420.0)
     parser.add_argument("--no-manifest-floor", action="store_true")
     raise SystemExit(asyncio.run(run(parser.parse_args())))
 
