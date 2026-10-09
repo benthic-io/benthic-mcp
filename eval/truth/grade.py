@@ -208,17 +208,45 @@ def check_manifested_relations(case_run: dict[str, Any], signed_relations: set[s
     wrote in prose are considered, because guessing at relation-shaped words is not this check's job.
     """
     text = answer_text(case_run)
-    named = set(re.findall(r"\b([a-z_]+)\.([a-z_][a-z0-9_]*)\b", text.lower()))
     invented = sorted(
-        f"{dataset}.{relation}" for dataset, relation in named if f"{dataset}.{relation}" not in signed_relations
+        spelling
+        for spelling in _relation_spellings(text)
+        if _looks_like_a_relation(spelling) and spelling.replace("`", "").lower() not in signed_relations
     )
     return Check(
         name=UNMANIFESTED,
         ok=not invented,
         expected="every relation named is in the signed manifest",
         found=invented or "none",
-        detail="" if not invented else f"{len(invented)} relation(s) named that the manifest does not carry",
+        detail=""
+        if not invented
+        else f"{len(invented)} relation(s) named that the manifest does not carry: {invented[:4]}",
     )
+
+
+# Filter syntax and abbreviations all contain a dotted pair that is not a relation. The first version of
+# this check matched any dotted token and reported `eq.senate`, `not.is` and `u.s` as invented
+# relations - `u.s` is what falls out of matching inside `usp_cl.legislator_terms`. A floor that reports
+# relations nobody named is worse than no floor, because it converts real failures into noise.
+_NOT_A_RELATION = {"in", "is", "not", "eq", "neq", "gt", "gte", "lt", "lte", "like", "null", "u", "s"}
+
+
+def _relation_spellings(text: str) -> set[str]:
+    """Dotted spellings whose first half is not filter syntax."""
+    pairs = set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*", text))
+    return {pair for pair in pairs if pair.split(".", 1)[0].lower() not in _NOT_A_RELATION}
+
+
+def _looks_like_a_relation(spelling: str) -> bool:
+    """Whether a dotted spelling is a relation reference rather than prose or a fragment.
+
+    Both halves must be plausible identifiers: a relation in this catalog is written out in full, and a
+    one-or-two character half is a fragment of a longer word rather than a name.
+    """
+    dataset, _, relation = spelling.partition(".")
+    if dataset.lower() in _NOT_A_RELATION or relation.lower() in _NOT_A_RELATION:
+        return False
+    return len(dataset) >= 3 and len(relation) >= 3
 
 
 def check_discovery(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
@@ -476,6 +504,13 @@ _GRADERS = {
     "find_district_rpc": check_rpc,
     "districts_in_bbox_rpc": check_rpc,
     "nonprofits_nearby_rpc": check_rpc,
+    # The `_limits` variants differ from their base case only in what the question asks the model to
+    # say about the result, and their `expected` block is the base case's. Registering them is better
+    # than letting them fall through to `known_capability`: a capability with no grader must be a loud
+    # failure, not a scored hole that looks like a model problem.
+    "find_district_rpc_limits": check_rpc,
+    "districts_in_bbox_rpc_limits": check_rpc,
+    "nonprofits_nearby_rpc_limits": check_rpc,
 }
 
 
