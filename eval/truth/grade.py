@@ -493,17 +493,78 @@ def check_relation_trap(case: dict[str, Any], case_run: dict[str, Any]) -> list[
             )
         )
     if trap:
-        used_trap = _mentions(text, trap)
+        # Naming the trap is not relying on it. A run graded this case failed here where the model had
+        # written "I used the historical record usp_cl.legislator_terms (NOT mv_current_lawmakers which
+        # is current-only)" - it named the trap in order to reject it, and said so explicitly.
+        #
+        # The test is therefore whether the trap is invoked without a rejection nearby. That is weaker
+        # than reading the answer, and it is stated rather than presented as exact: a model that used
+        # the trap and then criticised it would still pass. Every mention must be rejected, not just
+        # one, because a single rejection must not launder a later reliance.
+        rejected = _trap_is_rejected(text, trap)
+        used_trap = _mentions(text, trap) and not rejected
         checks.append(
             Check(
                 name="did_not_answer_from_trap",
                 ok=not used_trap,
                 expected=f"no reliance on {trap}",
-                found="trap named" if used_trap else "not named",
-                detail=f"{trap} cannot answer a historical question" if used_trap else "",
+                found="named and rejected" if rejected else ("relied on" if used_trap else "not named"),
+                detail=""
+                if not used_trap
+                else f"{trap} cannot answer a historical question and nothing nearby sets it aside",
             )
         )
     return checks
+
+
+_REJECTION_MARKERS = (
+    "not ",
+    "rather than",
+    "instead of",
+    "cannot",
+    "current-only",
+    "current only",
+    "only the sitting",
+    "would be wrong",
+    "is wrong",
+    "does not answer",
+    "no historical",
+)
+
+
+def _trap_is_rejected(text: str, trap: str) -> bool:
+    """Whether every mention of the trap sits inside a rejection.
+
+    A window rather than the whole answer, because "not X" far from the mention of X is not a
+    rejection of it.
+    """
+    lowered = text.lower()
+    needle = trap.lower()
+    positions = [match.start() for match in re.finditer(re.escape(needle), lowered)]
+    if not positions:
+        return False
+    # The window is bounded by the neighbouring mentions, not by a fixed length. A fixed window large
+    # enough to catch a rejection can reach across to the next mention of the trap and read that one's
+    # rejection as its own - which lets "I avoided the trap. Reading from the trap gives the answer"
+    # pass. Splitting at the boundaries keeps each judgement local.
+    # The window stops at sentence boundaries, because that is where a rejection of *this* mention
+    # lives. Bounding by neighbouring mentions is not enough: in "I avoided the trap because it is
+    # current-only. Reading from the trap gives the answer", the second mention sits in the same
+    # sentence-distance of the first rejection's wording and reads as rejected too.
+    #
+    # A rejection before the mention and a rejection after it count, since "not X, because ..." and
+    # "... which is current-only" both reject X.
+    for position in positions:
+        end_of_sentence_before = max(lowered.rfind(".", 0, position), lowered.rfind("\n", 0, position))
+        start = end_of_sentence_before + 1 if end_of_sentence_before >= 0 else max(0, position - 200)
+        boundary_after = min(
+            (index for index in (lowered.find(".", position), lowered.find("\n", position)) if index >= 0),
+            default=len(lowered),
+        )
+        end = min(boundary_after, position + len(needle) + 200)
+        if not any(marker in lowered[start:end] for marker in _REJECTION_MARKERS):
+            return False
+    return True
 
 
 def check_sequential(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:

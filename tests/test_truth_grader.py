@@ -491,6 +491,86 @@ def test_a_point_rpc_is_compared_exactly() -> None:
 BBOX = {"min_lat": 52.6185576, "max_lat": 52.6385576, "min_lon": 1.2823954, "max_lon": 1.3023954}
 
 
+def trap_case() -> dict[str, Any]:
+    return case(
+        capability="relation_trap",
+        required_tools=["query"],
+        expected={"relation": "usp_cl.legislator_terms", "trap": "usp_cl.mv_current_lawmakers"},
+    )
+
+
+def trap_result(answer: str) -> Any:
+    return grade.grade_case(trap_case(), run(answer, tools=[("benthic_query", {}, True)]))
+
+
+def test_naming_the_trap_in_order_to_reject_it_is_not_relying_on_it() -> None:
+    """A run graded this failed where the model wrote "NOT mv_current_lawmakers which is current-only".
+
+    It named the trap precisely so it could set it aside, and said why. Grading that as relying on the
+    trap punishes the model for being explicit about its reasoning, which is the opposite of what this
+    check is for.
+    """
+    result = trap_result(
+        "I used usp_cl.legislator_terms (NOT usp_cl.mv_current_lawmakers which is current-only) for the 117th Congress."
+    )
+    assert result.passed, [c.name for c in result.failures()]
+    check = next(c for c in result.checks if c.name == "did_not_answer_from_trap")
+    assert check.found == "named and rejected"
+
+
+def test_answering_from_the_trap_still_fails() -> None:
+    result = trap_result("Answering from usp_cl.mv_current_lawmakers gives the sitting member.")
+    assert not result.passed
+    assert "did_not_answer_from_trap" in failing(result)
+    check = next(c for c in result.failures() if c.name == "did_not_answer_from_trap")
+    assert check.found == "relied on"
+
+
+def test_one_rejection_does_not_launder_a_later_reliance() -> None:
+    """Both mentions must be rejected. A model that explains the trap and then uses it has used it."""
+    result = trap_result(
+        "From usp_cl.legislator_terms I avoided usp_cl.mv_current_lawmakers because it is "
+        "current-only. Reading from usp_cl.mv_current_lawmakers gives the answer."
+    )
+    assert "used_expected_relation" not in failing(result), (
+        "the test is about the trap check, so the expected relation must be present"
+    )
+    assert "did_not_answer_from_trap" in failing(result)
+
+
+def test_a_rejection_far_from_the_mention_is_not_a_rejection() -> None:
+    """A window, not the whole answer: 'not X' far from X is not a rejection of it."""
+    padding = "the record is historical. " * 40
+    result = trap_result("From usp_cl.legislator_terms: " + padding + "Reading usp_cl.mv_current_lawmakers gives it.")
+    assert "did_not_answer_from_trap" in failing(result)
+
+
+def test_the_trap_check_misses_a_rejection_it_cannot_see_and_says_so() -> None:
+    """The known limit, asserted rather than left implicit.
+
+    A rejection placed with no marker inside the sentence - "I avoided X", where the only negation is
+    the verb - is not detectable by a marker scan, and widening the marker list to catch it would
+    admit phrasings where the model *did* rely on the trap. A missed case is recoverable; a false pass
+    is not, so the limit is documented where the check is instead of engineered away.
+    """
+    import inspect
+
+    assert (
+        grade._trap_is_rejected("I avoided usp_cl.mv_current_lawmakers entirely.", "usp_cl.mv_current_lawmakers")
+        is False
+    )
+    source = inspect.getsource(grade.check_relation_trap)
+    assert "weaker" in source and "would still pass" in source
+
+
+def test_the_trap_check_states_that_it_is_weaker_than_reading_the_answer() -> None:
+    """Its limitation is documented where the check is, so a reader knows what it does not catch."""
+    import inspect
+
+    source = inspect.getsource(grade.check_relation_trap)
+    assert "would still pass" in source, "the known weakness must be stated in the function"
+
+
 def test_rpc_argument_mismatch_is_named_as_such() -> None:
     result = grade.grade_case(
         case(
