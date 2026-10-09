@@ -580,6 +580,14 @@ def check_nothing_was_verified(case: dict[str, Any], checks: list[Check]) -> lis
     ]
 
 
+def _was_truncated(case_run: dict[str, Any]) -> bool:
+    """Whether the last turn ended because it ran out of token budget."""
+    turns = case_run.get("turns") or []
+    if not turns:
+        return not case_run.get("answer")
+    return str(turns[-1].get("finish_reason") or "") == "length"
+
+
 def grade_case(
     case: dict[str, Any],
     case_run: dict[str, Any],
@@ -588,8 +596,53 @@ def grade_case(
 ) -> CaseResult:
     """Grade one case. `signed_relations` powers the anti-hallucination floor when supplied."""
     capability = str(case.get("capability") or "")
-    grader = _GRADERS.get(capability)
+
+    # A case the harness could not run is not a case the model failed. The first run recorded a
+    # relation_trap failure that was an HTTP 500 and another that was an 8,590-character reasoning turn
+    # cut off by a 2,048-token budget, and both read as capability failures. `errored` and `truncated`
+    # are infrastructure facts and they are surfaced as their own checks, so a table of capability
+    # rates cannot quietly absorb them.
     checks: list[Check] = []
+    error = case_run.get("error")
+    if error:
+        return CaseResult(
+            id=str(case.get("id") or ""),
+            capability=capability,
+            passed=False,
+            checks=[
+                Check(
+                    name="errored",
+                    ok=False,
+                    expected="the case runs",
+                    found=str(error)[:200],
+                    detail="the harness could not drive this case; it is not a model failure",
+                )
+            ],
+            question=str(case.get("question") or ""),
+            tools_called=[],
+        )
+    if _was_truncated(case_run):
+        return CaseResult(
+            id=str(case.get("id") or ""),
+            capability=capability,
+            passed=False,
+            checks=[
+                Check(
+                    name="truncated",
+                    ok=False,
+                    expected="the model finishes its turn",
+                    found="finish_reason: length",
+                    detail=(
+                        "the model's turn hit the token budget mid-reasoning, so no answer was "
+                        "recorded. That is a harness limit, not a capability failure"
+                    ),
+                )
+            ],
+            question=str(case.get("question") or ""),
+            tools_called=[],
+        )
+
+    grader = _GRADERS.get(capability)
     if grader is not None:
         checks.extend(grader(case, case_run))
     elif "join" in capability:
@@ -636,9 +689,26 @@ def summarise(results: list[CaseResult]) -> dict[str, Any]:
             bucket["failed"].append(result.id)
         for check in result.failures():
             bucket["failed_checks"][check.name] = bucket["failed_checks"].get(check.name, 0) + 1
+    # Infrastructure outcomes are counted apart from capability rates. A harness failure averaged into
+    # a capability rate makes the model look worse than it is, which is the specific misreading that
+    # produced a 0/2 for relation_trap that was one 500 and one truncated turn.
+    for result in results:
+        names = {check.name for check in result.checks}
+        if names & {"errored", "truncated"}:
+            by_capability.setdefault(result.capability, {"cases": 0, "passed": 0, "failed_checks": {}, "failed": []})
+            by_capability[result.capability]["not_measured"] = (
+                by_capability[result.capability].get("not_measured", 0) + 1
+            )
     for bucket in by_capability.values():
         total = bucket["cases"]
-        bucket["rate"] = round(bucket["passed"] / total, 3) if total else None
+        # Always present, including as zero. A key that only appears when nonzero reads as "not
+        # measured" on one capability and as "absent, so zero" on another, which is exactly the kind of
+        # ambiguity that made a 0/2 read as a capability failure when it was one 500 and one truncation.
+        not_measured = bucket.get("not_measured", 0)
+        bucket["not_measured"] = not_measured
+        measured = total - not_measured
+        bucket["measured"] = measured
+        bucket["rate"] = round(bucket["passed"] / measured, 3) if measured else None
         bucket["failed_checks"] = dict(sorted(bucket["failed_checks"].items(), key=lambda kv: -kv[1]))
     return {"cases": len(results), "by_capability": by_capability}
 

@@ -82,6 +82,64 @@ def test_a_missing_column_is_a_failure() -> None:
     assert failing(result) == ["names_column:y"]
 
 
+def test_a_case_the_harness_could_not_run_is_not_a_capability_failure() -> None:
+    """A 500 is not the model failing, and averaging it into a rate makes the model look worse.
+
+    The first run reported relation_trap 0/2. One case was an HTTP 500 with zero turns and the other
+    an 8,590-character reasoning turn cut off by the token budget. Neither measured the capability.
+    """
+    errored = grade.grade_case(
+        case(capability="relation_trap", expected={"relation": "a.b"}),
+        {"answer": "", "turns": [], "error": "HTTPStatusError: 500 Internal Server Error"},
+    )
+    assert not errored.passed
+    assert failing(errored) == ["errored"]
+    check = next(c for c in errored.checks if c.name == "errored")
+    assert "not a model failure" in check.detail
+
+
+def test_a_turn_truncated_by_the_token_budget_is_not_a_capability_failure() -> None:
+    truncated = grade.grade_case(
+        case(capability="relation_trap", expected={"relation": "a.b"}),
+        {"answer": "", "turns": [{"turn": 1, "reasoning": "x" * 8590, "finish_reason": "length"}]},
+    )
+    assert not truncated.passed
+    assert failing(truncated) == ["truncated"]
+
+
+def test_a_clean_finish_is_not_reported_as_truncated() -> None:
+    ok = grade.grade_case(
+        case(capability="relation_trap", expected={"relation": "a.b"}),
+        {"answer": "a.b holds it", "turns": [{"turn": 1, "reasoning": "r", "finish_reason": "stop"}]},
+    )
+    assert "truncated" not in failing(ok)
+
+
+def test_the_summary_counts_a_capability_rate_over_measured_cases_only() -> None:
+    """An unmeasurable case must not drag a capability's rate down."""
+
+    def graded(case_id: str) -> dict[str, Any]:
+        return case(
+            id=case_id,
+            capability="discovery",
+            required_tools=["discover"],
+            expected={"relation": "a.b"},
+        )
+
+    def ok_run() -> dict[str, Any]:
+        return run("a.b holds it", tools=[("benthic_discover", {}, True)])
+
+    results = [
+        grade.grade_case(graded("a"), ok_run()),
+        grade.grade_case(graded("b"), ok_run()),
+        grade.grade_case(graded("c"), {"answer": "", "turns": [], "error": "500"}),
+    ]
+    bucket = grade.summarise(results)["by_capability"]["discovery"]
+    assert bucket["not_measured"] == 1
+    assert bucket["measured"] == 2
+    assert bucket["rate"] == 1.0, "two passing measured cases is 100%, not 67%"
+
+
 def test_a_case_that_verifies_nothing_is_reported_rather_than_passed() -> None:
     """The worst hole a grader can have: green having checked nothing.
 
@@ -469,13 +527,15 @@ def test_summary_reports_per_capability_and_no_overall_rate() -> None:
     assert set(summary) == {"cases", "by_capability"}, (
         "no overall pass rate: an aggregate over exact RPCs and heuristic joins cannot be acted on"
     )
-    assert summary["by_capability"]["discovery"] == {
-        "cases": 2,
-        "passed": 1,
-        "rate": 0.5,
-        "failed_checks": {"names_expected_relation": 1},
-        "failed": ["b"],
-    }
+    discovery = summary["by_capability"]["discovery"]
+    # Asserted field by field rather than as one dict literal, so adding a field to the summary does
+    # not read as a behavioural regression. The values are the contract.
+    assert discovery["cases"] == 2
+    assert discovery["passed"] == 1
+    assert discovery["rate"] == 0.5
+    assert discovery["failed_checks"] == {"names_expected_relation": 1}
+    assert discovery["failed"] == ["b"]
+    assert discovery["measured"] == 2 and discovery["not_measured"] == 0
     assert summary["by_capability"]["find_district_rpc"]["passed"] == 0
     assert "verified_something" in summary["by_capability"]["find_district_rpc"]["failed_checks"]
 
