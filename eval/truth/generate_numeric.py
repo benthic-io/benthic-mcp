@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -220,6 +221,37 @@ async def count_all(client: httpx.AsyncClient, endpoint: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+def scan_limit() -> int:
+    """The server's complete-scan ceiling, read from its own configuration.
+
+    An aggregate or a join needs every source scanned in full, and `benthic_query` refuses above this
+    rather than returning a partial aggregate. A case above it is not a hard question - it is
+    unanswerable, and grading it as a failure grades a correct refusal as wrong.
+    """
+    return int(os.environ.get("BENTHIC_AGGREGATE_SCAN_LIMIT", "10000"))
+
+
+def unreachable_because(definition: RelationDefinition, rows: int) -> str | None:
+    """Why an aggregate over this relation cannot be computed, or None if it can.
+
+    Two independent reasons, and the second does not yield to the first: a relation declaring no
+    primary key cannot be paged deterministically, so an aggregate over it is refused once more than
+    one page matches, and narrowing below the scan limit does not escape it. Measured on
+    `usaspending.reporting_agency_overview`: 10,545 rows is refused by the scan cap, and 1,221 - well
+    under it - is still refused for the missing primary key.
+    """
+    limit = scan_limit()
+    reasons = []
+    if not definition.primary_key:
+        reasons.append(
+            f"{definition.dataset}.{definition.name} declares no primary key, so its rows cannot be "
+            "paged deterministically and an aggregate over them is refused however far you narrow"
+        )
+    if rows > limit:
+        reasons.append(f"{rows:,} rows exceed the complete-scan limit of {limit:,}")
+    return " and ".join(reasons) or None
+
+
 def money(value: float) -> dict[str, Any]:
     """Tolerances for a currency figure, declared rather than implied.
 
@@ -347,6 +379,11 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
             outcome = await grouped_max(client, relation_url(definition), group_column, value_column, key=primary)
             if outcome is None:
                 continue
+            # A question above the ceiling is not hard, it is unanswerable, and the correct answer is
+            # the refusal. The derived value stays in the case so the grader can require its absence.
+            ceiling = unreachable_because(definition, outcome["rows_total"])
+            if ceiling:
+                print(f"  unanswerable by design: {ceiling}", flush=True)
             cases.append(
                 {
                     "id": f"group_{dataset}_{relation}_{group_column}",
@@ -365,6 +402,8 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
                         "value": float(outcome["total"]),
                         "value_exact": str(outcome["total"]),
                         "group": outcome["group"],
+                        "answerable": ceiling is None,
+                        **({"ceiling": ceiling} if ceiling else {}),
                         "rows_read": outcome["rows_read"],
                         "rows_total": outcome["rows_total"],
                         **money(outcome["total"]),
