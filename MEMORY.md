@@ -1205,3 +1205,74 @@ controlled, so a rebuilt machine loses them - `benthic-observe.{service,timer}`,
 - `scripts/deploy.sh` - the deploy contract, and its rollback
 - `scripts/tick.sh` - what an observation cycle does and refuses to do
 - `tests/test_contracts_catalog.py` - the property contracts, including seed-vs-manifest checks
+## `relation_trap` has never been measured, across four parameterisations
+
+| request timeout | max_tokens | result |
+|---|---|---|
+| 180s | 8,000 | rep 1: **1 of 2 measured, and it passed**; rep 2: 2 of 2 ReadTimeout |
+| 420s | 8,000 | 2 of 2 **truncated** at the token boundary |
+| 420s | 16,000 | 2 of 2 ReadTimeout |
+
+The truncated turn is productive, not wandering: reasoning grows 335 -> 1,838 -> 29,672 chars and the
+final turn is 10-20x the earlier ones. That is a model enumerating what it is *not* looking at, which
+is what a trap question asks of it. The budget kills it mid-thought, so the answer is never produced.
+
+**The capability has exactly one measurement ever, and it passed** (rep 1). The tail is slow: at
+8,000 tokens a single turn takes 150-300s, so 16,000 tokens cannot fit inside 420s. The three
+parameterisations bracket a narrow band, and no configuration inside it produces a measurement
+consistently.
+
+The request-timeout default is now 420s, raised on the distribution of the whole suite - a passing
+case takes a median of 34s and the slowest took 266s, against the old 180s default that was
+discarding the slowest cases. That is a selection effect, not a timeout, and it is what hid this.
+
+**Two `relation_trap` cases of thirty have cost ~50 minutes of GPU and produced one data point.** The
+next move is not another run. It is to decide what the question is asking for: a case that cannot be
+answered inside the model's practical budget is either a question that needs splitting or a
+capability this model does not have, and those are different findings.
+
+## Rep 2, and the two figures worth quoting
+
+**Rep 2 re-graded with the floor armed: 28/28 measured pass, 2 not measured** (both `relation_trap`).
+Rep 1 re-graded the same way: 26/28 measured pass, 2 not measured, the two misses being the join cases
+before the question asked for a count.
+
+**The headline number is not the finding.** Both reps reported 26/28 as-run and 28/28 re-graded,
+because `multi_step_join 0/2` was an artefact of the runner. What matters is that the second rep
+confirms the first is not a lucky run, and that the two reps agree on every capability that could be
+measured at all:
+
+- 12 of 14 capabilities at 100% in both reps, including `unsigned_join_rejection` 3/3 - the one that
+  matters most for a tool people will rely on
+- the two disagreements (`multi_step_join`, `relation_trap`) are instrument, not model
+- 2 of 30 cases were never measured in either rep. A suite that reports only what it measured and
+  says which that was is the only kind worth reading
+
+**"87/100" remains the only figure in this repo that predates the fixes, and it measures coverage, not
+correctness.** Every accuracy number here is `x/y measured` with a stated `not_measured`.
+
+## The pipeline is mid-flight, so the drift report is not a defect list
+
+`check_pipeline_provenance.py` run against `ngopen-pipelines` HEAD `991a871` (fetched 2026-10-09):
+all five manifests pin older commits, and four datasets report schema drift. The owning session
+committed `991a871 Drop six duplicate indexes` the same day, so most of the absent side is work in
+progress rather than rot.
+
+The direction that matters is **undeclared** - an index that exists live and no rebuild would create.
+Three, and a from-scratch run silently loses each:
+
+```
+irs_ng      idx_bmf_state_current_sub_status_foundation  on bmf_organizations
+samer       idx_mv_contractor_state                     on mv_contractor_registry
+usaspending uei_crosswalk_uei_idx                       on uei_crosswalk
+```
+
+The declared-but-absent side is the mild direction. `declared-but-absent` counts moved from 12
+`usaspending` / 6 `usp_cl` in my earlier notes to 6 / 2 now - the earlier figures were stale notes,
+not measurements, which is why they are quoted here with the date rather than trusted.
+
+`up_cdmaps` is clean. `uei_crosswalk`'s naming divergence is a *different* file - `recovered/`
+`indexes_recovered.sql`, touched 2026-10-09 by the session doing the index work, carrying a comment
+that its rule is to keep the declared name unless the observed scans say otherwise. Raising a naming
+complaint against a file edited today by its owner would be reporting their unfinished work as a
+defect.
