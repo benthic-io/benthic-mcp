@@ -930,6 +930,39 @@ def test_a_genuine_reliance_still_fails(answer: str) -> None:
 
 def test_a_rejection_does_not_launder_a_later_reliance() -> None:
     assert not grade._trap_is_rejected(
-        "I avoided mv_current_lawmakers because it is current-only. Reading from usp_cl.mv_current_lawmakers gives the answer",
+        "I avoided mv_current_lawmakers because it is current-only. Reading from "
+        "usp_cl.mv_current_lawmakers gives the answer",
+        TRAP,
+    )
+
+
+# --------------------------------------------------------------------------------------------
+# A rejection may spill into the sentence after the mention.
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        # the real transcript: the sentence ends before the reason starts
+        "usp_cl.mv_current_lawmakers is a materialized view that returns only the currently sitting "
+        "member(s). it has no historical timeline, so it cannot tell you who held the seat in 2021",
+        "usp_cl.mv_current_lawmakers is a materialized view. It holds no historical timeline.",
+    ],
+)
+def test_a_rejection_in_the_following_sentence_counts(answer: str) -> None:
+    """The window closed at the end of the mention's own sentence.
+
+    A model explaining why a view is wrong routinely states the property in one sentence and the
+    consequence in the next. Case 0_0 was graded `relied on` while case 0_1 passed, and the difference
+    was one sentence break inside the same explanation.
+    """
+    assert grade._trap_is_rejected(answer, TRAP), answer
+
+
+def test_widening_by_one_sentence_still_catches_a_launder() -> None:
+    """The window exists to stop one rejection from covering a second, genuine reliance."""
+    assert not grade._trap_is_rejected(
+        "usp_cl.mv_current_lawmakers cannot answer a historical question. Reading from "
+        "usp_cl.mv_current_lawmakers gives the answer for the 117th Congress anyway.",
         TRAP,
     )

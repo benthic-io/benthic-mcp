@@ -619,7 +619,16 @@ def _trap_is_rejected(text: str, trap: str) -> bool:
         boundary = max(_last_sentence_break(lowered, position, 0), lowered.rfind("\n", 0, position))
         start = boundary + 1 if boundary >= 0 else max(0, position - 200)
         after = _next_sentence_break(lowered, position)
-        end = min(after, position + len(needle) + 200)
+        # The window reaches one sentence past the mention's own. A model explaining why a view is
+        # wrong states the property in one sentence and the consequence in the next - "...returns only
+        # the currently sitting member(s). It has no historical timeline, so it cannot tell you who
+        # held the seat in 2021" - and closing the window at the first sentence break graded that as
+        # reliance on the view being explained. Case 0_0 failed for exactly this while 0_1 passed, and
+        # the difference was one sentence break inside the same explanation.
+        end = min(
+            _next_sentence_break(lowered, after + 1),
+            position + len(needle) + 200,
+        )
         if not any(marker in lowered[start:end] for marker in _REJECTION_MARKERS):
             return False
     return True
