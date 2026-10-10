@@ -1358,3 +1358,56 @@ answer. Reinstating the bug reproduces it exactly - 200 rows, winner 012, total 
 and both routes return it. What catches a truncated derivation is `rows_read` disagreeing with
 `rows_total`, and nothing asserted that on disk, which is how a partial sum sat in the suite looking like
 ground truth. It is asserted now, with a non-vacuity test against a mutated copy of the real file.
+
+## Numeric truth at scale: ten cases, six relations, and a defect that hid by dropping cases
+
+**`ordered_max` read a null as the answer.** `order=f990_total_assets_recent.desc limit 1` returns
+`null`, because Postgres sorts NULLS FIRST on a descending sort by default and most organizations have
+no assets on file. The column's real maximum, 117,961,275,629, sits behind that null. The generator
+recorded "no answer" and emitted no case.
+
+**The defect never produced a wrong number, which is what made it quiet.** It dropped cases, and a
+dropped case leaves nothing behind in a suite that reports only what it generated. The case that would
+have tested the largest nonprofit balance sheet was simply absent and nothing counted it as missing.
+Fixed with `.desc.nullslast`, cross-checked against psql - 117961275629 both sides.
+
+A contract captures the parameter the generator builds, so a regression fails a test rather than
+silently removing a case again.
+
+**`irs_ng.bmf_organizations` has no `state` column.** It has `census_state_abbr` and
+`f990_org_addr_state`. A target naming the obvious name is refused by PostgREST, not by the manifest, so
+the generator's "not queryable" was correct for a reason that was not checked. Now checked.
+
+### The suite, doubled
+
+| case | value |
+|---|---|
+| max `usaspending.all_entities.award_count` | 54,858 |
+| max `irs_ng.bmf_organizations.f990_total_assets_recent` | 117,961,275,629 |
+| max `irs_ng.census_demographics.total_population` | 10,105,722 |
+| max `usaspending.state_data.population` | 39,536,653 |
+| count `usaspending.all_entities.entity_type` | 17,735,437 |
+
+Three spot-checked against psql, exact. `all_entities` also widens count coverage to a 17.7M-row
+relation, through a count route the aggregate scan limit does not bind - which is why a count is
+answerable where an aggregate is not.
+
+Run against the model: **9 of 10 pass, 100% of measured.** The one not measured is the unanswerable
+grouped case, and this time it truncated rather than declining.
+
+**That is a finding about the model, and the more important one.** The same question was declined
+correctly in an earlier run - the model named the primary-key limit and refused to invent a total. This
+time it reasoned for 5 turns and 31,062 chars until the budget cut it off. A model that sometimes gives
+up cleanly and sometimes grinds until it is cut off is not one a user can rely on to say "this cannot be
+answered", which is the single most valuable behaviour in a shared tool.
+
+It joins `relation_trap` as the second capability the harness cannot measure consistently, for the same
+reason. Two cases of thirty have now cost about 65 minutes of GPU for one measurement each.
+
+### The invariance corpus had no numeric answers in it
+
+It loaded `questions.json` and nothing else, while every numeric case lives in `numeric_cases.json` - so
+**none of the answers where six of the nine defects were had ever been graded for rewording
+invariance.** A corpus missing the material most at risk is worse than a small one, because it reports
+green. It loads both suites now: 131 answers, 121 passing, 10 failing, zero verdict changes across five
+transforms. It costs 20s.
