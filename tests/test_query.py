@@ -631,6 +631,54 @@ async def test_a_bare_min_on_a_large_relation_is_not_refused(settings: Any, bdp_
 
 
 @pytest.mark.asyncio
+async def test_a_count_of_a_column_on_a_large_relation_is_not_refused(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """`count(col)` is one HEAD with `col=not.is.null`, not a full scan.
+
+    A count of a column has one output row exactly like a bare count, so the complete-scan limit
+    does not apply to it either, but only the bare count had a pushdown path. On a nullable column
+    the refusal told the model to add `col=not.is.null` itself and re-issue - the server already
+    knew the answer shape and made the model rediscover it, which is the dead-end pattern the
+    extreme fix ended for max/min. A count with a column must answer directly: the same HEAD the
+    bare count sends, with the not-null filter added.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            query = httpx.QueryParams(request.url.query)
+            if query.get("total_obligation") == "not.is.null":
+                return httpx.Response(200, headers={"Content-Range": "0-149999999/150000000"})
+            return httpx.Response(200, headers={"Content-Range": "0-182999999/183000000"})
+        return httpx.Response(200, json=[])
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings, BdpRepository(small_settings, client), PostgrestTransport(small_settings, client)
+        )
+        result = await service.execute(
+            build_single_query(
+                question="how many entities have a total obligation",
+                source="usaspending.all_entities",
+                select=None,
+                where=None,
+                group_by=None,
+                metrics=["n:count:total_obligation"],
+                having=None,
+                order=None,
+                limit=1,
+                offset=0,
+            )
+        )
+
+    assert result.rows == [{"n": 150000000}], result.rows
+
+
+@pytest.mark.asyncio
 async def test_the_scan_refusal_still_advises_narrowing_when_narrowing_works(
     settings: Any, bdp_documents: dict[str, Any]
 ) -> None:
@@ -1122,11 +1170,14 @@ async def test_the_bare_count_fast_path_is_not_reachable_when_the_count_would_ov
 @pytest.mark.asyncio
 async def test_a_count_of_a_column_does_not_take_the_row_count(settings: Any, bdp_documents: dict[str, Any]) -> None:
     """`count(column)` counts non-null values and `count(*)` counts rows. They are different
-    numbers whenever the column has nulls, and the count HEAD only knows the row count.
+    numbers whenever the column has nulls, and the count HEAD only knows the row count until the
+    not-null filter is added to it.
 
-    Letting `count(column)` onto the fast path answers the row count under the column's alias, which
-    is a confidently wrong total rather than a refusal - and IRS organization tables are exactly the
-    shape where `f990_total_assets_recent` is null for most rows. The scan is required.
+    Letting `count(column)` onto the fast path without the filter would answer the row count under
+    the column's alias, which is a confidently wrong total rather than a refusal - and IRS
+    organization tables are exactly the shape where `f990_total_assets_recent` is null for most
+    rows. The pushdown sends `column=not.is.null` on the HEAD, and that filtered HEAD must be the
+    number that comes back under the alias.
     """
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1134,10 +1185,14 @@ async def test_a_count_of_a_column_does_not_take_the_row_count(settings: Any, bd
         if document is not None:
             return httpx.Response(200, json=document)
         if request.method == "HEAD":
+            # Four of eight rows have the column; the rest are null, and only the filtered HEAD
+            # may answer under the alias.
+            query = httpx.QueryParams(request.url.query)
+            if query.get("duns") == "not.is.null":
+                return httpx.Response(200, headers={"content-range": "0-3/4"})
             return httpx.Response(200, headers={"content-range": "0-7/8"})
         offset = int(request.url.params.get("offset", 0))
         limit = int(request.url.params["limit"])
-        # Four of eight rows have the column; the rest are null.
         rows = [
             {"uei": str(index), "duns": str(index) if index % 2 == 0 else None}
             for index in range(offset, min(offset + limit, 8))
@@ -1433,6 +1488,15 @@ async def _refusal_via_service(
         if document is not None:
             return httpx.Response(200, json=document)
         if request.method == "HEAD":
+            # A single count aggregate now answers through the count HEAD with the not-null filter
+            # added, so the refusal these tests describe is the fallback: the shape the server
+            # reaches when that filtered HEAD is unavailable. Fail exactly that HEAD so the
+            # refusal path is the one under test, and answer every other HEAD with the count.
+            query = httpx.QueryParams(request.url.query)
+            if len(aggregates) == 1 and aggregates[0].function == AggregateFunction.COUNT:
+                counted_column = (aggregates[0].column or "").split(".", 1)[-1]
+                if counted_column and query.get(counted_column) == "not.is.null":
+                    return httpx.Response(500)
             return httpx.Response(200, headers={"Content-Range": f"0-{matched - 1}/{matched}"})
         raise AssertionError(f"the refusal is the answer, so no page should be sent, but {request.method} was")
 
