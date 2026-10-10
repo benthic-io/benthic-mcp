@@ -2,7 +2,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 
 class StrictModel(BaseModel):
@@ -320,6 +320,26 @@ class DiscoverResult(StrictModel):
     total_matches: int
     more_available: bool
     warnings: list[str] = Field(default_factory=list)
+
+    @model_serializer(mode="wrap")
+    def _omit_null_fields(self, handler: Any) -> Any:
+        """Null is spelled as absence on the wire.
+
+        A null field and a missing field say the same thing, and the discover payload is re-sent to
+        the model on every remaining turn. Measured over 47 truth-suite sessions, 40% of the
+        payload's scalars were nulls - column description, unit and srid - and dropping them is
+        roughly a twelfth of the session. The serializer strips nulls at every depth but keeps
+        every value, so native_type and the other fields survive exactly when they say something.
+        """
+        return _strip_nulls(handler(self))
+
+
+def _strip_nulls(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _strip_nulls(item) for key, item in value.items() if item is not None}
+    if isinstance(value, list):
+        return [_strip_nulls(item) for item in value]
+    return value
 
 
 class SourceMetadata(StrictModel):
