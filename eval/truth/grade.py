@@ -1064,8 +1064,29 @@ def grade_case(
         )
     checks.extend(check_forbidden_claims(case, case_run))
     checks.extend(check_nothing_was_verified(case, checks))
-    if signed_relations is not None:
-        checks.append(check_manifested_relations(case_run, signed_relations, column_names))
+    if signed_relations is None:
+        # Not supplied at all, which is the documented behaviour for grading by hand.
+        pass
+    else:
+        # Supplied halfway is not. `column_names` is what distinguishes a column alias from an invented
+        # relation, and without it `left.state` and `right.uei` read as invented tables. The runner did
+        # that for three runs and `multi_step_join 0/2` was the result, so the asymmetry is now reported
+        # rather than passed over.
+        cover = Check(
+            name="manifest_floor_coverage",
+            ok=column_names is not None,
+            expected="relations and columns",
+            found="relations and columns" if column_names is not None else "relations only",
+            detail=(
+                ""
+                if column_names is not None
+                else "the floor was given relations but not columns, so a column alias cannot be "
+                "distinguished from an invented relation"
+            ),
+        )
+        checks.append(cover)
+        if column_names is not None:
+            checks.append(check_manifested_relations(case_run, signed_relations, column_names))
     return CaseResult(
         id=str(case.get("id") or ""),
         capability=capability,
