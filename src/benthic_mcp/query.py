@@ -900,7 +900,9 @@ def _aggregate_rows(rows: list[dict[str, Any]], request: QueryRequest) -> list[d
 
 def _numeric(value: Any, alias: str) -> float | int:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise QueryValidationError(f"Aggregate {alias} requires numeric values")
+        raise QueryValidationError(
+            f"Aggregate {alias} requires numeric values; use count for a row total, or aggregate over a numeric column"
+        )
     if isinstance(value, float) and not math.isfinite(value):
         raise QueryValidationError(f"Aggregate {alias} requires finite numeric values")
     return value
