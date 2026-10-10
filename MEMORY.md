@@ -1517,3 +1517,21 @@ Two findings worth keeping:
   `mv_district_spending` (`(state, district, fiscal_year)`) reads 50 distinct `state` values against its
   real row count and refuses to emit a case. A "which state received the most" case is blocked on teaching
   the generator to key on the full tuple - a real gap, left for a later pass.
+
+## An answerable grouped_max does not exist yet, and that is the data, not a gap I can close cheaply
+
+The one `grouped_max` case is the unanswerable decline (`reporting_agency_overview`, no primary key).
+Every meaningful "group by state/year/agency and sum money" relation is far over the 10,000-row
+complete-scan ceiling - `gtas_sf133_balances` 929k, `reporting_agency_tas` 593k,
+`appropriation_account_balances` 595k, `mv_entity_spending_summary` 17.9M, `mv_district_spending`
+16,401 - so the server refuses the aggregate and the correct answer is the refusal. The relations
+small enough to aggregate (`state_data` 448, `overall_totals` 141, `mv_covid_spending` 11) are
+dimension tables whose sum-groups are not meaningful (one row per year, or population summed across
+years). The answerable window - between one page (1000) and the ceiling (10000) rows, with a real
+group - appears empty in this catalog. So the aggregate-success path stays untested until either the
+catalog gains a mid-size fact relation or the ceiling is raised, both out of scope for the generator.
+
+Also delivered `~/benthic-io/AGENT-NOTE-2026-10-10-missing-index-entity-awards.md`: `entity_awards` has
+no index on `total_obligation`, so `max()` and `order by ... limit 1` run a parallel seq scan and cancel
+on statement_timeout. That is why the generator skipped it, and it is the same timeout a user would hit
+asking for the largest entity award.
