@@ -132,6 +132,12 @@ uv run pytest -m "not live" -q
 Note that pyright here covers `src` and `tests` only, per `[tool.pyright] include` - not `eval/`.
 Widen it deliberately if you want eval type-checked, but do not assume CI is checking it.
 
+CI action pins, bumped 2026-10-10: `actions/checkout@v7` and `astral-sh/setup-uv@v10.3.0` (both
+`node24`), runner pinned `ubuntu-24.04` so the Oct 19 Ubuntu-26 migration cannot change the image
+under a green build. Gotcha that cost a 4-second CI failure: setup-uv stops publishing moving major
+tags after `v7`, so `@v10` does not resolve and must be pinned by full version. Confirm an action's
+`using: node24` in its action.yml before trusting a bump.
+
 The same failure has a longer history here, all of it an instrument reporting on something other than
 what was asked:
 
