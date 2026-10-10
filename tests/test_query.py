@@ -553,6 +553,84 @@ async def test_the_no_primary_key_refusal_is_terminal_not_an_enumeration_invitat
 
 
 @pytest.mark.asyncio
+async def test_a_bare_max_on_a_large_relation_is_not_refused(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """A bare `max(col)` is a top-1, not a full scan, so the complete-scan limit does not apply to it.
+
+    The server refused `max(total_obligation)` over a 182M-row relation as a complete scan, and the
+    model's fallback - `order=total_obligation.desc limit=1` - returns the NULLS FIRST, so a
+    null-heavy column yields null instead of the real extreme. Both routes dead-end, which is how
+    "what is the largest award" became unanswerable on exactly the large relations where the question
+    matters. A bare max must fetch `order=col.desc.nullslast limit=1`, one page, and return the value.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-182999999/183000000"})
+        # The GET with the nullslast order is the extreme fetch: one page, the top row.
+        return httpx.Response(200, json=[{"total_obligation": 373109113199.0}])
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings, BdpRepository(small_settings, client), PostgrestTransport(small_settings, client)
+        )
+        result = await service.execute(
+            build_single_query(
+                question="largest total obligation",
+                source="usaspending.all_entities",
+                select=None,
+                where=None,
+                group_by=None,
+                metrics=["max_obligation:max:total_obligation"],
+                having=None,
+                order=None,
+                limit=1,
+                offset=0,
+            )
+        )
+
+    assert result.rows == [{"max_obligation": 373109113199.0}], result.rows
+
+
+@pytest.mark.asyncio
+async def test_a_bare_min_on_a_large_relation_is_not_refused(settings: Any, bdp_documents: dict[str, Any]) -> None:
+    """The `min` companion: `order=col.asc.nullslast limit=1`, and the value must be the smallest."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        if request.method == "HEAD":
+            return httpx.Response(200, headers={"Content-Range": "0-182999999/183000000"})
+        return httpx.Response(200, json=[{"total_obligation": 5.0}])
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings, BdpRepository(small_settings, client), PostgrestTransport(small_settings, client)
+        )
+        result = await service.execute(
+            build_single_query(
+                question="smallest total obligation",
+                source="usaspending.all_entities",
+                select=None,
+                where=None,
+                group_by=None,
+                metrics=["min_obligation:min:total_obligation"],
+                having=None,
+                order=None,
+                limit=1,
+                offset=0,
+            )
+        )
+
+    assert result.rows == [{"min_obligation": 5.0}], result.rows
+
+
+@pytest.mark.asyncio
 async def test_the_scan_refusal_still_advises_narrowing_when_narrowing_works(
     settings: Any, bdp_documents: dict[str, Any]
 ) -> None:

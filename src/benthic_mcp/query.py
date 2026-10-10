@@ -55,6 +55,9 @@ class QueryService:
             counted = await self._server_count(request, catalog, warnings)
             if counted is not None:
                 return counted
+            extreme = await self._server_extreme(request, catalog, warnings)
+            if extreme is not None:
+                return extreme
 
         for source in request.sources:
             try:
@@ -206,6 +209,88 @@ class QueryService:
                     source=f"{definition.dataset}.{definition.name}",
                     manifest_hash=definition.manifest_hash,
                     row_count=count.total,
+                    complete=True,
+                )
+            ],
+            joins=[],
+            warnings=warnings,
+        )
+
+    async def _server_extreme(
+        self,
+        request: QueryRequest,
+        catalog: Catalog,
+        warnings: list[QueryWarning],
+    ) -> QueryResult | None:
+        """Answer a bare `max(col)` or `min(col)` from one ordered row, not a full scan.
+
+        A max or min has exactly one output row however wide the source is, so the complete-scan
+        limit does not apply to it, exactly like the bare count in `_server_count`. It was being
+        refused anyway, and the fallback the model reaches for - `order=col.desc limit=1` - returns
+        the NULLS FIRST, so a null-heavy column yields null instead of the extreme. Both routes
+        dead-end, which is how "what is the largest X" became unanswerable on the large relations
+        where the question matters most. Measured live: `max(total_obligation)` over a 182M-row
+        relation was refused as a complete scan, and `form990_details.total_assets` returned null
+        on `order=...desc limit=1`.
+
+        PostgREST answers it in one page: `order=col.desc.nullslast limit=1` reads the top row via
+        the index, and `.nullslast` skips the nulls. Deliberately narrow, like the count: a
+        group_by, a second aggregate, a join, a `having`, or an explicit order all fall through to
+        the scan, because there the output shape depends on the data. None means "not this shape"
+        or "the extreme did not come back" - never a number.
+        """
+        if request.joins or request.group_by or len(request.sources) != 1 or len(request.aggregates) != 1:
+            return None
+        only = request.aggregates[0]
+        if only.function not in (AggregateFunction.MAX, AggregateFunction.MIN) or only.column is None:
+            return None
+        if request.having or request.order:
+            return None
+
+        source = request.sources[0]
+        column = only.column.split(".", 1)[-1]
+        try:
+            definition = catalog.resolve_relation(source.dataset, source.relation)
+            catalog.validate_columns(definition, [column, *(item.column for item in source.filters)])
+        except (QueryValidationError, UpstreamError):
+            return None
+
+        descending = only.function == AggregateFunction.MAX
+        extreme_source = source.model_copy(
+            update={
+                "select": [column],
+                "order": [SourceOrder(column=column, descending=descending, nulls_first=False)],
+                "limit": 1,
+                "offset": 0,
+            }
+        )
+        try:
+            fetched = await self.transport.fetch(extreme_source, definition)
+        except (QueryValidationError, UpstreamError):
+            return None
+        if not fetched.rows:
+            return None
+        value = fetched.rows[0].get(column)
+        if value is None:
+            # Every value in the column is null, so there is no extreme to report.
+            return None
+
+        return QueryResult(
+            columns=[only.alias],
+            rows=[{only.alias: value}],
+            row_count=1,
+            # The extreme is exact by construction: one ordered page, not a scan that ran out of
+            # budget, so it can be reported complete and untruncated.
+            source_complete=True,
+            truncated=False,
+            next_offset=None,
+            sources=[
+                SourceMetadata(
+                    alias=source.alias,
+                    source=f"{definition.dataset}.{definition.name}",
+                    manifest_hash=definition.manifest_hash,
+                    row_count=1,
+                    matched_rows=fetched.matched_rows,
                     complete=True,
                 )
             ],
