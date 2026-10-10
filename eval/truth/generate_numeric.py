@@ -111,10 +111,15 @@ async def count_rows(client: httpx.AsyncClient, endpoint: str, filters: dict[str
 async def ordered_max(client: httpx.AsyncClient, endpoint: str, column: str, where: dict[str, str]) -> float | None:
     """The largest value, via SQL's own ORDER BY.
 
-    Deliberately not `limit=1` on a guess: PostgREST applies `order` before `limit`, and the whole
-    point is that the ordering happens where every row is visible.
+    `.desc.nullslast`, not `.desc`. Postgres sorts NULLS FIRST on a descending sort by default, so
+    `order=f990_total_assets_recent.desc limit 1` returns `null` on a column where most rows are null and
+    the generator reads "no answer" and emits no case. That column holds a real maximum of
+    117,961,275,629, which only appears with the nulls-last ordering.
+
+    The defect never produced a wrong number, which is what made it quiet: it dropped cases, and a
+    dropped case leaves nothing behind in a suite that reports only what it generated.
     """
-    params: dict[str, str] = {"select": column, "order": f"{column}.desc", "limit": "1"}
+    params: dict[str, str] = {"select": column, "order": f"{column}.desc.nullslast", "limit": "1"}
     params.update({key: f"eq.{value}" for key, value in where.items()})
     response = await client.get(endpoint, params=params)
     if response.status_code >= 400:

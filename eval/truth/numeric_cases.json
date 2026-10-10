@@ -1,7 +1,7 @@
 {
   "metadata": {
     "generated": "2026-10-09",
-    "cases": 5
+    "cases": 10
   },
   "cases": [
     {
@@ -22,7 +22,7 @@
         "benthic_query"
       ],
       "derived_from": "HEAD bmf_organizations?ein=eq.100000023 with Prefer: count=exact",
-      "derived_at": "2026-10-09T12:45:48"
+      "derived_at": "2026-10-09T21:53:00"
     },
     {
       "id": "count_usaspending_prime_awards_fiscal_year_1900",
@@ -42,7 +42,27 @@
         "benthic_query"
       ],
       "derived_from": "HEAD prime_awards?fiscal_year=eq.1900 with Prefer: count=exact",
-      "derived_at": "2026-10-09T12:45:48"
+      "derived_at": "2026-10-09T21:53:00"
+    },
+    {
+      "id": "count_usaspending_all_entities_entity_type_prime",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in usaspending.all_entities have entity_type exactly prime? Give the number.",
+      "expected": {
+        "relation": "usaspending.all_entities",
+        "kind": "filtered_count",
+        "column": "entity_type",
+        "value": 17735437,
+        "sample": "prime",
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD all_entities?entity_type=eq.prime with Prefer: count=exact",
+      "derived_at": "2026-10-09T21:53:00"
     },
     {
       "id": "max_usaspending_prime_awards_total_obligation_fiscal_year",
@@ -64,7 +84,7 @@
         "benthic_query"
       ],
       "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
-      "derived_at": "2026-10-09T12:45:48"
+      "derived_at": "2026-10-09T21:53:00"
     },
     {
       "id": "max_usaspending_prime_awards_total_obligation_all",
@@ -84,7 +104,87 @@
         "benthic_query"
       ],
       "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
-      "derived_at": "2026-10-09T12:45:48"
+      "derived_at": "2026-10-09T21:53:00"
+    },
+    {
+      "id": "max_usaspending_all_entities_award_count_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest award_count in usaspending.all_entities over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "usaspending.all_entities",
+        "kind": "ordered_max",
+        "column": "award_count",
+        "value": 54858.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET all_entities?select=award_count&order=award_count.desc&limit=1",
+      "derived_at": "2026-10-09T21:53:00"
+    },
+    {
+      "id": "max_irs_ng_bmf_organizations_f990_total_assets_recent_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest f990_total_assets_recent in irs_ng.bmf_organizations over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "irs_ng.bmf_organizations",
+        "kind": "ordered_max",
+        "column": "f990_total_assets_recent",
+        "value": 117961275629.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET bmf_organizations?select=f990_total_assets_recent&order=f990_total_assets_recent.desc&limit=1",
+      "derived_at": "2026-10-09T21:53:00"
+    },
+    {
+      "id": "max_irs_ng_census_demographics_total_population_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest total_population in irs_ng.census_demographics over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "irs_ng.census_demographics",
+        "kind": "ordered_max",
+        "column": "total_population",
+        "value": 10105722.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET census_demographics?select=total_population&order=total_population.desc&limit=1",
+      "derived_at": "2026-10-09T21:53:00"
+    },
+    {
+      "id": "max_usaspending_state_data_population_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest population in usaspending.state_data over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "usaspending.state_data",
+        "kind": "ordered_max",
+        "column": "population",
+        "value": 39536653.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET state_data?select=population&order=population.desc&limit=1",
+      "derived_at": "2026-10-09T21:53:00"
     },
     {
       "id": "group_usaspending_reporting_agency_overview_toptier_code",
@@ -110,7 +210,7 @@
         "benthic_query"
       ],
       "derived_from": "GET reporting_agency_overview?select=reporting_agency_overview_id,toptier_code,total_dollars_obligated_gtas, paged by offset until 10545 distinct reporting_agency_overview_id values were read, summed in the generator as Decimal",
-      "derived_at": "2026-10-09T12:45:48"
+      "derived_at": "2026-10-09T21:53:00"
     }
   ]
 }
