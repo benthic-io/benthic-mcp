@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# The four gates, run by git rather than by memory.
+#
+# This exists because two commits tonight reached the remote with a broken gate: one with an
+# IndentationError, one with a failing ruff. Both times the gates were run *after* committing. The
+# gates were not the problem; the ordering was. This closes that.
+#
+# Measured cost: 11 + 11 + 7154 + 6566 ms, so about fourteen seconds. If that is too slow, the answer
+# is to make pytest faster, not to stop running it.
+#
+# Install once per checkout, since .git/hooks is not version controlled:
+#
+#     ln -s ../../scripts/pre-commit .git/hooks/pre-commit
+#
+# The thunkah clone at ~/benthic-mcp-checkout should do the same.
+#
+# `git commit --no-verify` still works. That is deliberate: a hook that cannot be bypassed gets
+# bypassed by deleting the file, and then it protects nothing.
+
+set -uo pipefail
+
+cd "$(dirname "$0")/.." || exit 1
+
+PY=.venv/bin/python
+RUFF=.venv/bin/ruff
+
+if [[ ! -x $PY ]]; then
+    echo "pre-commit: no .venv, refusing to guess at an interpreter." >&2
+    exit 1
+fi
+
+fail=0
+
+run() {
+    local label="$1"
+    shift
+    local start end ms
+    start=$(date +%s%N)
+    if "$@" >/tmp/pre-commit.$$ 2>&1; then
+        end=$(date +%s%N)
+        ms=$(( (end - start) / 1000000 ))
+        printf '  %-16s pass  %5dms\n' "$label" "$ms"
+    else
+        end=$(date +%s%N)
+        ms=$(( (end - start) / 1000000 ))
+        printf '  %-16s FAIL  %5dms\n' "$label" "$ms"
+        tail -25 /tmp/pre-commit.$$
+        rm -f /tmp/pre-commit.$$
+        fail=1
+    fi
+}
+
+echo "pre-commit: $(git rev-parse --short HEAD 2>/dev/null || echo 'no HEAD')"
+run "ruff check" "$RUFF" check .
+run "ruff format" "$RUFF" format --check .
+run "pyright" "$PY" -m pyright
+run "pytest" "$PY" -m pytest -m "not live" -q
+
+if [[ $fail -ne 0 ]]; then
+    echo
+    echo "pre-commit: refusing to commit. Fix the gate, or bypass with --no-verify and own it." >&2
+    exit 1
+fi
+
+echo "pre-commit: all gates green"
+exit 0
