@@ -1312,3 +1312,49 @@ mention was over. **Only a rejection placed before the mention counted**, while 
 function claims both directions work. A comment describing intent the code does not implement is worse
 than the defect - it stops the next reader from checking. The boundary is now a period followed by
 whitespace or end of text, never a bare period.
+
+## Fixing the instrument: what was wrong with it, not with the model
+
+Nine defects on 2026-10-09, and they were not nine unrelated mistakes. **Six were one defect**: a check
+read the wording it expected rather than the wording models produce. Each was found by reading a failure
+that happened to surface, so the question nothing had asked - *does a verdict survive a correct answer
+being worded differently* - is now the suite that guards the instrument.
+
+| plan item | what landed | what it caught |
+|---|---|---|
+| pre-commit hook (`scripts/pre-commit`) | four gates in git, 14s | three broken commits blocked, including two before the hook existed |
+| `manifest_floor_coverage` check | the floor reports half-arming | the runner dropped 1,488 column names for three runs |
+| `eval/truth/paraphrase.py` + 8 contracts | five meaning-preserving transforms over 113 stored answers | nothing yet, **and it has proved it can see its subject** |
+| numeric coverage contract | `rows_read == rows_total` asserted on disk | the committed partial aggregate |
+
+### The paraphrase suite, and the trap in building it
+
+`tests/test_paraphrase_invariance.py` runs five rewritings over every stored transcript and requires no
+verdict to change: whitespace normalisation, backticking identifiers, appending an inert sentence,
+rewriting a number with separators and currency, writing an asserted column in prose.
+
+**The first run reported 62 verdict changes and every one was a defect in my transforms.** The identifier
+regex matched `all_entities` independently of `usaspending.`, so backticking produced
+`` usaspending.`all_entities` `` - text no model writes. `prose_columns` rewrote relations and trap
+names, which are things a case requires to be named. `group_numbers` rewrote a numeric UEI, which is
+digit-shaped but an identifier. All three were fixed by constraining the transforms, not by relaxing the
+grader, because tuning a transform until the suite passes is the same failure mode as loosening a check.
+
+**Two things make it honest rather than decorative.** A corpus chosen by its author has holes: with two
+of the nine runs the dot-boundary defect was undetectable, so the suite went green with a blind spot and
+looked covered. The corpus is every stored run now. And part 2 puts each of three defects back - the
+digit-only count, the any-period sentence boundary, the runner dropping `column_names` - and requires
+each to break an answer that currently passes. **A green part 1 means nothing if part 2 does not fire.**
+
+The corpus is 113 answers, 104 passing and 9 failing on `reports:right_count`, `truncated` and
+`rpc_arguments_match`, so it is not a mirror of a green suite. It costs 3s.
+
+### The check that was wrong before it was written
+
+The plan said to derive every numeric case twice by different pagination routes and require agreement.
+Measured, that would not have caught the defect it was for: the original `grouped_max` bug read the first
+200 rows in `toptier_code` order, and a second route reads the same first page and reaches the same wrong
+answer. Reinstating the bug reproduces it exactly - 200 rows, winner 012, total 14,669,028,370,453.98 -
+and both routes return it. What catches a truncated derivation is `rows_read` disagreeing with
+`rows_total`, and nothing asserted that on disk, which is how a partial sum sat in the suite looking like
+ground truth. It is asserted now, with a non-vacuity test against a mutated copy of the real file.
