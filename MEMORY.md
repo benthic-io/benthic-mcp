@@ -1483,3 +1483,12 @@ failure, malformed JSON, or wrong-shaped result is the upstream's (now says "ret
 persists, the endpoint is unavailable / returning malformed data"). Eight contracts in
 `tests/test_transport_next_steps.py`, all failed against the old text first. This closes the last
 clearly user-facing dead-end from the audit, alongside the query-validation refusals fixed earlier.
+
+## Numeric expansion is blocked on a cross-check I cannot run here (2026-10-10)
+
+The ten numeric cases on six relations were psql-cross-checked; `psql` is not on PATH in this session,
+so a new case's derived value cannot be verified against the database independently of the generator.
+Generating more cases without that check would bake in float drift or a PostgREST-query bug the way the
+generator's own docstring warns about ("Range matters"). The generator itself is hardened - coverage
+proof (`rows_read == rows_total`), `ordered_max` uses `.desc.nullslast` - so it can run anywhere psql
+exists; the cross-check is the gate, not the generation.
