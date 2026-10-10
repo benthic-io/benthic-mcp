@@ -1448,3 +1448,22 @@ column fields (`description`, `srid`, `unit`) while keeping `native_type`. But i
 payload and only ~0.3% of session tokens, because data rows dominate. Deferred: not worth a GPU A/B
 accuracy run for 0.3%, and shipping a schema change without one repeats b5344f5. Revisit next time a
 full measurement is running anyway.
+
+## The decline fix, verified (2026-10-10)
+
+Three runs of the unanswerable aggregate, back to back, after making the no-primary-key refusal terminal:
+
+```
+70.3s  finish=stop  turns=3  reasoning=1,678 chars
+45.9s  finish=stop  turns=3  reasoning=2,248 chars
+44.5s  finish=stop  turns=3  reasoning=1,497 chars
+```
+
+Against the before-picture: one run ground for 333s and 31,062 chars of reasoning (42 x "111 queries",
+31 x "reconsider") before truncation, and another declined only in reasoning while leaving its final
+content empty. The model now echoes the new refusal verbatim - "no sequence of queries reaches a
+cross-row total here", "report that the aggregate cannot be answered rather than enumerating" - and stops
+in three turns.
+
+So the fix was not a wording tweak; it removed the instruction the model was obeying into the grind. The
+verification cost about two and a half minutes of GPU, not the fifteen a full rep would have.
