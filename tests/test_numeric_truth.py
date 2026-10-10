@@ -688,3 +688,52 @@ def numeric_cases() -> list[dict[str, Any]]:
     if not path.is_file():
         pytest.skip("no numeric cases generated yet")
     return grade.load_cases(str(path))
+
+
+# --------------------------------------------------------------------------------------------
+# An ordered maximum must not read a null as the answer.
+
+
+def test_ordered_max_asks_for_nulls_last() -> None:
+    """Postgres puts NULLS FIRST on a descending sort by default.
+
+    So `order=f990_total_assets_recent.desc limit 1` returns `null`, and the generator records "no
+    answer" and emits no case. The column holds a real maximum - 117,961,275,629 - which only appears
+    with `.desc.nullslast`. The defect does not produce a wrong number, which is what makes it quiet:
+    it drops cases, and a dropped case leaves no trace in a suite that reports only what it generated.
+    """
+    import generate_numeric as gn  # type: ignore[import-not-found]
+    import httpx
+
+    captured: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(dict(request.url.params))
+        return httpx.Response(200, json=[{"amt": 42}])
+
+    async def go() -> Any:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await gn.ordered_max(client, "http://x/rel", "amt", {})
+
+    import asyncio
+
+    value = asyncio.run(go())
+    assert value == 42
+    assert captured["order"] == "amt.desc.nullslast", captured
+
+
+def test_ordered_max_still_refuses_to_answer_with_a_null() -> None:
+    """`.nullslast` is not a licence to read a null as zero."""
+    import asyncio
+
+    import generate_numeric as gn  # type: ignore[import-not-found]
+    import httpx
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=[{"amt": None}])
+
+    async def go() -> Any:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await gn.ordered_max(client, "http://x/rel", "amt", {})
+
+    assert asyncio.run(go()) is None
