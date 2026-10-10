@@ -502,6 +502,57 @@ async def test_the_scan_refusal_does_not_promise_narrowing_that_cannot_work(
 
 
 @pytest.mark.asyncio
+async def test_the_no_primary_key_refusal_is_terminal_not_an_enumeration_invitation(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """A refusal that says "narrow to a single period" invites the caller to enumerate and then sum.
+
+    `reporting_agency_overview` holds one row per agency per fiscal year and period, and has no primary
+    key. Its aggregate is refused past one page, and narrowing below the scan cap does not escape that.
+    The current refusal ends by telling the caller to narrow "until the result fits in one page, which
+    here means naming a single period" - which is exactly the per-period enumeration that then cannot be
+    summed into one total. Measured live: the model followed it into 5 turns and 31,062 chars of
+    reasoning, listing 111 codes it could not combine, until the token budget cut it off.
+
+    The refusal must be terminal: state that no sequence of queries reaches a cross-row total here, and
+    that the answer is to decline, not to narrow.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = bdp_documents.get(str(request.url))
+        if document is not None:
+            return httpx.Response(200, json=document)
+        return httpx.Response(200, headers={"Content-Range": "0-10544/10545"})
+
+    small_settings = replace(settings, max_rows=1000, aggregate_scan_limit=10_000)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = QueryService(
+            small_settings, BdpRepository(small_settings, client), PostgrestTransport(small_settings, client)
+        )
+        with pytest.raises(QueryValidationError) as caught:
+            await service.execute(
+                build_single_query(
+                    question="total obligation by agency across all periods",
+                    source="usaspending.reporting_agency_overview",
+                    select=None,
+                    where=None,
+                    group_by=["toptier_code"],
+                    metrics=["total=sum:total_dollars_obligated_gtas"],
+                    having=None,
+                    order=None,
+                    limit=10,
+                    offset=0,
+                )
+            )
+    message = str(caught.value)
+    assert "narrow until the result fits in one page" not in message, message
+    assert "naming a single period" not in message, message
+    assert "cannot be answered" in message, (
+        f"the refusal must say the aggregate is unreachable and to decline, not to narrow: {message}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_the_scan_refusal_still_advises_narrowing_when_narrowing_works(
     settings: Any, bdp_documents: dict[str, Any]
 ) -> None:

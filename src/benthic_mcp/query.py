@@ -324,8 +324,10 @@ def _scan_exit(definition: RelationDefinition, scan_limit: int) -> str:
         return (
             f"{definition.dataset}.{definition.name} declares no primary key, so its rows cannot be "
             "paged deterministically and an aggregate over them is refused however far you narrow. "
-            "Getting under the scan limit will not help: narrow until the result fits in one page, "
-            "which here means naming a single period rather than a whole year."
+            "Getting under the scan limit will not help, and no sequence of queries reaches a "
+            "cross-row total here: a per-period or per-value total is a different question and must "
+            "not be summed into one. Report that the aggregate cannot be answered rather than "
+            "enumerating."
         )
     return (
         f"Narrow the filters until each source matches at most {scan_limit} rows, or raise "
