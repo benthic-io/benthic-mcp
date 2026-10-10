@@ -14,11 +14,15 @@ permissions:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # Pinned rather than `ubuntu-latest` so the 2026-10-19 migration to Ubuntu 26 does not change the
+    # image out from under a green build, and bumped off the Node 20 runtime the runner deprecates.
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: astral-sh/setup-uv@v5
+      # setup-uv publishes moving major tags only through v7 and full versions after, so the latest
+      # node24 runtime is pinned by full version rather than by a v10 tag that does not resolve.
+      - uses: astral-sh/setup-uv@v10.3.0
         with:
           enable-cache: true
 
