@@ -1570,3 +1570,26 @@ were not exhaustive. Three more ordered_max, cross-checked against psql:
 The sweep is the cheap definitive way to know when the corpus is complete: list every money-ish index,
 derive each one, cross-check. The only money index still uncovered is `financial_accounts_by_awards`
 (null-heavy ASC index, the `.desc.nullslast` timeout edge recorded earlier).
+
+## First numeric-suite run caught a real defect: "largest X" is unanswerable on large relations (2026-10-10)
+
+21 cases, 16/21 (80%), worst failing check `number_is_correct`. The 5 failures are all `ordered_max` on
+relations over the complete-scan limit, and there are two server-side root causes, neither a model error:
+
+1. The model asks the natural way - `metrics: ["m:max:col"]` - and the server refuses it ("N rows match,
+   more than the complete-scan limit ... Aggregating or joining needs every source scanned in full").
+   A max does not need a full scan; it is a top-1. But the server only has a pushdown path for bare
+   `count` (`_server_count`), and `max`/`min` fall through to the full scan.
+2. When the model falls back to `order: ["col:desc"] limit=1` (the route that is meant to work), the
+   server formats it `col.desc` with no `nullslast`, so Postgres returns the NULLS FIRST - `null` on any
+   column that has nulls (form990_details.total_assets). The model then answers "partial view, no
+   answer", correctly, but the real max is only reachable with `.desc.nullslast`.
+
+So "what is the largest award / largest nonprofit / largest entity" is unanswerable through the server on
+the exact large relations where the question is most interesting. The small relations (state_data 448,
+ref_population 441/3290) pass because a full scan of them fits under the limit, which is why this only
+showed up once the corpus gained the large-relation maxima.
+
+Fix: an `_server_extreme` pushdown alongside `_server_count` - for a bare `max:col`/`min:col` with no
+group_by/join/order, fetch `order=col.desc.nullslast limit=1` (or `.asc.nullslast`), one page, no scan.
+Requires the order formatter to emit `.nullslast`.
