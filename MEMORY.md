@@ -1411,3 +1411,40 @@ It loaded `questions.json` and nothing else, while every numeric case lives in `
 invariance.** A corpus missing the material most at risk is worse than a small one, because it reports
 green. It loads both suites now: 131 answers, 121 passing, 10 failing, zero verdict changes across five
 transforms. It costs 20s.
+
+## Three parallel audits (2026-10-10), and what they changed
+
+Three read-only subagents characterised the three open properties. Each produced one change.
+
+### Decline vs grind (reliability) - the trigger is the refusal's own last sentence
+
+The model sometimes declines an unanswerable aggregate cleanly and sometimes grinds until the token
+budget cuts it off, on the *same* question. The fork is a single decision point right after the refusal,
+and the refusal's own text launches the grind: `_scan_exit` ended the no-primary-key case with "narrow
+until the result fits in one page, which here means naming a single period rather than a whole year" -
+a suggested course of action that cannot work, contradicting the "Getting under the scan limit will not
+help" clause two words earlier. Measured: the model followed it into 5 turns and 31,062 chars of
+reasoning, listing 111 codes it could not combine.
+
+Fixed: the refusal is terminal now - "no sequence of queries reaches a cross-row total here ... Report
+that the aggregate cannot be answered rather than enumerating." The existing contract that was meant to
+guard this checked only the *other* narrowing phrase ("narrow the filters until each source matches"),
+not the one that actually fired - the same too-narrow-contract failure as every grader defect.
+
+### Refusal dead-ends (intuitive) - three fixed, transport cluster left
+
+An audit of ~50 refusal strings found a cluster that name a failure and no exit. Fixed: "not in the
+signed BDP manifest" and "not queryable" now point at `benthic_discover`; "aggregate requires numeric
+values" now offers count-or-numeric-column. Left for a later batch (needs mock-transport infra): the
+transport errors - response-too-big, invalid JSON, unexpected result - the worst of which is
+response-too-big because it is user-fixable but never says so.
+
+### Discover payload (efficient) - driver is null fields, but the win is tiny
+
+The payload is 5,555 tokens default, and 62% is `relations[].columns[]`. The b5344f5 revert removed
+`native_type` (a real field) bundled with two null fields and lost accuracy, and could not isolate which
+caused it. The smallest safe reduction is `exclude_none` at serialization - omit the three always-null
+column fields (`description`, `srid`, `unit`) while keeping `native_type`. But it is ~15% of the discover
+payload and only ~0.3% of session tokens, because data rows dominate. Deferred: not worth a GPU A/B
+accuracy run for 0.3%, and shipping a schema change without one repeats b5344f5. Revisit next time a
+full measurement is running anyway.
