@@ -1473,3 +1473,13 @@ in three turns.
 
 So the fix was not a wording tweak; it removed the instruction the model was obeying into the grind. The
 verification cost about two and a half minutes of GPU, not the fifteen a full rep would have.
+
+## Transport errors now name their exit (2026-10-10)
+
+The transport layer (`postgrest.py`, `rpc.py`) raised eight errors that named a failure and nothing
+else. The split is the point: a response over the byte limit is the caller's to fix (now says "narrow
+the select, add filters, or reduce the limit" / "narrow the request parameters"), while a connection
+failure, malformed JSON, or wrong-shaped result is the upstream's (now says "retry once; if it
+persists, the endpoint is unavailable / returning malformed data"). Eight contracts in
+`tests/test_transport_next_steps.py`, all failed against the old text first. This closes the last
+clearly user-facing dead-end from the audit, alongside the query-validation refusals fixed earlier.
