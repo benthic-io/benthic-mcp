@@ -1276,3 +1276,39 @@ not measurements, which is why they are quoted here with the date rather than tr
 that its rule is to keep the declared name unless the observed scans say otherwise. Raising a naming
 complaint against a file edited today by its owner would be reporting their unfinished work as a
 defect.
+
+## relation_trap is measurable now, and the first measurement was not the model
+
+Two blockers, both mine, both removed, both found by reading the transcript.
+
+**The question asked for an enumeration.** The case asked the model to list officeholders with term
+boundaries in order to find out whether it avoids a present-day view. The listing is a large answer and
+it is what blew the budget: reasoning grew 335 -> 1,838 -> 29,672 chars. The question now asks the
+capability question the check actually tests - which relation, and why the present-day view is not
+adequate - and no longer names `legislator_terms` either, because handing the model the answer meant
+`used_expected_relation` was testing whether it could copy a name. **2 cases went from 854s to 81s.**
+
+**The rejection window closed one sentence before the reason.** With the question fixed, the first
+real measurement had 0_1 passing and 0_0 failing `did_not_answer_from_trap`, both giving the same
+correct answer. The window ended at the mention's own sentence boundary, and a model explaining why a
+view is wrong states the property in one sentence and the consequence in the next:
+
+```
+"usp_cl.mv_current_lawmakers is a materialized view that returns only the currently sitting
+ member(s). it has no historical timeline, so it cannot tell you who held the seat in 2021"
+```
+
+0_1 passed because its rejection happened to land inside the mention's own sentence. The window now
+reaches one sentence past the mention, and a contract keeps the launder case failing, so the widening
+cannot become a pass-everything window.
+
+**relation_trap 2/2 on the first measurement in this project.**
+
+### The trap check's other defect, in the same function
+
+`_trap_is_rejected` detected sentence boundaries with `find(".")`, and the trap is `dataset.relation`,
+so the period inside `usp_cl.mv_current_lawmakers` was found first and the window closed before the
+mention was over. **Only a rejection placed before the mention counted**, while the comment above that
+function claims both directions work. A comment describing intent the code does not implement is worse
+than the defect - it stops the next reader from checking. The boundary is now a period followed by
+whitespace or end of text, never a bare period.
