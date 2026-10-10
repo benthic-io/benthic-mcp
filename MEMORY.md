@@ -1609,3 +1609,11 @@ before), mv_entity_spending_summary.total_obligation 41,639,753,294,000.05, mv_n
 This is the first measurement-fix-remeasurement cycle closed end to end: the corpus caught a defect no
 unit test could see (the defect only exists on relations over the scan limit), the defect was characterised
 from the stored transcripts, fixed behind a failing contract, and verified against the live model.
+
+## Numeric suite: 16/21 -> 21/21 (100%), and 4x faster (2026-10-10)
+
+The full 21-case re-run after the extreme fix passes 21/21 in 480s against the first run's 16/21 in
+1889s. The speedup is the same cause as the correctness: a bare max now returns in one ordered page, so
+the model stops spending turns re-issuing the refused aggregate. The 16 that passed before still pass,
+so the change to the extreme path did not regress the small relations that used to take the full-scan
+route. The numeric capability is now 100% measured across 21 cases on 15 relations.
