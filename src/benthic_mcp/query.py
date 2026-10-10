@@ -151,7 +151,7 @@ class QueryService:
         catalog: Catalog,
         warnings: list[QueryWarning],
     ) -> QueryResult | None:
-        """Answer `count(*)` from the count HEAD, for the one shape that always fits.
+        """Answer `count(*)` and `count(column)` from the count HEAD, for the two shapes that always fit.
 
         A bare count has exactly one output row however wide the source is, so the complete-scan
         limit does not apply to it. It was being refused anyway: `count(*)` on
@@ -165,27 +165,39 @@ class QueryService:
         count HEAD this path already sends carries the exact total in Content-Range. Verified
         live: 1,416,153 for the district filter in 1.23s against a 17,884,243-row table.
 
-        Deliberately narrow. A group_by, a second aggregate, a `count(column)`, a join, or an order
-        on anything other than the alias all fall through to the scan, because there the output
-        size depends on the data rather than on the source width and the count cannot answer it.
-        None means "not this shape" or "the count did not come back" - never a number.
+        A `count(column)` stays on this path too. It is one HEAD with `column=not.is.null` added,
+        which is exactly the non-null count the scan would compute. The refusal used to name that
+        same filter and tell the caller to re-issue; applying it is the answer, not a narrowing.
+
+        Deliberately narrow. A group_by, a second aggregate, a join, or an order on anything other
+        than the alias all fall through to the scan, because there the output size depends on the
+        data rather than on the source width and the count cannot answer it. None means "not this
+        shape" or "the count did not come back" - never a number.
         """
         if request.joins or request.group_by or len(request.sources) != 1 or len(request.aggregates) != 1:
             return None
         only = request.aggregates[0]
-        if only.function != AggregateFunction.COUNT or only.column is not None:
+        if only.function != AggregateFunction.COUNT:
             return None
         if request.having or any(item.column != only.alias for item in request.order):
             return None
 
         source = request.sources[0]
+        count_source = source
+        extra_columns: list[str] = []
+        if only.column is not None:
+            column = only.column.split(".", 1)[-1]
+            extra_columns = [column]
+            count_source = source.model_copy(
+                update={"filters": [*source.filters, FilterSpec(column=column, operator=FilterOperator.NOT_IS_NULL)]}
+            )
         try:
             definition = catalog.resolve_relation(source.dataset, source.relation)
             catalog.validate_columns(
                 definition,
-                [*(item.column for item in source.filters), *(item.column for item in source.order)],
+                [*(item.column for item in source.filters), *(item.column for item in source.order), *extra_columns],
             )
-            count = await self.transport.count_matching(source, definition)
+            count = await self.transport.count_matching(count_source, definition)
         except (QueryValidationError, UpstreamError):
             return None
         if count is None:
