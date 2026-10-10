@@ -611,16 +611,35 @@ def _trap_is_rejected(text: str, trap: str) -> bool:
     # A rejection before the mention and a rejection after it count, since "not X, because ..." and
     # "... which is current-only" both reject X.
     for position in positions:
-        end_of_sentence_before = max(lowered.rfind(".", 0, position), lowered.rfind("\n", 0, position))
-        start = end_of_sentence_before + 1 if end_of_sentence_before >= 0 else max(0, position - 200)
-        boundary_after = min(
-            (index for index in (lowered.find(".", position), lowered.find("\n", position)) if index >= 0),
-            default=len(lowered),
-        )
-        end = min(boundary_after, position + len(needle) + 200)
+        # A sentence boundary is a period followed by whitespace or end of text, never a bare period.
+        # The trap is `dataset.relation`, so `find(".")` finds the period inside the identifier and the
+        # window closes before the mention is over - a rejection placed after the name was then never
+        # inside it, and the model was graded as relying on the thing it had just explained it could
+        # not use. `usp_cl.mv_current_lawmakers` must count as one token, not a sentence break.
+        boundary = max(_last_sentence_break(lowered, position, 0), lowered.rfind("\n", 0, position))
+        start = boundary + 1 if boundary >= 0 else max(0, position - 200)
+        after = _next_sentence_break(lowered, position)
+        end = min(after, position + len(needle) + 200)
         if not any(marker in lowered[start:end] for marker in _REJECTION_MARKERS):
             return False
     return True
+
+
+_SENTENCE_END = re.compile(r"[.!?](?:\s|$)")
+
+
+def _last_sentence_break(text: str, position: int, default: int) -> int:
+    """The last sentence boundary strictly before `position`, or `default`."""
+    best = default
+    for match in _SENTENCE_END.finditer(text, 0, position):
+        best = max(best, match.end() - 1)
+    return best
+
+
+def _next_sentence_break(text: str, position: int) -> int:
+    """The first sentence boundary at or after `position`, or the end of the text."""
+    match = _SENTENCE_END.search(text, position)
+    return match.end() - 1 if match else len(text)
 
 
 def check_sequential(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:

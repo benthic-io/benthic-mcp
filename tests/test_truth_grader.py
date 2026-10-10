@@ -826,3 +826,110 @@ def test_the_floor_still_rejects_an_invented_relation_through_the_runner() -> No
     results = run_suite.grade_runs([recorded], [suite_case], {"a.b", "c.d"}, {"state", "uei"})
     floor = [c for r in results for c in r.checks if c.name == "unmanifested_relation"]
     assert floor and not floor[0].ok, floor
+
+
+# --------------------------------------------------------------------------------------------
+# A case must ask for what its check tests, or the measurement is unattainable.
+
+
+def test_a_relation_trap_case_asks_about_the_trap_and_not_for_a_large_enumeration() -> None:
+    """The case asked for a chronological list of officeholders with term boundaries.
+
+    That is a large answer, and it is what broke the measurement: the truncated turn's reasoning grew
+    335 -> 1,838 -> 29,672 chars while the model worked through what it was not looking at. Meanwhile
+    the case's own check tests exactly one thing - that the model names `legislator_terms` and rejects
+    `mv_current_lawmakers`. The enumeration is incidental to that, and it is what made the capability
+    unmeasurable in four parameterisations.
+
+    A question that cannot be answered inside the model's practical budget does not measure the
+    capability. This asserts the question asks the capability question and leaves the row-listing to
+    cases that measure listing.
+    """
+    path = ROOT / "eval" / "generated" / "questions.json"
+    if not path.is_file():
+        pytest.skip("the generated suite is absent")
+    for case in grade.load_cases(str(path)):
+        if case.get("capability") != "relation_trap":
+            continue
+        question = str(case.get("question") or "").lower()
+        # The question must not hand the model the relation, or `used_expected_relation` is testing
+        # whether it can copy a name rather than whether it can find the historical record.
+        assert "legislator_terms" not in question, f"{case['id']} gives away the expected relation"
+        # The trap must be named, or a model cannot be told what to avoid.
+        assert "view" in question or "present-day" in question, case["id"]
+        # No instruction to enumerate a set of rows, which is what outruns the budget.
+        for phrase in ("in chronological order", "list the officeholders", "who held the office"):
+            assert phrase not in question, f"{case['id']} asks for an enumeration: {phrase!r}"
+
+
+def test_the_relation_trap_check_still_tests_rejection_rather_than_selection() -> None:
+    """So shortening the question did not also weaken the check it feeds."""
+    trap_case = {
+        "id": "t",
+        "capability": "relation_trap",
+        "question": "q",
+        "expected": {"relation": "usp_cl.legislator_terms", "trap": "usp_cl.mv_current_lawmakers"},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_query"],
+    }
+    relies = grade.grade_case(trap_case, {"answer": "I used usp_cl.mv_current_lawmakers for this."})
+    assert not relies.passed, [c.name for c in relies.checks]
+    # The rejection lands after the mention, which is the phrasing the window used to miss.
+    rejects = grade.grade_case(
+        trap_case,
+        {
+            "answer": (
+                "usp_cl.legislator_terms is the source. usp_cl.mv_current_lawmakers holds only "
+                "present-day rows, so it cannot answer a question about the 117th Congress."
+            )
+        },
+    )
+    assert [c.name for c in rejects.checks if not c.ok] == [], [c.name for c in rejects.checks if not c.ok]
+
+
+# --------------------------------------------------------------------------------------------
+# A rejection after the mention is the more natural phrasing, and it must count.
+
+
+TRAP = "usp_cl.mv_current_lawmakers"
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "not usp_cl.mv_current_lawmakers, because it is current-only",  # rejection first
+        "usp_cl.mv_current_lawmakers is current-only and would be wrong",  # rejection after
+        "Read from legislator_terms. usp_cl.mv_current_lawmakers holds only present-day rows, so it cannot answer this",
+        "The present-day view usp_cl.mv_current_lawmakers does not answer a historical question",
+        "I used usp_cl.mv_current_lawmakers earlier but it is current-only, so legislator_terms is the right source",
+    ],
+)
+def test_a_rejection_counts_wherever_the_model_puts_it(answer: str) -> None:
+    """`_trap_is_rejected` detected sentence boundaries with `find(".")`, and the trap name is
+    `dataset.relation`, so the period inside the identifier ended the window inside the trap's own
+    name. A rejection placed after the mention was never in the window, and the model was graded as
+    relying on the thing it had just explained it could not use.
+
+    The comment above that function claims both directions count. The code did not implement it, which
+    is worse than the defect - it stops the next reader from checking.
+    """
+    assert grade._trap_is_rejected(answer, TRAP), answer
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        "I used usp_cl.mv_current_lawmakers for the 117th Congress.",
+        "usp_cl.mv_current_lawmakers is the fastest source for this.",
+    ],
+)
+def test_a_genuine_reliance_still_fails(answer: str) -> None:
+    """So the window widening did not simply accept everything."""
+    assert not grade._trap_is_rejected(answer, TRAP), answer
+
+
+def test_a_rejection_does_not_launder_a_later_reliance() -> None:
+    assert not grade._trap_is_rejected(
+        "I avoided mv_current_lawmakers because it is current-only. Reading from usp_cl.mv_current_lawmakers gives the answer",
+        TRAP,
+    )
