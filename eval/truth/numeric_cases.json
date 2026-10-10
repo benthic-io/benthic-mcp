@@ -1,7 +1,7 @@
 {
   "metadata": {
     "generated": "2026-10-10",
-    "cases": 18
+    "cases": 21
   },
   "cases": [
     {
@@ -371,6 +371,66 @@
       ],
       "derived_from": "GET mv_nonprofit_profile?select=recent_revenue&order=recent_revenue.desc&limit=1",
       "derived_at": "2026-10-10T08:40:41"
+    },
+    {
+      "id": "max_irs_ng_mv_org_financial_health_avg_revenue_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest avg_revenue in irs_ng.mv_org_financial_health over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "irs_ng.mv_org_financial_health",
+        "kind": "ordered_max",
+        "column": "avg_revenue",
+        "value": 65089099914.85714,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET mv_org_financial_health?select=avg_revenue&order=avg_revenue.desc&limit=1",
+      "derived_at": "2026-10-10T08:49:35"
+    },
+    {
+      "id": "max_usaspending_ref_population_cong_district_latest_population_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest latest_population in usaspending.ref_population_cong_district over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "usaspending.ref_population_cong_district",
+        "kind": "ordered_max",
+        "column": "latest_population",
+        "value": 3263584.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET ref_population_cong_district?select=latest_population&order=latest_population.desc&limit=1",
+      "derived_at": "2026-10-10T08:49:35"
+    },
+    {
+      "id": "max_usaspending_ref_population_county_latest_population_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest latest_population in usaspending.ref_population_county over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "usaspending.ref_population_county",
+        "kind": "ordered_max",
+        "column": "latest_population",
+        "value": 39538223.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET ref_population_county?select=latest_population&order=latest_population.desc&limit=1",
+      "derived_at": "2026-10-10T08:49:35"
     }
   ]
 }

@@ -1556,3 +1556,17 @@ has an ASC index on a null-heavy column. Postgres stores nulls at the high end o
 without `nullslast` returns the nulls first. Either way no case. The generator's `.desc.nullslast` is
 correct for the common case (DESC index or few nulls); this is the edge it cannot cover, and the column is
 not worth a generator change for.
+
+## Numeric truth at 21 cases - the sweep found three more (2026-10-10)
+
+A full index sweep across all five databases (grep money-ish index names) confirmed the 12 relations
+were not exhaustive. Three more ordered_max, cross-checked against psql:
+
+- `mv_org_financial_health.avg_revenue` = 65,089,099,914.86 (index `idx_mfh_revenue` DESC; psql agrees
+  to float precision)
+- `ref_population_cong_district.latest_population` = 3,263,584 (441 rows, sorts without an index)
+- `ref_population_county.latest_population` = 39,538,223 (3,290 rows, same)
+
+The sweep is the cheap definitive way to know when the corpus is complete: list every money-ish index,
+derive each one, cross-check. The only money index still uncovered is `financial_accounts_by_awards`
+(null-heavy ASC index, the `.desc.nullslast` timeout edge recorded earlier).
