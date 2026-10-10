@@ -1,7 +1,7 @@
 {
   "metadata": {
     "generated": "2026-10-10",
-    "cases": 15
+    "cases": 18
   },
   "cases": [
     {
@@ -311,6 +311,66 @@
       ],
       "derived_from": "HEAD subawards?subaward_report_year=eq.2010 with Prefer: count=exact",
       "derived_at": "2026-10-10T08:15:30"
+    },
+    {
+      "id": "max_usaspending_mv_entity_spending_summary_total_obligation_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest total_obligation in usaspending.mv_entity_spending_summary over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "usaspending.mv_entity_spending_summary",
+        "kind": "ordered_max",
+        "column": "total_obligation",
+        "value": 41639753294000.05,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET mv_entity_spending_summary?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_at": "2026-10-10T08:40:41"
+    },
+    {
+      "id": "max_irs_ng_form990_soi_total_revenue_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest total_revenue in irs_ng.form990_soi over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "irs_ng.form990_soi",
+        "kind": "ordered_max",
+        "column": "total_revenue",
+        "value": 75101306911.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET form990_soi?select=total_revenue&order=total_revenue.desc&limit=1",
+      "derived_at": "2026-10-10T08:40:41"
+    },
+    {
+      "id": "max_irs_ng_mv_nonprofit_profile_recent_revenue_all",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest recent_revenue in irs_ng.mv_nonprofit_profile over the whole relation? Give the figure.",
+      "expected": {
+        "relation": "irs_ng.mv_nonprofit_profile",
+        "kind": "ordered_max",
+        "column": "recent_revenue",
+        "value": 75101306911.0,
+        "where": {},
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET mv_nonprofit_profile?select=recent_revenue&order=recent_revenue.desc&limit=1",
+      "derived_at": "2026-10-10T08:40:41"
     }
   ]
 }
