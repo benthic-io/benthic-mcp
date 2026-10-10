@@ -16,6 +16,8 @@ from typing import Any
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "eval" / "truth"))
+sys.path.insert(0, str(ROOT / "src"))
 # The check lives in grade.py with every other check, because grade.py owns the case shape and the
 # `Check` type. numeric.py held it first and needed a dict-to-Check adapter that existed only because
 # of the wrong module; a second loader duplicated grade.load_cases, and NumericCase was never called.
@@ -598,3 +600,91 @@ def test_every_numeric_case_derives_its_value_and_says_how() -> None:
         assert case_.get("capability") == "numeric_aggregate"
         assert case_.get("derived_from"), f"{case_['id']} does not record where its value came from"
         assert case_.get("derived_at"), f"{case_['id']} does not record when it was derived"
+
+
+# --------------------------------------------------------------------------------------------
+# Ground truth must prove its own coverage on disk.
+
+
+def test_every_grouped_case_covered_the_whole_relation() -> None:
+    """The `grouped_max` defect summed 200 of 10,545 rows and named the wrong winner - 012 where
+    the database says 075.
+
+    It passed its own tests because those tests only checked that it produced *a* number. Nothing asked
+    whether the number was the number, and nothing asked whether the file that came out of the generator
+    said how much of the relation it had read. Reintroducing the defect here reproduces it exactly:
+    200 rows, winner 012, total 14,669,028,370,453.98.
+
+    I first wrote this as a second derivation by a different pagination route, and then measured whether
+    that would have caught it. It would not: a second route reads the same first page and reaches the same
+    wrong answer. What catches a truncated derivation is `rows_read` disagreeing with `rows_total`, so
+    that is what is asserted, against the committed file rather than against the generator.
+    """
+    from decimal import Decimal
+
+    for case in numeric_cases():
+        expected = case.get("expected") or {}
+        if expected.get("kind") != "grouped_max":
+            continue
+        read, total = expected.get("rows_read"), expected.get("rows_total")
+        assert read is not None and total is not None, f"{case['id']} records no coverage"
+        assert read == total, (
+            f"{case['id']} covered {read} of {total} rows. A partial aggregate presented as ground "
+            "truth is the defect this file exists to prevent, and it produced a wrong winner"
+        )
+        # the exact decimal is the audit trail beside the float that is graded
+        assert Decimal(str(expected["value"])) == Decimal(str(expected.get("value_exact", expected["value"]))), case[
+            "id"
+        ]
+
+
+def test_every_numeric_case_records_where_its_value_came_from_and_when() -> None:
+    for case in numeric_cases():
+        assert case.get("derived_from"), f"{case['id']} does not record its derivation"
+        assert case.get("derived_at"), f"{case['id']} does not record when it was derived"
+
+
+def test_a_committed_partial_aggregate_is_refused() -> None:
+    """Non-vacuity: the contract above must fail on the file the original bug would have written.
+
+    Tested against a copy rather than by trusting the checking code to be correct, which is the same
+    standard the rest of this file is held to.
+    """
+    import json
+    import tempfile
+
+    path = ROOT / "eval" / "truth" / "numeric_cases.json"
+    document = json.loads(path.read_text())
+    for case in document["cases"]:
+        if case["expected"].get("kind") == "grouped_max":
+            case["expected"]["rows_read"] = 200
+            break
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as handle:
+        json.dump(document, handle)
+        handle.flush()
+        with pytest.raises(AssertionError, match="covered 200 of"):
+            grade_cases_from(handle.name)
+
+
+def grade_cases_from(path: str) -> None:
+    from decimal import Decimal
+
+    for case in grade.load_cases(path):
+        expected = case.get("expected") or {}
+        if expected.get("kind") != "grouped_max":
+            continue
+        read, total = expected.get("rows_read"), expected.get("rows_total")
+        assert read == total, (
+            f"{case['id']} covered {read} of {total} rows. A partial aggregate presented as ground "
+            "truth is the defect this file exists to prevent, and it produced a wrong winner"
+        )
+        assert Decimal(str(expected["value"])) == Decimal(str(expected.get("value_exact", expected["value"]))), case[
+            "id"
+        ]
+
+
+def numeric_cases() -> list[dict[str, Any]]:
+    path = ROOT / "eval" / "truth" / "numeric_cases.json"
+    if not path.is_file():
+        pytest.skip("no numeric cases generated yet")
+    return grade.load_cases(str(path))
