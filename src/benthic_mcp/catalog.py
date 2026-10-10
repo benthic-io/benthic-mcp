@@ -427,11 +427,19 @@ class Catalog:
     def resolve_relation(self, dataset: str, relation: str) -> RelationDefinition:
         definition = self.relations.get((dataset, relation))
         if definition is None:
-            raise QueryValidationError(f"Relation {dataset}.{relation} is not in the signed BDP manifest")
+            raise QueryValidationError(
+                f"Relation {dataset}.{relation} is not in the signed BDP manifest; "
+                "call benthic_discover to see the signed relations"
+            )
         if not definition.queryable:
-            raise QueryValidationError(f"Relation {dataset}.{relation} is not queryable")
+            raise QueryValidationError(
+                f"Relation {dataset}.{relation} is not queryable; call benthic_discover to find a relation that is"
+            )
         if definition.endpoint is None:
-            raise QueryValidationError(f"Relation {dataset}.{relation} has no anonymous PostgREST endpoint")
+            raise QueryValidationError(
+                f"Relation {dataset}.{relation} has no anonymous PostgREST endpoint; "
+                "call benthic_discover to find a relation with an endpoint"
+            )
         return definition
 
     def column_candidates(self, definition: RelationDefinition, column: str) -> list[str]:
