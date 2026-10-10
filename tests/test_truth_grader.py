@@ -309,7 +309,7 @@ def test_prose_that_merely_hesitates_is_not_a_refusal() -> None:
     ],
 )
 def test_a_relation_outside_the_signed_manifest_fails(answer: str) -> None:
-    result = grade.grade_case(case(), run(answer), {"usaspending.prime_awards"})
+    result = grade.grade_case(case(), run(answer), {"usaspending.prime_awards"}, COLUMNS)
     assert not result.passed
     assert grade.UNMANIFESTED in failing(result)
 
@@ -397,6 +397,7 @@ def test_a_relation_outside_the_manifest_is_still_caught_alongside_syntax() -> N
         case(),
         run('Filter uei=in.["A"] then read usaspending.fabricated_table.'),
         {"usp_cl.legislator_terms"},
+        COLUMNS,
     )
     assert grade.UNMANIFESTED in failing(result)
     found = next(c.found for c in result.failures() if c.name == grade.UNMANIFESTED)
@@ -966,3 +967,55 @@ def test_widening_by_one_sentence_still_catches_a_launder() -> None:
         "usp_cl.mv_current_lawmakers gives the answer for the 117th Congress anyway.",
         TRAP,
     )
+
+
+# --------------------------------------------------------------------------------------------
+# The anti-hallucination floor must say when it is only half armed.
+
+
+# What the runner passes: 1,488 real manifest column names. A floor test that passes
+# relations only cannot tell a column alias from an invented relation, which is how the
+# half-arming defect survived three runs.
+COLUMNS = {"prime_awards", "total_obligation", "uei", "state", "congressional_district"}
+
+
+def _floor_case(**expected: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {"relation": "a.b", "row_count": 0}
+    base.update(expected)
+    return {"id": "f", "capability": "find_district_rpc", "question": "q", "expected": base, "forbidden_claims": []}
+
+
+def test_a_half_armed_floor_reports_itself_rather_than_failing_a_column_alias() -> None:
+    """`signed_relations` without `column_names` silently disabled the alias check.
+
+    The runner did exactly that for three runs, so `left.state` and `right.uei` were graded as invented
+    relations and `multi_step_join 0/2` was an artefact. The asymmetry is the defect: `None` means
+    "not supplied", and the floor then cannot tell a column alias from an invented relation, and says
+    nothing about it.
+
+    Every instrument reports its own coverage. The floor now does.
+    """
+    relations = {"a.b", "c.d"}
+    run = {"answer": "left.state is MD"}
+    half = grade.grade_case(_floor_case(), run, relations)
+    coverage = [c for c in half.checks if c.name == "manifest_floor_coverage"]
+    assert coverage, [c.name for c in half.checks]
+    assert not coverage[0].ok, "a half-armed floor must not report itself as armed"
+    assert "column alias" in coverage[0].detail, coverage[0].detail
+
+
+def test_a_fully_armed_floor_reports_itself_as_armed() -> None:
+    from_check = grade.grade_case(_floor_case(), {"answer": "zero rows"}, {"a.b", "c.d"}, {"state", "uei"})
+    coverage = [c for c in from_check.checks if c.name == "manifest_floor_coverage"]
+    assert coverage, [c.name for c in from_check.checks]
+    assert coverage[0].ok
+    assert coverage[0].found == "relations and columns"
+
+
+def test_an_unarmed_floor_stays_silent() -> None:
+    """Passing neither is the documented behaviour, not a new failure mode.
+
+    Callers that grade by hand with no manifest at all should not acquire a failing check for it.
+    """
+    checks = grade.grade_case(_floor_case(), {"answer": "zero rows"}).checks
+    assert [c.name for c in checks if c.name == "manifest_floor_coverage"] == []
