@@ -1492,3 +1492,28 @@ Generating more cases without that check would bake in float drift or a PostgRES
 generator's own docstring warns about ("Range matters"). The generator itself is hardened - coverage
 proof (`rows_read == rows_total`), `ordered_max` uses `.desc.nullslast` - so it can run anywhere psql
 exists; the cross-check is the gate, not the generation.
+
+## Numeric truth at 15 cases, cross-checked against psql (2026-10-10)
+
+`psql` is reachable from this session after all: `ssh -i ~/.ssh/id_ed25519_thunkah thunkah`, then `psql -d
+usaspending_db` (or `irs_ng`) directly as `otherdrums`, no sudo. The earlier "psql unavailable" note was
+wrong about the machine - it is not installed locally, but thunkah has it and the SSH key is present.
+
+Five new cases, every value cross-checked against psql before committing:
+
+- `max_usaspending_subawards_subaward_amount_all` = 39,157,943,915,794.00 (psql agrees)
+- `max_usaspending_mv_district_spending_total_obligation_all` = 655,767,190,258.18 (agrees)
+- `max_irs_ng_form990_details_total_assets_all` = 31,477,405,206.00 (agrees)
+- `count_usaspending_mv_district_spending_fiscal_year_1900` = 187 rows (min year 1900, agrees)
+- `count_usaspending_subawards_subaward_report_year_2010` = 1,888 rows (agrees)
+
+Two findings worth keeping:
+
+- **`entity_awards.total_obligation` has no usable index.** `max(total_obligation)` and `order by
+  total_obligation desc limit 1` both cancel on `statement_timeout`. The generator skips it ("no answer"),
+  and the server would time out the same way if a user asked for the largest entity award. This is the
+  thunkah index session's domain, not a generator defect.
+- **`grouped_max` cannot handle a composite primary key.** It tracks coverage by `primary_key[0]` only, so
+  `mv_district_spending` (`(state, district, fiscal_year)`) reads 50 distinct `state` values against its
+  real row count and refuses to emit a case. A "which state received the most" case is blocked on teaching
+  the generator to key on the full tuple - a real gap, left for a later pass.
