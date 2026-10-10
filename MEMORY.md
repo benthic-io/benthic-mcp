@@ -1593,3 +1593,19 @@ showed up once the corpus gained the large-relation maxima.
 Fix: an `_server_extreme` pushdown alongside `_server_count` - for a bare `max:col`/`min:col` with no
 group_by/join/order, fetch `order=col.desc.nullslast limit=1` (or `.asc.nullslast`), one page, no scan.
 Requires the order formatter to emit `.nullslast`.
+
+## Fixed: bare max/min is a top-1, not a full scan (63792ed)
+
+The fix is `_server_extreme` alongside `_server_count`: for a bare `max:col`/`min:col` with no
+group_by/join/having/order, fetch `order=col.desc.nullslast limit=1` (or `.asc.nullslast`) through the
+existing order formatter and return the value complete and untruncated. The `nulls_first=False` ->
+`.nullslast` support was already in `_format_order`; only the extreme pushdown path was missing.
+
+Verified live: the 5 failing cases re-run 5/5 in 145s, and every one now states the correct maximum -
+subawards.subaward_amount 39,157,943,915,794, form990_details.total_assets 31,477,405,206 (was null
+before), mv_entity_spending_summary.total_obligation 41,639,753,294,000.05, mv_nonprofit_profile
+75,101,306,911, mv_org_financial_health.avg_revenue 65,089,099,914.86.
+
+This is the first measurement-fix-remeasurement cycle closed end to end: the corpus caught a defect no
+unit test could see (the defect only exists on relations over the scan limit), the defect was characterised
+from the stored transcripts, fixed behind a failing contract, and verified against the live model.
