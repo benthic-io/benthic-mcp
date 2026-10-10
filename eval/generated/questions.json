@@ -501,7 +501,7 @@
       },
       "forbidden_claims": [],
       "id": "relation_trap_0_0_usp_cl_legislator_terms",
-      "question": "Who held the office recorded in usp_cl.legislator_terms as of a past date, and what were the term boundaries? Answer from the historical record and state the term window you used. Do not answer from a view that only holds present-day rows. Focus on the 117th Congress (2021-2022) session.",
+      "question": "You need who held a seat in the 117th Congress (2021-2022) as of a past date. Name the relation you would read and say why the present-day-only view is not adequate for that question.",
       "required_tools": [
         "benthic_query"
       ]
@@ -514,7 +514,7 @@
       },
       "forbidden_claims": [],
       "id": "relation_trap_0_1_usp_cl_legislator_terms",
-      "question": "List the officeholders in usp_cl.legislator_terms in chronological order with their term boundaries. The present-day view is not a substitute for the historical record. Focus on the 117th Congress (2021-2022) session.",
+      "question": "You need the historical record of who held a seat in the 117th Congress (2021-2022), not who holds it now. Name the relation you would read and state why the present-day view is not a substitute. You do not need to list the rows.",
       "required_tools": [
         "benthic_query"
       ]
