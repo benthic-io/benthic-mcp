@@ -104,17 +104,27 @@ class RpcService:
                     content.extend(chunk)
                     if len(content) > self.settings.max_response_bytes:
                         raise UpstreamError(
-                            f"Benthic RPC {request.operation} exceeded {self.settings.max_response_bytes} bytes"
+                            f"Benthic RPC {request.operation} exceeded {self.settings.max_response_bytes} bytes. "
+                            f"Narrow the request parameters."
                         )
         except httpx.HTTPError as exc:
-            raise UpstreamError(f"Benthic RPC {request.operation} failed: {exc}") from exc
+            raise UpstreamError(
+                f"Benthic RPC {request.operation} failed: {exc}. Retry once; if it persists, the endpoint "
+                f"is unavailable."
+            ) from exc
 
         try:
             rows = json.loads(content)
         except json.JSONDecodeError as exc:
-            raise UpstreamError(f"Benthic RPC {request.operation} returned invalid JSON") from exc
+            raise UpstreamError(
+                f"Benthic RPC {request.operation} returned invalid JSON. Retry once; if it persists, "
+                f"the endpoint is returning malformed data."
+            ) from exc
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-            raise UpstreamError(f"Benthic RPC {request.operation} returned an unexpected result")
+            raise UpstreamError(
+                f"Benthic RPC {request.operation} returned an unexpected result. Retry once; if it persists, "
+                f"the endpoint's response shape has changed."
+            )
 
         return RpcResult(
             rows=rows[: self.settings.max_rows],

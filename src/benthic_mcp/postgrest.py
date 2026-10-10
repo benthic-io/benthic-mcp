@@ -187,21 +187,27 @@ class PostgrestTransport:
                     if len(content) > self.settings.max_response_bytes:
                         raise UpstreamError(
                             f"Benthic API response exceeded {self.settings.max_response_bytes} bytes for "
-                            f"{definition.dataset}.{definition.name}"
+                            f"{definition.dataset}.{definition.name}. Narrow the select, add filters, or "
+                            f"reduce the limit."
                         )
         except httpx.HTTPError as exc:
             raise UpstreamError(
-                f"Benthic API request failed for {definition.dataset}.{definition.name}: {exc}"
+                f"Benthic API request failed for {definition.dataset}.{definition.name}: {exc}. Retry once; "
+                f"if it persists, the endpoint is unavailable."
             ) from exc
 
         try:
             rows = json.loads(content)
         except json.JSONDecodeError as exc:
             raise UpstreamError(
-                f"Benthic API returned invalid JSON for {definition.dataset}.{definition.name}"
+                f"Benthic API returned invalid JSON for {definition.dataset}.{definition.name}. Retry once; "
+                f"if it persists, the endpoint is returning malformed data."
             ) from exc
         if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-            raise UpstreamError(f"Benthic API returned an unexpected result for {definition.dataset}.{definition.name}")
+            raise UpstreamError(
+                f"Benthic API returned an unexpected result for {definition.dataset}.{definition.name}. "
+                f"Retry once; if it persists, the endpoint's response shape has changed."
+            )
 
         truncated = len(rows) > limit
         return FetchedSource(
