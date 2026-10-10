@@ -1617,3 +1617,42 @@ The full 21-case re-run after the extreme fix passes 21/21 in 480s against the f
 the model stops spending turns re-issuing the refused aggregate. The 16 that passed before still pass,
 so the change to the extreme path did not regress the small relations that used to take the full-scan
 route. The numeric capability is now 100% measured across 21 cases on 15 relations.
+
+## 2026-10-10 evening: count(column) pushdown, and exclude_none measured at 56.6% of the payload
+
+### count(column) now answers from the not-null HEAD (188f741)
+
+`count(col)` had the same gap shape as the old max/min: one output row, but only bare `count(*)` had a
+pushdown, so `count(col)` fell through to the full scan and was refused on large relations while the
+refusal message told the caller to add `col=not.is.null` and re-issue. `_server_count` now accepts a
+column and sends the same HEAD with `col=not.is.null` added - exactly the non-null count the scan
+computes. A failed filtered HEAD still falls through to the scan, so the refusal messages remain the
+fallback they describe. Four existing tests updated to model the filtered HEAD without weakening
+their invariants; the refusal-message tests now fail the filtered HEAD so they exercise the fallback.
+
+### exclude_none: the deferral estimate was wrong by two orders of magnitude
+
+Measured over 47 stored truth-suite sessions: the discover payload is 63.7% of session characters,
+and 56.6% of the payload BYTES are null spellings (column description/unit/srid) - about 1,758
+tokens per discover call, roughly a third of a query-light session. The earlier 0.3% number came
+from data-heavy tuning runs where data rows dominate the prompt; it said nothing about query-light
+sessions, which are exactly what the truth suites measure. Promoted behind a contract: a wrap
+serializer on DiscoverResult strips nulls at every depth and keeps every value (073e7e5). The wire
+probe through the live MCP endpoint shows zero nulls. The accuracy A/B: numeric 21/21 holds; the
+main 30/30 is the open check. If the main suite holds, this is a third of a query-light session
+removed for free; if not, revert and record - the earlier wholesale field removal (non-null
+native_type/srid/unit) dropped tuning 23/25 -> 18/25, so the risk is real but the nulls-only change
+carries no information loss.
+
+### Audit items closed, not changed
+
+- seed.py reporting_agency_overview guide: the "narrow first" anti-pattern is about question
+  ambiguity (one row per agency per period), not about beating the refusal; the description already
+  carries the terminal framing. Consistent as-is.
+- Marginal dead-ends closed: "value does not match column type" names the type, "at most 128
+  columns" names the cap, "group_by column not present" names the gap - each leaves an obvious next
+  step and the paths are rare. Leave as-is, audit closed.
+- README/docs: the API-surface statement (no server-side grouped aggregates) is still accurate; the
+  measured-numbers section is framed as historical tuning data. Nothing stale.
+- Re-grading stored runs is a no-op while the grader is current; fresh baselines: main 30/30 in
+  1509s, numeric 21/21 in 480s.
