@@ -53,16 +53,29 @@ run_suite = _load("run_suite", ROOT / "eval" / "truth" / "run_suite.py")
 # the defect had been covered. A corpus chosen by its author is a corpus with holes in it.
 RUNS = sorted(path.name for path in (ROOT / "eval" / "truth" / "runs").glob("run-*.json"))
 
+SUITES = (
+    ROOT / "eval" / "generated" / "questions.json",
+    ROOT / "eval" / "truth" / "numeric_cases.json",
+)
+
 _RELATIONS: set[str] = set()
 _COLUMNS: set[str] = set()
 
 
 def corpus() -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    """(case, recorded run) for every transcript that carries text and is in the graded suite."""
+    """(case, recorded run) for every transcript that carries text and is in a graded suite.
+
+    Both suites, not only the 30-case one. The first version loaded `questions.json` alone, so no numeric
+    answer was ever in the corpus - and number reading is where six of the nine defects were. A corpus
+    missing the answers most at risk is worse than a small one, because it reports green.
+    """
     global _RELATIONS, _COLUMNS
     if not _RELATIONS:
         _RELATIONS, _COLUMNS = asyncio.run(run_suite.manifest_names())
-    cases = {str(c["id"]): c for c in grade.load_cases(str(ROOT / "eval" / "generated" / "questions.json"))}
+    cases: dict[str, dict[str, Any]] = {}
+    for suite in SUITES:
+        if suite.is_file():
+            cases.update({str(c["id"]): c for c in grade.load_cases(str(suite))})
     out = []
     for name in RUNS:
         path = ROOT / "eval" / "truth" / "runs" / name
