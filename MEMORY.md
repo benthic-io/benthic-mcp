@@ -1535,3 +1535,24 @@ Also delivered `~/benthic-io/AGENT-NOTE-2026-10-10-missing-index-entity-awards.m
 no index on `total_obligation`, so `max()` and `order by ... limit 1` run a parallel seq scan and cancel
 on statement_timeout. That is why the generator skipped it, and it is the same timeout a user would hit
 asking for the largest entity award.
+
+## Numeric truth at 18 cases, and the DESC-index subtlety (2026-10-10)
+
+Three more ordered_max on money columns that DO have indexes, each cross-checked against psql:
+
+- `mv_entity_spending_summary.total_obligation` = 41,639,753,294,000.05 (index `idx_mess_obligation`, DESC)
+- `form990_soi.total_revenue` = 75,101,306,911.00 (index `idx_990soi_revenue`)
+- `mv_nonprofit_profile.recent_revenue` = 75,101,306,911.00 (index `idx_mnp_revenue`, DESC; the two IRS
+  maxima agree because recent_revenue is the latest year's total_revenue)
+
+So the earlier "entity_awards has no index" is the exception, not the rule: the high-value money columns
+mostly are indexed, and `ordered_max` derives fast. The full picture for a new target is: no index ->
+`max()`/`order by desc limit 1` cancels on statement_timeout (entity_awards.total_obligation); an index ->
+fast (the three above).
+
+One more subtle drop, on a low-value column: `financial_accounts_by_awards.obligations_incurred_total_by_award_cpe`
+has an ASC index on a null-heavy column. Postgres stores nulls at the high end of an ASC btree, so
+`order=...desc.nullslast` cannot seek the non-null max and falls back to a full sort -> timeout. `desc`
+without `nullslast` returns the nulls first. Either way no case. The generator's `.desc.nullslast` is
+correct for the common case (DESC index or few nulls); this is the edge it cannot cover, and the column is
+not worth a generator change for.
