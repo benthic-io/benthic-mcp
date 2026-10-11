@@ -123,6 +123,16 @@ class QueryService:
         columns = list(request.output_columns) if request.output_columns else _infer_columns(rows, available_columns)
         rows = [{column: row.get(column) for column in columns} for row in rows]
 
+        matched_rows = len(rows)
+        fan_out = _fan_out_warning(rows, request.joins)
+        if fan_out:
+            # A fan-out is one distinct row repeated. The payload carries the representative row and
+            # row_count carries the multiplicity, so the model is not handed a wall of copies - 127
+            # identical rows read as a truncated page and the model declines to report the count it
+            # is holding. One row plus the count is the same information without the misread.
+            rows = [rows[0]]
+            warnings.append(QueryWarning(message=fan_out))
+
         final_limit = min(request.limit or self.settings.default_query_limit, self.settings.max_rows)
         page = rows[request.offset : request.offset + final_limit]
         has_more = request.offset + len(page) < len(rows)
@@ -133,13 +143,10 @@ class QueryService:
         source_complete = all(not item.truncated for item in fetched) and not join_result.truncated
         if truncated:
             warnings.extend(_truncation_warnings(fetched))
-        fan_out = _fan_out_warning(rows, request.joins)
-        if fan_out:
-            warnings.append(QueryWarning(message=fan_out))
         return QueryResult(
             columns=columns,
             rows=page,
-            row_count=len(page),
+            row_count=matched_rows if fan_out else len(page),
             source_complete=source_complete,
             truncated=truncated,
             next_offset=request.offset + len(page) if has_more else None,
@@ -379,7 +386,9 @@ def _fan_out_warning(rows: list[dict[str, Any]], joins: list[JoinSpec]) -> str |
     `usaspending.all_entities` joined to `usp_cl.legislator_terms`: the result said `row_count: 127,
     truncated: false`, every row identical, and the model reasoned the output had been cut off at
     the limit and declined to report the count it was holding - the case passed one run in nine
-    across two days. The result was already complete, so the fix is to say so.
+    across two days. The result was already complete, so the fix is to say so, and the caller sends
+    one representative row rather than the wall of copies, which is what the misread was a response
+    to.
     """
     if not joins or len(rows) < 2:
         return None
@@ -387,8 +396,9 @@ def _fan_out_warning(rows: list[dict[str, Any]], joins: list[JoinSpec]) -> str |
     if any(row != first for row in rows[1:]):
         return None
     return (
-        f"All {len(rows)} returned rows are identical (a fan-out). The result is complete, not "
-        f"truncated, and row_count={len(rows)} is the exact number of matched rows."
+        f"All {len(rows)} returned rows are identical (a fan-out). rows lists the one distinct row, "
+        f"the result is complete, not truncated, and row_count={len(rows)} is the exact number of "
+        f"matched rows."
     )
 
 

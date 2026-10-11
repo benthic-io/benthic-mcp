@@ -118,6 +118,8 @@ async def test_a_join_whose_rows_are_all_identical_names_the_fan_out(
     assert "fan-out" in joined, joined
     assert "not truncated" in joined, joined
     assert "row_count=3" in joined, joined
+    assert result.rows == [{"awards.uei": "A", "sam.uei": "A"}], result.rows
+    assert result.row_count == 3, result.row_count
 
 
 def test_no_filter_example_the_server_advertises_is_one_it_would_refuse() -> None:
