@@ -431,6 +431,120 @@
       ],
       "derived_from": "GET ref_population_county?select=latest_population&order=latest_population.desc&limit=1",
       "derived_at": "2026-10-10T08:49:35"
+    },
+    {
+      "id": "count_nonnull_irs_ng_bmf_organizations_f990_total_assets_recent",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in irs_ng.bmf_organizations have a non-null f990_total_assets_recent? Give the number.",
+      "expected": {
+        "relation": "irs_ng.bmf_organizations",
+        "kind": "count_nonnull",
+        "column": "f990_total_assets_recent",
+        "value": 1726754,
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD bmf_organizations?f990_total_assets_recent=not.is.null with Prefer: count=exact",
+      "derived_at": "2026-10-11T02:03:57"
+    },
+    {
+      "id": "count_nonnull_irs_ng_form990_details_total_assets",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in irs_ng.form990_details have a non-null total_assets? Give the number.",
+      "expected": {
+        "relation": "irs_ng.form990_details",
+        "kind": "count_nonnull",
+        "column": "total_assets",
+        "value": 762478,
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD form990_details?total_assets=not.is.null with Prefer: count=exact",
+      "derived_at": "2026-10-11T02:03:57"
+    },
+    {
+      "id": "count_nonnull_usaspending_all_entities_date_last_award",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in usaspending.all_entities have a non-null date_last_award? Give the number.",
+      "expected": {
+        "relation": "usaspending.all_entities",
+        "kind": "count_nonnull",
+        "column": "date_last_award",
+        "value": 97312,
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD all_entities?date_last_award=not.is.null with Prefer: count=exact",
+      "derived_at": "2026-10-11T02:03:57"
+    },
+    {
+      "id": "count_nonnull_irs_ng_mv_nonprofit_profile_recent_revenue",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in irs_ng.mv_nonprofit_profile have a non-null recent_revenue? Give the number.",
+      "expected": {
+        "relation": "irs_ng.mv_nonprofit_profile",
+        "kind": "count_nonnull",
+        "column": "recent_revenue",
+        "value": 644145,
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD mv_nonprofit_profile?recent_revenue=not.is.null with Prefer: count=exact",
+      "derived_at": "2026-10-11T02:03:57"
+    },
+    {
+      "id": "count_nonnull_usaspending_subawards_subaward_amount",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in usaspending.subawards have a non-null subaward_amount? Give the number.",
+      "expected": {
+        "relation": "usaspending.subawards",
+        "kind": "count_nonnull",
+        "column": "subaward_amount",
+        "value": 9948273,
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD subawards?subaward_amount=not.is.null with Prefer: count=exact",
+      "derived_at": "2026-10-11T02:03:57"
+    },
+    {
+      "id": "count_nonnull_usaspending_mv_entity_spending_summary_total_obligation",
+      "capability": "numeric_aggregate",
+      "question": "How many rows in usaspending.mv_entity_spending_summary have a non-null total_obligation? Give the number.",
+      "expected": {
+        "relation": "usaspending.mv_entity_spending_summary",
+        "kind": "count_nonnull",
+        "column": "total_obligation",
+        "value": 17921175,
+        "relative_tolerance": 0.0,
+        "absolute_tolerance": 0.0
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "HEAD mv_entity_spending_summary?total_obligation=not.is.null with Prefer: count=exact",
+      "derived_at": "2026-10-11T02:03:57"
     }
   ]
 }

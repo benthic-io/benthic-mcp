@@ -4,10 +4,13 @@ Direct PostgREST, never `benthic_query`. A number fetched through the server und
 defect the case exists to catch, which is how a suite becomes a rubber stamp: the expectation would
 describe whatever the server happened to say.
 
-Three kinds, chosen because they catch three different failures:
+Four kinds, chosen because they catch four different failures:
 
 - **filtered_count** - "how many rows have X = v". Catches a filter that silently matches nothing. A
   filter on the wrong column returns 0, and 0 is confident.
+- **count_nonnull** - "how many rows have a non-null X". Catches a `count(col)` that was refused as a
+  full scan on relations over the complete-scan limit; the value comes from the same not-null HEAD
+  the server's pushdown sends.
 - **ordered_max** - "the largest Y in relation Z". Catches the page-local `order=` bug directly: the
   value comes from SQL's ORDER BY, so a server sorting one page in Python cannot reproduce it.
 - **grouped_max** - "which group has the largest total". Catches both the sort and an aggregate that
@@ -101,6 +104,21 @@ def relation_url(definition: RelationDefinition) -> str:
 async def count_rows(client: httpx.AsyncClient, endpoint: str, filters: dict[str, str], column: str) -> int | None:
     params: dict[str, str] = {"select": column, "limit": "1"}
     params.update({key: f"eq.{value}" for key, value in filters.items()})
+    response = await client.head(endpoint, params=params, headers=_COUNT_HEADERS)
+    if response.status_code >= 400:
+        return None
+    match = re.search(r"/(\d+)$", response.headers.get("content-range", ""))
+    return int(match.group(1)) if match else None
+
+
+async def count_nonnull(client: httpx.AsyncClient, endpoint: str, column: str) -> int | None:
+    """How many rows have a non-null value, via the same HEAD the server's count(column) pushdown uses.
+
+    The filter is raw `not.is.null`, not `eq.not.is.null`: the former is what `_server_count` sends
+    when a caller asks for `count(col)`, so the derivation measures the same request shape the model
+    will be served by.
+    """
+    params: dict[str, str] = {"select": column, "limit": "1", column: "not.is.null"}
     response = await client.head(endpoint, params=params, headers=_COUNT_HEADERS)
     if response.status_code >= 400:
         return None
@@ -319,6 +337,36 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
             )
             print(f"  count {dataset}.{relation}.{column} = {total}", flush=True)
 
+        # --- non-null counts. `count(col)` is one HEAD with `col=not.is.null`, not a full scan.
+        for dataset, relation, column in args.nonnull_targets:
+            definition = await definition_for(dataset, relation)
+            if definition is None or definition.endpoint is None:
+                print(f"  skip {dataset}.{relation}: not in the signed manifest", flush=True)
+                continue
+            total = await count_nonnull(client, relation_url(definition), column)
+            if total is None:
+                print(f"  skip {dataset}.{relation}.{column}: no non-null count", flush=True)
+                continue
+            cases.append(
+                {
+                    "id": f"count_nonnull_{dataset}_{relation}_{column}",
+                    "capability": "numeric_aggregate",
+                    "question": (f"How many rows in {dataset}.{relation} have a non-null {column}? Give the number."),
+                    "expected": {
+                        "relation": f"{dataset}.{relation}",
+                        "kind": "count_nonnull",
+                        "column": column,
+                        "value": total,
+                        **whole(total),
+                    },
+                    "forbidden_claims": [],
+                    "required_tools": ["benthic_query"],
+                    "derived_from": f"HEAD {relation}?{column}=not.is.null with Prefer: count=exact",
+                    "derived_at": derived_at,
+                }
+            )
+            print(f"  nonnull {dataset}.{relation}.{column} = {total}", flush=True)
+
         # --- ordered maxima. The case that catches a page-local ORDER BY.
         for dataset, relation, column, where in args.max_targets:
             definition = await definition_for(dataset, relation)
@@ -445,6 +493,12 @@ def main() -> None:
         help="dataset,relation,column - repeated",
     )
     parser.add_argument(
+        "--nonnull-target",
+        action="append",
+        default=[],
+        help="dataset,relation,column - repeated, counts rows with a non-null value",
+    )
+    parser.add_argument(
         "--max-target",
         action="append",
         default=[],
@@ -458,6 +512,7 @@ def main() -> None:
     )
     args = parser.parse_args()
     args.count_targets = parse_targets(args.count_target, 3)
+    args.nonnull_targets = parse_targets(args.nonnull_target, 3)
     args.max_targets = []
     for pair in args.max_target:
         parts = pair.split(",")
