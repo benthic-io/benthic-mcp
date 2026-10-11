@@ -251,3 +251,35 @@ def test_a_context_conditions_column_is_actually_fetched(catalog: Catalog) -> No
 
     assert condition.left_column in by_alias["left"].select
     assert condition.right_column in by_alias["right"].select
+
+
+def test_a_bad_context_condition_names_the_rule_not_just_the_bad_column() -> None:
+    """`state=MD` is not a filter, and the error has to say so in one read.
+
+    Measured on the 30-case suite of 2026-10-11: `join_..._usp_cl_legislator_terms_evidence` ran out
+    of turns because the model spent two of its six guessing this syntax -
+
+        context_conditions=["state=MD"]      -> Unknown columns for usp_cl.legislator_terms: MD
+        context_conditions=["state=eq.MD"]   -> Unknown columns for usp_cl.legislator_terms: eq.MD
+        context_conditions=["state=state"]   -> correct
+
+    Both failures are true: `MD` is not a column. Neither says the right-hand side is a *column name*,
+    so the model read it as a complaint about a filter and tried the filter syntax next. The standing
+    rule here is that an error names the gap and leaves an obvious next step; this one named the gap
+    and dropped the step, and it cost two of six turns in a case that then failed on truncation.
+
+    Every column in the signed manifest is lowercase snake case, so a right-hand side that is not
+    identifier-shaped is a value and cannot be a column. That is checkable here, where the mistake is
+    still visible, rather than three layers down in generic column validation where it is not.
+    """
+    from benthic_mcp.query import _parse_context_condition
+
+    good = _parse_context_condition("state=state")
+    assert (good.left_column, good.right_column) == ("state", "state")
+
+    for wrong in ("state=MD", "state=eq.MD", "state=MD.value"):
+        with pytest.raises(QueryValidationError) as excinfo:
+            _parse_context_condition(wrong)
+        message = str(excinfo.value)
+        assert "column" in message.lower(), f"{wrong}: {message}"
+        assert "state=state" in message, f"{wrong}: the message must show the form that works: {message}"

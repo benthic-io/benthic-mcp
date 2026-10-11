@@ -1749,13 +1749,20 @@ def test_a_model_served_with_no_tools_is_not_healthy(tmp_path: Any) -> None:
             "done\n"
             "printf '200'\n"
         )
-        curl.chmod(0o755)
+        # systemctl reports an hour-old start so the staleness signal stays green, and the VRAM
+        # threshold is pinned to 0. Without both, this contract also fails whenever someone edits
+        # src/ - which makes it a test of the box's mood rather than of the tool check.
+        systemctl = stub / "systemctl"
+        systemctl.write_text("#!/usr/bin/env bash\nprintf '2099-01-01T00:00:00Z'\n")
+        for name in ("curl", "systemctl"):
+            (stub / name).chmod(0o755)
         body = tmp_path / f"body{count}.json"
         body.write_text("[" + ",".join(f'{{"name":"t{i}"}}' for i in range(count)) + "]")
         env = {
             **os.environ,
             "PATH": f"{stub}:{os.environ['PATH']}",
             "BENTHIC_HEALTH_LOG_DIR": str(tmp_path / f"log{count}"),
+            "BENTHIC_VRAM_FREE_WARN_MIB": "0",
             "BODY": str(body),
         }
         result = subprocess.run(

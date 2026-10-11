@@ -2064,3 +2064,39 @@ thunkah agent running "benthic.io PostgreSQL performance and ETL audit"
 (`ses_ede9ba3d2ffep0OxCe0cBmTQJR`) has to be tasked by the operator or by a paired host. Its
 sessions are readable over ssh (`ssh -i ~/.ssh/id_ed25519_thunkah thunkah`, same username and home
 path, separate machine-id and separate opencode.db), but reading them is not dispatching to them.
+
+## 2026-10-11: baseline 28/30, and one of the two failures is a real MCP defect
+
+30-case suite, streaming fix in place: **28/30 in 3713s, zero "not measured"** (was 27/30 with two
+unmeasurable). 123.8s/case against a 1509s/30 = 50.3s baseline - the box is shared, so that is
+context, not a regression. The streaming fix did its job: no case timed out any more.
+
+**`join_..._usp_cl_legislator_terms_evidence` - truncated, and the server caused it.** The model spent
+two of its six turns guessing `context_conditions`:
+
+    ["state=MD"]     -> Unknown columns for usp_cl.legislator_terms: MD
+    ["state=eq.MD"]  -> Unknown columns for usp_cl.legislator_terms: eq.MD
+    ["state=state"]  -> correct
+
+Both errors are true - `MD` is not a column - and neither says the right-hand side is a *column name*.
+The model read it as a complaint about a filter and tried the filter syntax next. The standing rule
+here is that an error names the gap and leaves an obvious next step; this one named the gap and
+dropped the step. `_parse_context_condition` now rejects a right-hand side that is not identifier
+shaped (every manifest column is lowercase snake case) and prints the form that works, because that
+is the only layer where the mistake is still visible - generic column validation three layers down
+cannot tell `state=MD` from a genuinely misspelled column.
+
+**`sequential_1_usaspending_irs_ng` - a real hallucination, and the floor is right.** Do not "fix"
+this one. The model wrote in its final answer: "The human-readable agency name lives in a different
+relation (e.g. `usaspending.agency_tier_and_code`)". That relation is not in the 119-relation
+manifest and `agency_tier_and_code` is not one of the 1488 columns. The surrounding answer is
+correct - it established that `usaspending.agency` carries no name column and that there is no signed
+join to `irs_ng.bmf_organizations` - and the invention is an aside. But it is asserted as fact and
+never verified, which is exactly what the floor exists to catch. Checked against the manifest before
+concluding anything either way.
+
+**A contract that tests the real script can fail for the wrong reason.** The health-check contract
+runs the actual shell script, so it inherits every signal the script reads. It started failing the
+moment I edited `src/`, because the service-staleness check - correctly - reported both services
+stale. A contract that fails when someone edits a file is testing the box's mood. Stub `systemctl`
+and pin `BENTHIC_VRAM_FREE_WARN_MIB=0` so it measures the tool signal alone.

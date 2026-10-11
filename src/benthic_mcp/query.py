@@ -721,13 +721,32 @@ def _split_source(source: str, label: str) -> tuple[str, str]:
     return parts[0], parts[1]
 
 
+_CONTEXT_COLUMN_NAME = re.compile(r"[a-z_][a-z0-9_]*")
+
+
 def _parse_context_condition(expression: str) -> JoinCondition:
+    """Parse `left_column=right_column`, refusing a right side that is a value rather than a column.
+
+    Every column in the signed manifest is lowercase snake case, so a right-hand side that is not
+    identifier-shaped cannot name one. Catching that here rather than in column validation three
+    layers down is what lets the message name the rule: measured, a model sent `state=MD` then
+    `state=eq.MD` and both came back as "Unknown columns ...: MD", which reads as a complaint about a
+    filter. It spent two of a six-turn budget guessing before `state=state` worked, and the case
+    failed on truncation.
+    """
     if "=" not in expression:
         raise QueryValidationError(f"Invalid context condition {expression!r}; use left_column=right_column")
     left, right = expression.split("=", 1)
     if not left.strip() or not right.strip():
         raise QueryValidationError(f"Invalid context condition {expression!r}")
-    return JoinCondition(left_column=left.strip(), right_column=right.strip())
+    right = right.strip()
+    if not _CONTEXT_COLUMN_NAME.fullmatch(right):
+        raise QueryValidationError(
+            f"Invalid context condition {expression!r}: {right!r} is not a column name. Both sides name "
+            f"columns to compare, not a value to filter on - for state paired with state use "
+            f"'state=state', not 'state={right}'."
+        )
+    return JoinCondition(left_column=left.strip(), right_column=right)
 
 
 def unqualify_result(result: QueryResult) -> QueryResult:
