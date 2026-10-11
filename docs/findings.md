@@ -457,6 +457,11 @@ defaults to `True`, so `row_count_check: true` on a discovery case read as an as
 made and passed when nothing was checked. 7 of 33 cases assert no server answer; the score dict
 could not previously tell you which.
 
+> Superseded: the legacy scorer was retired in `3c40863`. `eval/truth/grade.py` is now the one grader
+> for both driving paths, and it emits a check per property rather than a dict of booleans, so "was
+> anything checked" is answered by the check list itself. The entry above is kept as the record of the
+> defect.
+
 ### Two quantifier bugs, both found in the stored corpus
 
 `_join_answer_ok` scored with `any` over every join call, so a `right_count: 0` case - written to

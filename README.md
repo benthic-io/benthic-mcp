@@ -19,6 +19,34 @@ Plain-language questions are interpreted by the calling chat model, which turns 
 tool arguments. This service validates and executes those arguments without embedding a model of its
 own, so what an agent is *allowed* to ask is decided by a signed manifest rather than by a prompt.
 
+## What the server will and will not answer
+
+The interesting part of this server is not what it serves but where it stops, and the refusal is
+designed to be terminal rather than a hint the model talks its way past. A question that cannot be
+answered from the signed catalog gets "this cannot be answered" and an instruction to say so - not a
+suggestion to narrow filters that cannot help.
+
+- **A `max` or `min` is a top-1, not a scan.** One indexed page, `order=col.desc.nullslast limit=1`.
+  The complete-scan limit does not apply to it, because it has one output row however wide the source
+  is. `.nullslast` matters: Postgres sorts NULLS FIRST on a descending sort, so without it a
+  null-heavy column answers `null` instead of the extreme.
+- **A bare `count(*)` and a `count(col)` are HEAD counts.** Both have one output row, so neither is
+  refused for size. `count(col)` sends `col=not.is.null` on the same HEAD, which is exactly the
+  non-null count a scan would compute.
+- **An aggregate over a source that cannot be read in full is refused**, and the message names the
+  real count that makes it impossible rather than telling the caller to narrow.
+- **A relation with no primary key cannot be paged deterministically**, so an aggregate over one is
+  refused however far it is narrowed - getting under the scan limit does not help, and no sequence of
+  queries reaches a cross-row total there.
+- **A complete join result of identical rows says so.** One left row matching every right row is a
+  fan-out, and the result carries the representative row plus the exact `row_count`, so a complete
+  result cannot read as a truncated page.
+- **Discovery payload omits nulls.** Absence and `null` say the same thing, and the payload is
+  re-sent to the model on every remaining turn.
+
+Every refusal was written because the alternative - a wrong number that reads as a result - is worse
+than a clean stop.
+
 ## Why the trust model is the point
 
 The catalog is signed. The server pins an Ed25519 authority key, verifies RFC 8785 canonical JSON,
@@ -119,10 +147,15 @@ vocabulary, with no model and no network, in `tests/test_contracts_catalog.py`. 
 and each one was: six arrived violated and are now fixed, so the file's `xfail` list is empty. A
 contract that arrives already green is asserting nothing.
 
-**Answer checking.** The scorer reads the result of a call, not just its route, and `score_case`
-returns `asserted` - which checks this capability actually ran. Every check defaults to `True`, so a
-`row_count_check: true` on a discovery case read as an assertion that was made and passed when
-nothing was checked.
+**Answer checking.** The truth grader (`eval/truth/grade.py`) grades every case, from an end-to-end
+`run_eval.py` run through the real MCP server to a direct run, and it reads two families of evidence:
+what the model said, and what the tool trace shows. The result-level and route-level checks -
+`server_right_count`, `rpc_server_row_count`, `historical_relation_queried`, `required_route_used`
+and the rest - are what let a canary go red on a server defect without a model in the loop, because a
+server returning the wrong rows fails a check even when the model faithfully reports what it was
+given. The canary's own contracts run through the same grader, so the model-free gate and the graded
+runs are one instrument. Every check reports what it expected and what it found: "wrong" is not a
+finding.
 
 **A canary that was tested by breaking it.** `eval/canary/questions.json` is six cases: one per
 signed join path, plus the one non-join case that expects rows.
@@ -141,11 +174,11 @@ uv run python eval/run_eval.py --questions eval/canary/questions.json --reps 3
 ```
 
 Report it as green or red, never as a percentage: six cases over four paths is a step function. The
-33-case suite is tier 2, reported alongside it but not gating.
+30-case suite is tier 2, reported alongside it but not gating.
 
 ### What they found
 
-Five real defects, none of which the model-in-the-loop apparatus saw:
+Six real defects, none of which the model-in-the-loop apparatus saw:
 
 - A signed join between a `string` column holding `'03'` and an `integer` column holding `3` compared
   them in Python, matched nothing, and returned 0 rows where 127 exist. 55 of 55 observed calls. The
@@ -159,13 +192,20 @@ Five real defects, none of which the model-in-the-loop apparatus saw:
   declared type PostgREST did not honour, and raised a `TypeError` the tool wrapper does not catch.
 - Two of the suite's cases asked for a chain whose first hop is provably empty, and the scorer
   counted a truthful dead end as a failure. They now ask where the chain terminates, 4/4.
+- "What is the largest award?" was unanswerable on exactly the large relations where it matters. The
+  natural query - a `max` aggregate - was refused as a complete scan, and the fallback
+  `order=col:desc limit=1` returned the NULLS FIRST, so a null-heavy column yielded `null` instead of
+  the maximum. Both routes dead-ended, and the case passed one run in three. A `max` or `min` has one
+  output row however wide the source is, so it is now fetched as `order=col.desc.nullslast limit=1` -
+  one indexed page, no scan.
 
 ### What has been measured
 
-33 generated cases against a 35B MoE coder model, 6-turn budget. Read this as a count of cases
-answered correctly, not as a measurement of anything: the suite's minimum detectable effect is larger
-than the whole remaining failure set, so a difference of one or two cases between rows here is not
-distinguishable from noise.
+33 generated cases against a 35B MoE coder model, 6-turn budget - measured when the suite held 33
+cases; it now holds 30, and the counts below are the record of that run rather than a current figure.
+Read this as a count of cases answered correctly, not as a measurement of anything: the suite's
+minimum detectable effect is larger than the whole remaining failure set, so a difference of one or
+two cases between rows here is not distinguishable from noise.
 
 | configuration | result |
 | --- | --- |
@@ -183,6 +223,21 @@ from the round log, and 6 lessons are measurable for the first time. The loop al
 express a code change, which is the only kind that has ever worked here - five of five kept
 interventions were code, four of four reverted ones were prose. The mechanism that works is
 contracts plus a reviewer.
+
+### Graded truth, and what it caught that nothing else did
+
+The suites above grade against expectations written by whoever ran the tool last, which is how a
+suite becomes a rubber stamp. `eval/truth/` derives its numbers from the database itself - four
+kinds of case, **27 cases over 15 relations**, every value cross-checked with `psql` before it was
+committed. Grading is per capability and reported per capability; there is no aggregate rate, because
+an average over exact RPCs beside heuristic joins is a number nobody can act on.
+
+The first full run of that corpus measured **16/21**, and the five failures were all "what is the
+largest X" on relations over the complete-scan limit. No unit test could have seen it: the defect
+exists only on the large relations, and the corpus had never covered one. After the fix, the same
+corpus passes **27/27**, and a query-light session costs about a third of its prompt tokens less than
+it did, because the discover payload now spells null as absence - 56.6% of its bytes were null
+spellings of `description`, `unit` and `srid`, which carry no information an omitted key does not.
 
 ## Evaluation
 
@@ -326,9 +381,12 @@ installed the server without reading the configuration.
 The fetched `keys.json` is not used as a trust root. Add rotated trusted keys through
 `BENTHIC_TRUSTED_KEYS` only after out-of-band verification.
 
-The API does not expose server-side grouped aggregates. Large calendar-year scans can exceed the
-complete-scan or upstream timeout limit; the service reports that limitation rather than returning
-partial totals. Narrow the date range or use a signed pre-aggregated relation when available.
+The API does not expose server-side grouped aggregates. A group-and-sum over a relation whose rows
+cannot all be fetched is refused, and the refusal names the real count rather than returning partial
+totals: narrowing to a period, or using a signed pre-aggregated relation, are the routes. A `max`,
+`min`, `count` or `count(col)` has one output row however wide the source is, so those are answered
+from a single indexed page and are not subject to the complete-scan limit - see
+[What the server will and will not answer](#what-the-server-will-and-will-not-answer).
 
 If the signed catalog changes after a playbook was generated, the fingerprint no longer matches and the
 server serves the static core plus a staleness notice instead of stale dataset detail, until the
@@ -367,6 +425,9 @@ BENTHIC_CACHE_DIR=eval/harness/cache uv run python eval/harness.py --rounds 6
   open, and the failure modes this project keeps hitting
 - [`docs/findings.md`](docs/findings.md) - what the harness measured, what did not work, and the limits
   of the measurement
+- [`eval/truth/`](eval/truth/) - the derived-truth suites: how a numeric expectation is derived from
+  the database, cross-checked with `psql`, and graded per capability. Read `grade.py`'s module
+  docstring before changing a check; it states what the grader will and will not claim
 - [`eval/combination/RESULTS.md`](eval/combination/RESULTS.md) - the 100-case combination suite, its
   failure taxonomy, and the corrections made to earlier readings of it
 - [`docs/opencode-automation.md`](docs/opencode-automation.md) - driving an OpenCode agent from a shell
