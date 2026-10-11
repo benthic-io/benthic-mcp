@@ -1724,3 +1724,11 @@ The corpus gained a fourth derivation kind, count_nonnull (a960714): "how many r
 X", via the raw not.is.null HEAD the count(column) pushdown sends. Six cases, all on relations over
 or near the scan limit, every value psql-cross-checked on thunkah before committing. 27 cases total;
 the numeric-suite run measures them now.
+
+## 2026-10-11 close: corpus 27/27, every loop closed
+
+The expanded numeric corpus measures 27/27 in 679s - the six count-non-null cases all answer with the
+exact psql-verified numbers (1,726,754 / 762,478 / 97,312 / 644,145 / 9,948,273 / 17,921,175), so
+the count(column) pushdown is live-measured, not just unit-tested. The fan-out collapse made the
+one-in-three join case pass 3/3, and the evidence case 3/3, so the main suite's marginal case is
+gone rather than documented. Numeric capability: 27 cases / 15 relations / 4 kinds, 100% measured.
