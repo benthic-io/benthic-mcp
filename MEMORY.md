@@ -1656,3 +1656,41 @@ carries no information loss.
   measured-numbers section is framed as historical tuning data. Nothing stale.
 - Re-grading stored runs is a no-op while the grader is current; fresh baselines: main 30/30 in
   1509s, numeric 21/21 in 480s.
+
+## 2026-10-10 late evening: exclude_none promoted, a marginal join case found, answer-rate refreshed
+
+### exclude_none is promoted (9fbedf8 re-applied after an honest A/B)
+
+The accuracy A/B: numeric holds 21/21. The main suite dropped exactly one case -
+identifier_partial_join_match - so it was isolated and re-run. With the change it went fail/pass/fail,
+and the baseline (serializer reverted, three copies) went 0/3: the case is marginal in both
+conditions, and its history is one pass in three over nine stored runs across two days. The failure
+mode on byte-identical join results (row_count: 127, truncated: false, all rows identical): the
+model hallucinates "truncated at 1000 rows limit, row_count not visible" and honestly declines
+rather than reporting the count it is holding. Nothing in the discover payload causes it. The
+null-stripping stays: 56.6% of the payload bytes, about a third of a query-light session, for zero
+measured accuracy cost. The revert/reapply pair in history is the A/B record; do not squash it.
+
+### The marginal case is now fixed in its own right (3dcc72f)
+
+A join whose returned rows are all identical is a fan-out and was already complete, so the server
+now names that: one warning, joins only, when the rows repeat - "All N returned rows are identical
+(a fan-out). The result is complete, not truncated, and row_count=N is the exact number of matched
+rows." Contract-first, and live verification against the one-in-three case follows the commit.
+
+### Answer-rate refreshed (eval/runs/20261011T004456Z)
+
+Coverage 30/30 answered - the historical 87/100 predates every fix; the current suite is answered
+100%. Mean 2.83 tool calls per case, zero repeated_targets. Caveat recorded: run_eval.py's strict
+scoring still disagrees with the truth grader on four cases (relation_trap x2, multi_step_0_1,
+sequential_3) because its join_check/tool_requirement/row_count_check encode the pre-truth-grader
+expectations. The truth grader is the correctness instrument; run_eval's scoring is legacy and a
+candidate for the next cleanup, not a live defect signal.
+
+### Audits closed this evening
+
+- count(column) pushdown landed (188f741); a corpus case for count-non-null is still wanted (needs
+  psql cross-check), the only numeric-shape gap left after the extreme fix.
+- seed.py guide, marginal refusal dead-ends, README/docs: all consistent as-is; recorded, not
+  changed. The grind sweep of the main suite found zero max-turns hits; the slow cases are slow
+  joins (usp_cl.legislator_terms), an upstream matter.
