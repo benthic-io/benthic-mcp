@@ -76,6 +76,50 @@ async def test_executes_signed_multi_dataset_query(settings: Any, bdp_documents:
     assert result.joins[0].reliability == Reliability.RELIABLE
 
 
+@pytest.mark.asyncio
+async def test_a_join_whose_rows_are_all_identical_names_the_fan_out(
+    settings: Any, bdp_documents: dict[str, Any]
+) -> None:
+    """A complete join result made of identical rows reads as truncated to the model.
+
+    Measured on `join_usaspending_all_entities_usp_cl_legislator_terms_match`: the result said
+    `row_count: 127, truncated: false`, all rows identical, and the model reasoned "the output was
+    truncated at 1000 rows limit, the row_count is not visible" and declined to report the count it
+    was holding - a one-in-three pass rate over nine runs across two days. The warning names the
+    fan-out and the completeness, which is the fact the model missed.
+    """
+
+    client = _query_client(
+        bdp_documents,
+        {
+            "/ngopen/usaspending/all_entities": [{"uei": "A"}],
+            "/ngopen/samer/sam_registrations": [{"uei": "A"}, {"uei": "A"}, {"uei": "A"}],
+        },
+    )
+    service = QueryService(
+        settings,
+        BdpRepository(settings, client),
+        PostgrestTransport(settings, client),
+    )
+    request = QueryRequest(
+        question="fan-out",
+        sources=[
+            RelationSource(alias="awards", dataset="usaspending", relation="all_entities", select=["uei"]),
+            RelationSource(alias="sam", dataset="samer", relation="sam_registrations", select=["uei"]),
+        ],
+        joins=[JoinSpec(left_alias="awards", right_alias="sam", left_column="uei", right_column="uei")],
+        allowed_reliability=[Reliability.RELIABLE],
+    )
+
+    result = await service.execute(request)
+    await client.aclose()
+
+    joined = "\n".join(warning.message for warning in result.warnings)
+    assert "fan-out" in joined, joined
+    assert "not truncated" in joined, joined
+    assert "row_count=3" in joined, joined
+
+
 def test_no_filter_example_the_server_advertises_is_one_it_would_refuse() -> None:
     """A message that shows a spelling the server then rejects costs the caller its turns.
 

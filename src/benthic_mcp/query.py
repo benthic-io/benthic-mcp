@@ -133,6 +133,9 @@ class QueryService:
         source_complete = all(not item.truncated for item in fetched) and not join_result.truncated
         if truncated:
             warnings.extend(_truncation_warnings(fetched))
+        fan_out = _fan_out_warning(rows, request.joins)
+        if fan_out:
+            warnings.append(QueryWarning(message=fan_out))
         return QueryResult(
             columns=columns,
             rows=page,
@@ -366,6 +369,27 @@ def _truncation_warnings(fetched: list[FetchedSource]) -> list[QueryWarning]:
             )
         )
     return warnings
+
+
+def _fan_out_warning(rows: list[dict[str, Any]], joins: list[JoinSpec]) -> str | None:
+    """Name a complete join result that is one row repeated, so it does not read as a truncated page.
+
+    A join whose returned rows are all identical is a fan-out: one left-side row matched every
+    right-side row, and the selected columns do not distinguish them. Measured on
+    `usaspending.all_entities` joined to `usp_cl.legislator_terms`: the result said `row_count: 127,
+    truncated: false`, every row identical, and the model reasoned the output had been cut off at
+    the limit and declined to report the count it was holding - the case passed one run in nine
+    across two days. The result was already complete, so the fix is to say so.
+    """
+    if not joins or len(rows) < 2:
+        return None
+    first = rows[0]
+    if any(row != first for row in rows[1:]):
+        return None
+    return (
+        f"All {len(rows)} returned rows are identical (a fan-out). The result is complete, not "
+        f"truncated, and row_count={len(rows)} is the exact number of matched rows."
+    )
 
 
 def _count_is_the_answer(request: QueryRequest, widest: FetchedSource) -> tuple[bool, str | None]:
