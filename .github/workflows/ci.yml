@@ -18,7 +18,11 @@ jobs:
     # image out from under a green build, and bumped off the Node 20 runtime the runner deprecates.
     runs-on: ubuntu-24.04
     steps:
+      # fetch-depth 0 so the attribution guard sees real history. The default shallow clone gives
+      # it one commit, which would make the check pass without having looked at anything.
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       # setup-uv publishes moving major tags only through v7 and full versions after, so the latest
       # node24 runtime is pinned by full version rather than by a v10 tag that does not resolve.
@@ -45,3 +49,10 @@ jobs:
       # developer runs locally is the one CI runs.
       - name: Tests
         run: uv run pytest -m "not live" -q
+
+      # Not a test, because it reads git history rather than the tree. Commit 67615fa carried an
+      # AI co-author trailer, was force-pushed 67 seconds later, and GitHub still serves it and
+      # still counts a second contributor on the repository - the rewrite removed the commit from
+      # every ref and left the attribution intact.
+      - name: No AI attribution trailers
+        run: uv run python scripts/check_attribution.py

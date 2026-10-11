@@ -1944,3 +1944,56 @@ This repo has been force-pushed before, and that graph is a separate, lazily-rec
 the REST endpoint - it is the one surface here I cannot read. The remedy for that is GitHub Support,
 not a further rewrite. Do not rewrite history again on the same evidence; the second rewrite would
 change 122 SHAs and fix nothing that the first did not already change.
+
+## 2026-10-11 correction: the Claude contributor is real, and it is mine
+
+I was wrong for an hour and a half on this. The operator said the repo lists `claude` as a second
+contributor; I checked the REST contributors API, the graphs page authenticated and not, the local
+history, every object including 16 dangling ones, and told them repeatedly there was nothing there.
+There was.
+
+**The offending commit is `67615fa2bcd67ed485b9d0f6c6fdbf632c1be604`** - "truth: one grader, with
+the tool-trace checks it was missing", authored by brian, pushed to main at 16:01:40Z and
+force-pushed away 67 seconds later as `3c40863`. It carries:
+
+    Co-Authored-By: Claude Sonnet <noreply@anthropic.com>
+
+**Why every check I ran came back clean.** Three GitHub contributor backends disagree right now:
+
+| surface | result |
+|---|---|
+| `GET /benthic-io/benthic-mcp/_sidebar` | **2 - benthic-io, claude** |
+| `GET /repos/benthic-io/benthic-mcp/contributors` | 1 - benthic-io |
+| `/graphs/contributors-data` | 1 author |
+| `commits?author=claude` | 0 |
+| `contributors_list` | empty `<ul>` |
+| repo page SSR HTML | JS-loaded skeleton, no identities |
+
+`_sidebar` is the endpoint the repo page's Contributors widget actually calls. The REST endpoint
+I kept hitting is a *different, already-recomputed* backend, so it was never going to disagree with
+me. `/graphs/contributors-data` returns 202 until a background job runs - direct evidence the graph
+is lazily recomputed. I checked a surface that had already fixed itself.
+
+**Why the local history never showed it:** the commit was orphaned before I had it, and no ref ever
+pointed at it. It is still fetchable by SHA and GitHub still serves the page at HTTP 200 with
+`claude` rendered as a linked co-author. `noreply@anthropic.com` resolves to the real `claude`
+account (id 81847), so the attribution was valid when recorded. A force-push removes the commit from
+refs; it does not remove the record GitHub already made of it.
+
+**It cannot be fixed from the repo.** The commit is unreachable, ten pushes have landed since, and
+`_sidebar` still says 2 as of the last check. This needs GitHub Support to invalidate the
+contributor-statistics record. Community discussion:
+https://github.com/orgs/community/discussions/140791
+
+**What stops it recurring:** `scripts/check_attribution.py`, wired into `scripts/pre-commit` and CI.
+It scans commit messages for `Co-Authored-By` / `Assisted-by` / `Generated with`, including the
+valueless `Co-Authored-By: none` form an amended rewrite leaves behind. CI needed `fetch-depth: 0`
+to have real history to scan - at the default shallow depth it would have passed without looking at
+anything. Verified by pointing it at `67615fa` itself: reports the trailer, exits 1.
+
+**The lesson, and it is the same one three times now.** I concluded "there is nothing there" from
+an API that could not have shown it, and said so with confidence five or six times. The operator was
+looking at the product; I was reading a derivative index. When the operator reports something the
+instrument cannot see, the instrument is the suspect. Verify against the surface the operator named,
+and if you cannot reproduce it, say what you checked and ask what they are looking at - do not
+conclude absence. Absence of evidence across the wrong surface is not evidence of absence.

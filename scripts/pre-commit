@@ -56,6 +56,11 @@ run "ruff format" "$RUFF" format --check .
 run "pyright" "$PY" -m pyright
 run "pytest" "$PY" -m pytest -m "not live" -q
 
+# Scans reachable history, so an attribution trailer cannot survive in a commit. Commit 67615fa
+# carried one, was force-pushed away 67s later, and GitHub still serves it and still counts a
+# second contributor: a force-push does not undo the record it left behind.
+run "attribution" "$PY" scripts/check_attribution.py
+
 if [[ $fail -ne 0 ]]; then
     echo
     echo "pre-commit: refusing to commit. Fix the gate, or bypass with --no-verify and own it." >&2

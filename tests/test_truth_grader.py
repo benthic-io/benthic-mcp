@@ -1599,3 +1599,58 @@ def test_the_floor_still_reports_a_relation_nobody_signed() -> None:
 
     result = grade.grade_case(case(capability="sequential_lookup"), case_run, {"a.b"}, {"x"})
     assert "unmanifested_relation" in failing(result), failing(result)
+
+
+def test_the_attribution_guard_catches_a_co_author_trailer() -> None:
+    """A trailer on a pushed commit outlives the force-push that removes it, in GitHub's records.
+
+    Measured: commit `67615fa2bcd67ed485b9d0f6c6fdbf632c1be604` ("truth: one grader, with the
+    tool-trace checks it was missing") was pushed to main at 16:01:40Z and force-pushed away 67
+    seconds later as `3c40863`. It is unreachable from any ref now, but GitHub still serves it at
+    HTTP 200, still renders `claude` as a linked co-author, and still lists a second contributor in
+    the repository sidebar. `noreply@anthropic.com` resolves to the real `claude` account (id
+    81847), so the attribution was valid at the moment it was recorded and the force-push did not
+    roll it back. Ten later pushes did not clear it either.
+
+    The operator has never used Claude. An automated commit step added the trailer, and the repo had
+    a standing rule against it that nothing mechanically enforced. This contracts the enforcement so
+    the same commit cannot be made again.
+    """
+    from scripts.check_attribution import scan_messages
+
+    clean = ["harness: a change\n\nWith a body.\n"]
+    assert scan_messages(clean) == [], scan_messages(clean)
+
+    offending = "harness: a change\n\nWith a body.\n\nCo-Authored-By: Claude Sonnet <noreply@anthropic.com>\n"
+    assert scan_messages([offending]), "a co-author trailer must be reported"
+
+    for trailer in (
+        "Co-Authored-By: Claude Sonnet <noreply@anthropic.com>",
+        "Assisted-by: Claude Sonnet <noreply@anthropic.com>",
+        "Co-authored-by: someone <someone@example.com>",
+        "Generated with Claude Code",
+    ):
+        assert scan_messages([f"subject\n\n{trailer}\n"]), trailer
+
+    # Signed-off-by is a real, legitimate trailer and must not be swept up by the pattern.
+    assert scan_messages(["subject\n\nSigned-off-by: brian <brian@benthic.io>\n"]) == []
+
+
+def test_the_guard_rejects_an_empty_co_author_line() -> None:
+    """`Co-Authored-By: none` is the malformed residue of a rewrite that blanked the value.
+
+    Eleven commits in this history carry it. GitHub attributes nothing because there is no email to
+    resolve, but it is a trailer with a value that means nothing, and a guard that only matches a
+    well-formed trailer would pass straight over it.
+    """
+    from scripts.check_attribution import scan_messages
+
+    assert scan_messages(["subject\n\nCo-Authored-By: none\n"]), "a valueless co-author trailer is still a trailer"
+    assert scan_messages(["subject\n\nAssisted-by: \n"]), "an empty assisted-by is still a trailer"
+
+
+def test_this_repository_has_no_attribution_trailer() -> None:
+    """The guard against the guard: this history is clean, so the check is not vacuous."""
+    from scripts.check_attribution import scan_reachable_history
+
+    assert scan_reachable_history() == [], scan_reachable_history()
