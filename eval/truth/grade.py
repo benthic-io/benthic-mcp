@@ -836,7 +836,12 @@ def check_relation_trap(case: dict[str, Any], case_run: dict[str, Any]) -> list[
                 else f"{trap} cannot answer a historical question and nothing nearby sets it aside",
             )
         )
-    if relation:
+    if relation and expected.get("right_count") is not None:
+        # Only where the case asserts something about the result. A trap case asks which relation the
+        # caller WOULD read and why the present-day view will not answer, so the model can name it,
+        # explain it and never query it - which is the correct answer to the question asked. The
+        # legacy scorer demanded the query anyway and failed these two cases in every run_eval pass;
+        # porting the check verbatim would re-import that false positive into the truth grader.
         queried = {
             str(call["args"].get("source")) for call in tool_calls(case_run) if "query" in call["name"] and call["ok"]
         }

@@ -1338,8 +1338,43 @@ def test_the_discover_result_must_actually_carry_the_expected_relation() -> None
     assert bad is not None and not bad.ok, "an answer claiming a relation discovery never returned must fail"
 
 
-def test_the_trap_requires_the_historical_relation_to_have_been_queried() -> None:
-    """The answer can name the historical relation while the query went to the trap."""
+def test_the_trap_requires_the_historical_relation_to_have_been_queried_when_it_asserts_a_result() -> None:
+    """The answer can name the historical relation while the query went to the trap.
+
+    The check applies only where the case asserts something about the result. A trap case that
+    asks which relation the caller WOULD read needs no query, and the two stored main-suite cases
+    that ask exactly that never query - they were correct as recorded.
+    """
+    trap_case_dict = {
+        "id": "t",
+        "capability": "relation_trap",
+        "question": "q",
+        "expected": {"relation": "usp_cl.legislator_terms", "trap": "usp_cl.mv_current_lawmakers", "right_count": 3},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_query"],
+    }
+    historical = _result_run(
+        "The answer is in usp_cl.legislator_terms.",
+        [("benthic_query", {"source": "usp_cl.legislator_terms"}, True, {"row_count": 3})],
+    )
+    trapped = _result_run(
+        "The answer is in usp_cl.legislator_terms.",
+        [("benthic_query", {"source": "usp_cl.mv_current_lawmakers"}, True, {"row_count": 3})],
+    )
+
+    ok = _check([grade.grade_case(trap_case_dict, historical)], "historical_relation_queried")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(trap_case_dict, trapped)], "historical_relation_queried")
+    assert bad is not None and not bad.ok, "querying only the trap must fail, whatever the prose says"
+
+
+def test_a_trap_case_that_asks_which_relation_to_read_emits_no_query_check() -> None:
+    """The false positive this port would have shipped if the gate were left off.
+
+    The legacy scorer demanded the historical relation be queried, failed both stored main-suite trap
+    cases for it, and the truth grader passed them correctly. Re-grading the stored run after the port
+    with the gate off showed 30/30 and zero shifts, which is what the stored transcripts actually earned.
+    """
     trap_case_dict = {
         "id": "t",
         "capability": "relation_trap",
@@ -1348,19 +1383,10 @@ def test_the_trap_requires_the_historical_relation_to_have_been_queried() -> Non
         "forbidden_claims": [],
         "required_tools": ["benthic_query"],
     }
-    historical = _result_run(
-        "The answer is in usp_cl.legislator_terms.",
-        [("benthic_query", {"source": "usp_cl.legislator_terms"}, True, {"row_count": 1})],
-    )
-    trapped = _result_run(
-        "The answer is in usp_cl.legislator_terms.",
-        [("benthic_query", {"source": "usp_cl.mv_current_lawmakers"}, True, {"row_count": 1})],
-    )
+    named_only = _result_run("Read usp_cl.legislator_terms.", [("benthic_discover", {"dataset": "usp_cl"}, True, {})])
 
-    ok = _check([grade.grade_case(trap_case_dict, historical)], "historical_relation_queried")
-    assert ok is not None and ok.ok
-    bad = _check([grade.grade_case(trap_case_dict, trapped)], "historical_relation_queried")
-    assert bad is not None and not bad.ok, "querying only the trap must fail, whatever the prose says"
+    verdict = grade.grade_case(trap_case_dict, named_only, None, None)
+    assert [check.name for check in verdict.checks if check.name == "historical_relation_queried"] == []
 
 
 def test_sequential_lookup_requires_both_sources_to_have_been_queried() -> None:
