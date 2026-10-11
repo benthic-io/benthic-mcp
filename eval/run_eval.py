@@ -179,7 +179,12 @@ def score_case(
 
 
 def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_id: str, mode: str = "") -> str:
+    # A case the harness could not finish is not a wrong answer, and folding it into `Failed` makes
+    # the summary a rate over cases that were never measured. Measured: two cases timed out on a box
+    # shared with other agents and the report said `Failed: 3`.
+    unmeasured = [result for result in results if result["score"].get("errored")]
     passed = sum(result["score"]["passed"] for result in results)
+    failed = len(results) - passed - len(unmeasured)
     tool_calls = sum(len(result["events"]) for result in results)
     failed_calls = sum(sum(not event["ok"] for event in result["events"]) for result in results)
     elapsed = sum(result["elapsed_ms"] for result in results)
@@ -190,7 +195,8 @@ def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_i
         "",
         f"Cases: {len(results)}",
         f"Passed: {passed}",
-        f"Failed: {len(results) - passed}",
+        f"Failed: {failed}",
+        f"Not measured (harness error): {len(unmeasured)}",
         f"Tool calls: {tool_calls}",
         f"Failed tool calls: {failed_calls}",
         f"Total case time: {elapsed} ms",
@@ -199,17 +205,20 @@ def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_i
         "## Cases",
         "",
         "| Case | Capability | Passed | Calls | Failed calls | Time ms |",
-        "|---|---|---:|---:|---:|---:|",
+        "|---|---|---|---:|---:|---:|",
     ]
     for result in results:
+        outcome = "not measured" if result["score"].get("errored") else str(result["score"]["passed"])
         lines.append(
-            f"| {result['id']} | {result['capability']} | {result['score']['passed']} | {len(result['events'])} | {sum(not event['ok'] for event in result['events'])} | {result['elapsed_ms']} |"
+            f"| {result['id']} | {result['capability']} | {outcome} | {len(result['events'])} | {sum(not event['ok'] for event in result['events'])} | {result['elapsed_ms']} |"
         )
     lines.extend(["", "## Failures", ""])
     for result in results:
         if result["score"]["passed"]:
             continue
         lines.append(f"### {result['id']}")
+        if result["score"].get("errored"):
+            lines.append("not measured - the harness did not finish this case, so it says nothing about the answer")
         lines.append(json.dumps(result["score"], sort_keys=True))
         if result.get("error"):
             lines.append(result["error"])

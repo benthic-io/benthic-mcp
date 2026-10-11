@@ -203,6 +203,14 @@ cryptographically gone. Only the operator can decide whether that matters.
 - **Read what a check flagged rather than reasoning about what it should flag.** Six false positives in
   one grader, every one found by opening the flagged item: filter syntax, column aliases and an acronym
   read as invented relations, and a model correctly rejecting a trap it had named by mistake.
+- **The llama-server on this box is shared with other agents.** Do not restart it, kill its requests,
+  or read GPU state while they are running - restarting it to "pick up new code" would abandon whatever
+  inference they have in flight. It serves `Cyber-Tiel-Coder-35B-A3B`, so another agent's workload
+  looks exactly like my own from the outside. **Consequence for measurement:** a timeout under
+  contention is not a capability finding, and two cases that timed out on a busy box are *unmeasured*,
+  not failed. Check whether anyone else is on the box before reading any slow run as a server or model
+  defect, and prefer `--case-filter` retries over re-running a whole suite. `benthic-mcp` is mine and
+  safe to restart; `llama-server` is not.
 - **A rising number is not progress.** Every improvement came from checking a claim against something
   independent - `psql`, a contract that had to fail first, a corrupted expectation that had to grade
   wrong. The grader had six defects before it found one real thing.
@@ -1760,3 +1768,71 @@ and the graded runs are now one instrument.
 Retired deliberately: strict-vs-legacy answered (two scorers, one answer), and generic
 `required_tools` beyond the trio the graders already enforce - the decline case in the numeric suite
 declines without calling anything, which a generic required-tools check would have failed.
+
+## 2026-10-11: a harness timeout that graded as a model failure
+
+The first full 30-case run through the reconciled path scored 27/30 in 2042s, against a 1509s
+baseline for the same suite. Two of the three failures were the same defect, and the third was a
+grader false positive.
+
+**A falsy error hides a timeout.** `str(httpx.ReadTimeout(""))` is `""`, and run_eval recorded
+exceptions as bare `str(exc)`. So a case that exhausted the 180s request timeout carried an empty
+error, the grader's `errored` check could not fire, and the empty answer fell through to the
+capability checks. `join_..._usp_cl_legislator_terms_evidence` was charged with EIGHT failing
+checks - used_benthic_join, server_right_count, server_right_keys, server_join_reliability and
+more - for what is one harness timeout that produced zero tool calls. With the type recorded, those
+eight collapse to a single accurate `errored`. run_suite already recorded `f"{type(exc).__name__}:
+{exc}"`; run_eval now does too. Lesson: a message can be empty even when the event is not, so an
+error channel keyed on message truthiness is not an error channel.
+
+**The floor called a CSV a hallucinated table.** `sequential_2_usaspending_irs_ng` failed
+`unmanifested_relation` on `county_01_2009.csv`, which the model mentioned while describing a census
+file it had been given. Both relations it actually named - usaspending.agency and
+irs_ng.census_demographics - are signed, verified against the live manifest (119 relations).
+The cause was the partition: `_looks_like_a_relation` splits on the FIRST dot, so the extension check
+saw `csv` in the relation half and `endswith(".csv")` never matched. Tested on the whole spelling
+now. A contract pins that a genuine unsigned relation is still reported, so the rule cannot have
+arrived by disabling the floor.
+
+Re-grading the stored run with both fixes: 28/30, exactly one shift (sequential_2 false -> true),
+nothing else moved - which is the re-grade's own check on itself.
+
+**The two timeouts are UNMEASURED, not failed.** The llama-server on this box is shared with other
+agents running the same model, so a slow box is an expected condition and a timeout under it says
+nothing about the server or the suite. This run averaged 68.1s/case against the 1509s/30 = 50.3s
+baseline, and the two failures were the two slowest cases (240s and 180s, the latter hitting the
+timeout exactly). Retried individually with `--request-timeout 420`:
+`join_..._samer_sam_registrations_evidence` PASSED (4 calls). `join_..._usp_cl_legislator_terms_evidence`
+timed out again at 446s on a 13.5k-token prompt with only 3 tool calls - still contention, still
+unmeasured, and notably the grader now reports it as a single `errored` instead of eight invented
+capability failures.
+
+Honest reading of the 30-case suite at `caa76cf`: **28/30 re-graded from stored data, with two cases
+unmeasured because the shared box was busy.** Do not report 30/30 until the full suite runs on a box
+nobody else is using.
+
+Lesson worth keeping separately: when an agent-sharing environment is part of the setup, the harness
+must be able to say "this case did not get measured" - and `errored` is only that signal if the error
+string is never empty. Both halves had to be fixed before the timeout was visible at all.
+
+## 2026-10-11: this box is shared, and that is a measurement condition
+
+Other agents run the same `llama-server` (Cyber-Tiel-Coder-35B-A3B). Their workload is
+indistinguishable from mine except that I know which tmux sessions I started.
+
+- Do NOT restart `llama-server`, kill its requests, or restart `deploy.sh` (which restarts both
+  services). Someone else's inference would be abandoned mid-generation. `benthic-mcp` is mine.
+- `nvidia-smi` fails from this account, so GPU state is not observable here - another reason not to
+  guess at contention from the outside; ask or check tmux instead.
+- `systemctl is-active` (system scope) reports these services **inactive** while `systemctl --user
+  is-active` reports them **active**. They are user-scope units. The system-scope reading is not
+  evidence of a down server and should not be quoted as one.
+- A request the client abandoned keeps running server-side. Right after the retry I observed slot 0
+  still processing a 93,587-prompt-token task with no client alive to receive it. That work consumes
+  inference capacity that other agents then queue behind, so a client timeout can *cause* the
+  slowness the next case observes.
+
+Note: the 13:57 deploy that ran the canary on `caa76cf` restarted llama-server under the old
+"restart both instances" rule, before this was known. It completed and canary passed; the cost, if
+any, fell on someone else. That is exactly the failure the rule above prevents, which is why it is
+worth writing down rather than just remembering.

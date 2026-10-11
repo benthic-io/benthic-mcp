@@ -81,3 +81,41 @@ def test_a_batch_with_no_recorded_holdout_falls_back_to_computing_one() -> None:
     cases = [{"id": "a", "capability": "paired"}, {"id": "b", "capability": "paired"}]
 
     assert {case["id"] for case in select_cases(cases, None, None, "holdout")} == {"a"}
+
+
+def test_the_report_separates_a_case_that_was_not_measured_from_one_that_failed() -> None:
+    """A harness error is not a wrong answer, and the summary line must not add the two together.
+
+    Measured on the end-to-end run of the 30-case suite: two cases hit the request timeout on a box
+    shared with other agents, and `render_report` printed `Failed: 3` - which reads as three cases the
+    server or the model got wrong, when two of them were never measured at all. A rate computed over
+    that denominator is not a rate of anything. The three numbers have to be reported separately,
+    because only two of them describe the server.
+    """
+    import run_eval
+
+    report = run_eval.render_report(
+        [
+            {"id": "a", "capability": "c", "events": [], "elapsed_ms": 10, "score": {"passed": True, "errored": False}},
+            {
+                "id": "b",
+                "capability": "c",
+                "events": [],
+                "elapsed_ms": 10,
+                "score": {"passed": False, "errored": False, "unmanifested_relation": True},
+            },
+            {"id": "c", "capability": "c", "events": [], "elapsed_ms": 10, "score": {"passed": False, "errored": True}},
+        ],
+        {},
+        "run",
+    )
+
+    assert "Not measured (harness error): 1" in report, report
+    assert "Passed: 1" in report, report
+    assert "Failed: 1" in report, report
+    assert "Cases: 3" in report, report
+    # The wrong-answer failure and the unmeasured case must not be counted as one number.
+    assert "Failed: 2" not in report, report
+    # And the unmeasured case is named as such rather than listed only under failures.
+    failures = report.split("## Failures", 1)[1]
+    assert "### c" in failures and "not measured" in failures.lower(), failures
