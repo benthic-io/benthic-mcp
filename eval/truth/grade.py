@@ -199,21 +199,28 @@ def _count_answers(call: dict[str, Any], want: int, matched: int) -> bool:
 
 
 def _join_call_matches(call: dict[str, Any], edge: dict[str, Any]) -> bool:
-    """Whether one join call walked the signed edge, in either direction."""
+    """Whether one join call walked the signed edge, in either direction.
+
+    The columns may be named by the caller or resolved by the server. `benthic_join` fills omitted
+    `left_column` / `right_column` from the signed edge, and the result reports which columns it used
+    as `left.<column>` / `right.<column>`. Measured: `multi_step_0_1_usaspending_irs_ng` named both
+    sources and no columns, the server answered `["left.uei", "right.uei"]` - exactly the signed hop
+    - and the check failed the call for the shape of the arguments rather than for the hop not being
+    walked. The server's own result is the better evidence, so it is accepted when the columns agree.
+    A result reporting no columns is not evidence either way and does not pass.
+    """
     arguments = call.get("args") or {}
-    forward = (
-        arguments.get("left_source") == edge.get("left")
-        and arguments.get("left_column") == edge.get("left_column")
-        and arguments.get("right_source") == edge.get("right")
-        and arguments.get("right_column") == edge.get("right_column")
+    columns = {str(name) for name in (_result_payload(call).get("columns") or [])}
+
+    def walked(left: str, left_column: str, right: str, right_column: str) -> bool:
+        if arguments.get("left_source") != left or arguments.get("right_source") != right:
+            return False
+        named = arguments.get("left_column") == left_column and arguments.get("right_column") == right_column
+        return named or (bool(columns) and {f"left.{left_column}", f"right.{right_column}"} <= columns)
+
+    return walked(edge["left"], edge["left_column"], edge["right"], edge["right_column"]) or walked(
+        edge["right"], edge["right_column"], edge["left"], edge["left_column"]
     )
-    reverse = (
-        arguments.get("left_source") == edge.get("right")
-        and arguments.get("left_column") == edge.get("right_column")
-        and arguments.get("right_source") == edge.get("left")
-        and arguments.get("right_column") == edge.get("left_column")
-    )
-    return forward or reverse
 
 
 def check_required_route(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:

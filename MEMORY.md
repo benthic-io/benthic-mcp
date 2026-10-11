@@ -1997,3 +1997,44 @@ looking at the product; I was reading a derivative index. When the operator repo
 instrument cannot see, the instrument is the suspect. Verify against the surface the operator named,
 and if you cannot reproduce it, say what you checked and ask what they are looking at - do not
 conclude absence. Absence of evidence across the wrong surface is not evidence of absence.
+
+## 2026-10-11 afternoon: a reboot, a 0-tools race, and a grader false positive
+
+**The box rebooted at 16:12** (boot id `8fc68a33`), which killed the 30-case run mid-flight. The run
+had already written complete output - 30 entries, 30 unique ids, all matching `questions.json` - so
+**29/30 stands**, and the one failure was not a model failure.
+
+**`multi_step_0_1_usaspending_irs_ng` failed `first_hop_attempted` wrongly.** The model called
+`benthic_join` naming both sources but passing no `left_column`/`right_column`, so
+`_join_call_matches` returned False. The server answered:
+
+    "columns": ["left.uei", "right.uei"], "row_count": 0, "source_complete": true
+
+It resolved the omitted columns to exactly the signed hop and confirmed the chain terminates there,
+which is what the case asks. The check was testing the *shape of the call*, not whether the hop was
+walked - and a check that can be defeated by omitting a parameter the server does not require is
+testing the caller. `_join_call_matches` now also accepts the hop when the server's own result
+reports the edge's columns; a result reporting no columns is still not evidence. Re-grade:
+**30/30, one shift, nothing else moved.**
+
+**llama-server registered 0 MCP tools on that boot** - first time in 60. Both units started in the
+same second, the MCP warmup found `benthic-mcp` before it could serve, and the warmup never
+retried. `After=benthic-mcp.service` in the llama-server unit fixes the startup ordering.
+
+**`Requires=` was the wrong fix and I have to write this down.** I first added
+`Requires=benthic-mcp.service` alongside the ordering. That couples the two *lifetimes*, not just
+their start order - so restarting `benthic-mcp` took `llama-server` down with it, abandoning whatever
+inference another agent had in flight. It happened the moment I tested the restart: llama-server's
+pid went 2149 -> 32222 and any in-flight generation died with it. `After=` is ordering and is what
+the race needed; `Requires=` is a lifetime coupling and must not be used on a shared box.
+**Ordering a service after another is not the same as requiring it, and only one of them is safe
+when the box is shared.**
+
+**`.git/index` was 0 bytes** after the reboot ("index file smaller than expected"), which takes
+`git ls-files` down and fails two contracts in `test_loop_invariants.py`. The index is a cache, not
+history: `rm .git/index && git reset` rebuilds it from HEAD and leaves the working tree untouched.
+Worth knowing because the failure looks like a corrupt repository and is not one.
+
+The repo is also ready to be recreated to clear the phantom contributor - mirror at
+`/tmp/opencode/benthic-mcp-backup.git`, settings in `/tmp/opencode/repo-settings.json`, restore
+manifest in `/tmp/opencode/restore-settings.json`. Blocked on `delete_repo` scope.

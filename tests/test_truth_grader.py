@@ -1654,3 +1654,64 @@ def test_this_repository_has_no_attribution_trailer() -> None:
     from scripts.check_attribution import scan_reachable_history
 
     assert scan_reachable_history() == [], scan_reachable_history()
+
+
+def test_a_join_that_omitted_its_columns_still_counts_as_walking_the_hop() -> None:
+    """The server resolves omitted join columns from the signed edge, and the result says which.
+
+    Measured on the 30-case suite run of 2026-10-11: `multi_step_0_1_usaspending_irs_ng` failed
+    `first_hop_attempted`. The model's call named both sources but passed no `left_column` or
+    `right_column`, so `_join_call_matches` returned False. The server's own response was:
+
+        "columns": ["left.uei", "right.uei"], "row_count": 0, "source_complete": true
+
+    It resolved the omitted columns to exactly the signed edge - uei to uei - and confirmed the
+    chain terminates there, which is what the case asks. The model's answer was right and the check
+    failed it for the shape of the call rather than for the hop being walked. A check that can be
+    defeated by omitting a parameter the server does not require is testing the caller, not the hop.
+    """
+    edge = EDGE_ONE
+
+    # Exactly the stored call shape: both sources named, no column parameters at all.
+    omitted = (
+        "benthic_join",
+        {
+            "left_source": edge["left"],
+            "left_where": ["uei=eq.ESELKUJSAM45"],
+            "mode": "inner",
+            "right_source": edge["right"],
+        },
+        True,
+        {
+            "columns": [f"left.{edge['left_column']}", f"right.{edge['right_column']}"],
+            "row_count": 0,
+            "source_complete": True,
+        },
+    )
+    verdict = grade.grade_case(_multi_step_case(True), _result_run("The chain terminates there.", [omitted]))
+    check = _check([verdict], "first_hop_attempted")
+    assert check is not None and check.ok, f"the server resolved the hop to the signed edge: {check}"
+
+    # The seam: same omitted parameters, but the server joined something else.
+    wrong_edge = (
+        "benthic_join",
+        {"left_source": edge["left"], "right_source": edge["right"]},
+        True,
+        {"columns": ["left.duns", "right.tin"], "row_count": 0},
+    )
+    wrong = grade.grade_case(_multi_step_case(True), _result_run("The chain terminates there.", [wrong_edge]))
+    assert _check([wrong], "first_hop_attempted") is not None and not _check([wrong], "first_hop_attempted").ok, (
+        "a result whose columns are not the signed edge must still fail"
+    )
+
+    # And a result carrying no columns at all is not evidence either way.
+    silent = (
+        "benthic_join",
+        {"left_source": edge["left"], "right_source": edge["right"]},
+        True,
+        {"row_count": 0},
+    )
+    none_seen = grade.grade_case(_multi_step_case(True), _result_run("The chain terminates there.", [silent]))
+    assert (
+        _check([none_seen], "first_hop_attempted") is not None and not _check([none_seen], "first_hop_attempted").ok
+    ), "a result that reports no columns is not evidence the hop was walked"
