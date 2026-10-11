@@ -119,3 +119,33 @@ def test_the_report_separates_a_case_that_was_not_measured_from_one_that_failed(
     # And the unmeasured case is named as such rather than listed only under failures.
     failures = report.split("## Failures", 1)[1]
     assert "### c" in failures and "not measured" in failures.lower(), failures
+
+
+def test_a_slow_but_progressing_generation_is_not_a_timeout() -> None:
+    """A non-streaming read timeout fires on total generation time, not on a stalled stream.
+
+    Measured on the shared llama-server: `join_..._usp_cl_legislator_terms_evidence` started turn 1
+    at 31.0 tok/s and collapsed to 0.29 tok/s - about 3.5s per token - the instant a second slot began
+    prefilling a 93,587-token prompt. Tokens kept arriving steadily for the next twenty minutes. The
+    case failed anyway, because `stream: False` means httpx receives nothing until the whole response
+    exists, so the 180s read timeout covers the entire generation rather than the gap between chunks.
+    The run reported `ReadTimeout` for a request that was demonstrably still working.
+
+    The distinction that matters: a timeout should mean "nothing is coming", not "this is slow".
+    """
+    import inspect
+
+    import run_eval
+
+    turn_loop = inspect.getsource(run_eval.run_case)
+    assert '"stream": False' not in turn_loop, (
+        "a non-streaming request makes the read timeout cover total generation time, so any case "
+        "slower than the timeout fails while it is still making progress"
+    )
+    assert "read_stream(" in turn_loop, "run_case must read completions through the streaming reader"
+
+    reader = inspect.getsource(run_eval.read_stream)
+    assert "aiter_lines" in reader or "aiter_bytes" in reader, (
+        "the response must be consumed incrementally so the read timeout applies to the gap between "
+        "chunks rather than to the whole generation"
+    )

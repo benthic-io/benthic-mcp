@@ -226,6 +226,58 @@ def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_i
     return "\n".join(lines) + "\n"
 
 
+async def read_stream(llm: httpx.AsyncClient, url: str, payload: dict[str, Any], timeout: float) -> dict[str, Any]:
+    """Consume a streaming completion and reassemble the deltas into one response body.
+
+    Streaming is not an optimisation here, it is what makes the read timeout mean what it should. A
+    non-streaming POST delivers nothing until the whole response exists, so httpx's read timeout
+    covers the entire generation: a case that takes 200s to produce tokens fails at 180s while
+    demonstrably working. Consuming incrementally makes the timeout fire only when no chunk arrives
+    for that long. Measured on the shared llama-server: a case decoding at 0.29 tok/s (3.5s per
+    token, while another slot prefilled a 93,587-token prompt) failed on `ReadTimeout` after twenty
+    minutes of steady progress.
+    """
+    payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    message: dict[str, Any] = {"role": "assistant", "content": ""}
+    finish_reason = ""
+    usage: dict[str, Any] = {}
+    calls: dict[int, dict[str, Any]] = {}
+
+    async with llm.stream("POST", url, json=payload, timeout=timeout) as response:
+        response.raise_for_status()
+        async for line in response.aiter_lines():
+            if not line.startswith("data: "):
+                continue
+            body = line[6:]
+            if body == "[DONE]":
+                break
+            chunk = json.loads(body)
+            if chunk.get("usage"):
+                usage = chunk["usage"]
+            for choice in chunk.get("choices") or []:
+                delta = choice.get("delta") or {}
+                for key in ("content", "reasoning_content"):
+                    if delta.get(key):
+                        message[key] = str(message.get(key) or "") + delta[key]
+                for call in delta.get("tool_calls") or []:
+                    slot = calls.setdefault(
+                        call.get("index", 0), {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                    )
+                    if call.get("id"):
+                        slot["id"] = call["id"]
+                    function = call.get("function") or {}
+                    if function.get("name"):
+                        slot["function"]["name"] = function["name"]
+                    if function.get("arguments"):
+                        slot["function"]["arguments"] += function["arguments"]
+                if choice.get("finish_reason"):
+                    finish_reason = choice["finish_reason"]
+
+    if calls:
+        message["tool_calls"] = [calls[index] for index in sorted(calls)]
+    return {"message": message, "finish_reason": finish_reason, "usage": usage}
+
+
 async def run_case(
     case: dict[str, Any],
     llm: httpx.AsyncClient,
@@ -255,20 +307,15 @@ async def run_case(
                 "top_p": settings["top_p"],
                 "top_k": settings["top_k"],
                 "max_tokens": settings["max_tokens"],
-                "stream": False,
             }
             if settings.get("no_thinking"):
                 payload["chat_template_kwargs"] = {"enable_thinking": False}
-            response = await llm.post(
-                f"{settings['llm_url']}/v1/chat/completions", json=payload, timeout=settings["request_timeout"]
+            completion = await read_stream(
+                llm, f"{settings['llm_url']}/v1/chat/completions", payload, settings["request_timeout"]
             )
-            response.raise_for_status()
-            data = response.json()
-            choice = data.get("choices", [{}])[0]
-            message = choice.get("message", {})
-            transcript.append(
-                {"kind": "llm_response", "turn": turn, "message": message, "usage": data.get("usage", {})}
-            )
+            message = completion["message"]
+            finish = completion["finish_reason"]
+            transcript.append({"kind": "llm_response", "turn": turn, "message": message, "usage": completion["usage"]})
             messages.append(
                 {
                     key: value
@@ -277,12 +324,12 @@ async def run_case(
                 }
             )
             for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                if data.get("usage", {}).get(key) is not None:
-                    usage[key] += data["usage"][key]
+                if completion["usage"].get(key) is not None:
+                    usage[key] += completion["usage"][key]
             tool_calls = message.get("tool_calls") or []
             if not tool_calls:
                 final_text = str(message.get("content") or "")
-                finish_reason = str(choice.get("finish_reason") or "")
+                finish_reason = str(finish or "")
                 break
             for tool_call in tool_calls:
                 name = tool_call.get("function", {}).get("name", "")
