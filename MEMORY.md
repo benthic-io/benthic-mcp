@@ -1877,3 +1877,37 @@ Note: the 13:57 deploy that ran the canary on `caa76cf` restarted llama-server u
 "restart both instances" rule, before this was known. It completed and canary passed; the cost, if
 any, fell on someone else. That is exactly the failure the rule above prevents, which is why it is
 worth writing down rather than just remembering.
+
+## 2026-10-11: why the two cases failed - a large prefill starving decode, plus a harness bug
+
+The answer came from the server's own log, not from inference. `journalctl --user -u llama-server`
+has per-task `print_timing` lines, and they told the whole story for task 2955 (my turn-1 request
+for `join_..._usp_cl_legislator_terms_evidence`):
+
+    14:08:14  n_decoded = 1316,  tg = 31.03 t/s,  tg_3s = 30.14
+    14:08:15  slot launch_slot_: id 0 | task 3779 | processing task     <- 93,587-token prompt
+    14:08:29  n_decoded = 1363,  tg = 23.69 t/s,  tg_3s =  0.29         <- 110x collapse
+    14:09:11  n_decoded = 1375,  tg = 13.77 t/s,  tg_3s =  0.27
+
+It never died. `n_decoded` climbed 1363 -> 1443 over the next twenty minutes at ~0.28 tok/s, about
+3.5s per token. The case failed anyway because run_eval sent `stream: False`: httpx receives nothing
+until the entire response exists, so the 180s read timeout covered **total generation time** rather
+than the gap between chunks. The harness recorded `ReadTimeout` for a request that was demonstrably
+still working, and the grader - correctly given that input - called it a harness failure.
+
+**The fix is streaming, not a longer timeout.** `read_stream` consumes the SSE response incrementally
+and reassembles content, reasoning_content, fragmented tool-call arguments, finish_reason and usage
+into the same message shape the turn loop already expected. Verified three ways: against the live
+server (tool arguments split across chunks reassemble to valid JSON), and A/B against a slow local
+server - a 60s generation with 2s gaps between chunks completes under a 5s read timeout, where the
+same server answering non-streaming dies at 5.0s. The case now passes in 200.5s at the **default**
+180s timeout it previously failed on, decoding steadily at ~11 tok/s.
+
+Ruled out by measurement, not by argument: VRAM (preallocated, see above), CPU (load 4.91 of 16
+cores), and queueing (the request was admitted and processing immediately - `slot launch_slot_` at
+14:07:17). It is a 93,587-token prefill on the other slot starving concurrent decode.
+
+**The general lesson: `stream: False` turns any read timeout into a total-runtime limit.** Any
+harness driving an LLM under contention needs streaming, or it will convert "slow" into "dead" and
+then correctly report the dead thing. Grep the server log for the task's `print_timing` lines before
+concluding a request hung - it is the fastest way to tell a stall from a crawl.
