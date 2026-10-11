@@ -49,7 +49,7 @@ def catalog_with(private_key: Ed25519PrivateKey) -> Catalog:
 
 
 def relation_sizes(catalog: Catalog, **kwargs) -> list[int]:
-    payload = catalog.discover(**kwargs).model_dump(mode="json", exclude_none=True)
+    payload = catalog.discover(**kwargs).model_dump()
     return [len(json.dumps(item)) for item in payload["relations"]]
 
 
@@ -87,3 +87,25 @@ def test_the_full_listing_of_thirty_columns_stays_bounded(catalog_with: Catalog)
     full = full_sizes(catalog_with)
 
     assert full[0] <= MAX_BYTES_PER_RELATION
+
+
+def _contains_null(value: object) -> bool:
+    if isinstance(value, dict):
+        return any(_contains_null(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_null(item) for item in value)
+    return value is None
+
+
+def test_the_discover_payload_omits_null_fields(catalog_with: Catalog) -> None:
+    """A null field and a missing field say the same thing, and only the missing one is free.
+
+    The payload is re-sent to the model on every remaining turn, and 40% of its scalars are nulls
+    in measured sessions (column description, unit and srid). The wire spelling of null is absence.
+    """
+    payload = catalog_with.discover(query="field_001", relation="sample").model_dump()
+
+    assert not _contains_null(payload), json.dumps(payload)
+    assert payload["relations"][0]["provenance"] == "upstream", (
+        "the strip must remove nulls, not the fields that carry values"
+    )
