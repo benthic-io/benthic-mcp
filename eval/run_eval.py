@@ -305,7 +305,12 @@ async def run_case(
         else:
             error = "maximum turns reached"
     except Exception as exc:
-        error = str(exc)
+        # The type is recorded alongside the message because `str(httpx.ReadTimeout(""))` is `""`,
+        # and an error recorded as a bare `str(exc)` is falsy - so the grader's `errored` check
+        # cannot fire and a harness timeout grades as a capability failure. Measured: the
+        # `usp_cl_legislator_terms_evidence` case recorded `error: ""` against a 180s request
+        # timeout and was counted as a model failure with eight failing checks.
+        error = f"{type(exc).__name__}: {exc}"
     result = {
         "id": case["id"],
         "capability": case["capability"],

@@ -1519,3 +1519,83 @@ def test_the_rpc_operation_is_read_from_the_call_not_from_the_row_count() -> Non
     assert ok is not None and ok.ok
     bad = _check([grade.grade_case(case_rpc, wrong_op)], "rpc_operation_matches")
     assert bad is not None and not bad.ok, "a different RPC with the right row count is a different answer"
+
+
+def test_an_empty_exception_message_still_grades_as_errored_not_as_a_capability_failure() -> None:
+    """The hazard, and the fix, in one place.
+
+    `str(httpx.ReadTimeout(""))` is `""`, so an error recorded as a bare `str(exc)` is falsy and the
+    grader's `errored` check cannot fire. Measured on the end-to-end run:
+    `join_..._usp_cl_legislator_terms_evidence` recorded `error: ''` against a 180s request timeout,
+    zero events and an empty answer, and was counted as a model failure with eight failing checks.
+    Both drivers now record `f"{type(exc).__name__}: {exc}"`, so the case is reported as `errored`.
+    """
+    import httpx
+
+    # The shape run_eval's wrapper builds for a case that timed out before any tool call: one turn,
+    # no tool results, an empty finish_reason, and whatever `str(exc)` produced.
+    def recorded(error: str) -> dict[str, Any]:
+        return {"answer": "", "turns": [{"finish_reason": "", "tool_results": []}], "error": error}
+
+    bare = str(httpx.ReadTimeout(""))
+    assert not bare, "the precondition: a bare str() of this exception is falsy"
+    empty_verdict = grade.grade_case(case(capability="relation_trap", expected={"relation": "a.b"}), recorded(bare))
+    assert "errored" not in failing(empty_verdict), (
+        "an empty error must not grade as errored: the check cannot see what the harness hit"
+    )
+
+    typed = f"{type(httpx.ReadTimeout('')).__name__}: {httpx.ReadTimeout('')}"
+    assert typed, "the recorded form is truthy even when the message is empty"
+    verdict = grade.grade_case(case(capability="relation_trap", expected={"relation": "a.b"}), recorded(typed))
+    assert failing(verdict) == ["errored"], failing(verdict)
+
+
+def test_both_drivers_record_the_exception_type_with_an_empty_message() -> None:
+    """The fix is in the recording, so it is pinned where the recording happens."""
+    import httpx
+
+    for path in ("eval/run_eval.py", "eval/truth/run_suite.py"):
+        source = (ROOT / path).read_text(encoding="utf-8")
+        assert 'f"{type(exc).__name__}: {exc}"' in source, (
+            f"{path} records a bare str(exc), so an empty exception message grades as a capability failure"
+        )
+
+    exc = httpx.ReadTimeout("")
+    assert f"{type(exc).__name__}: {exc}"
+
+
+def test_the_floor_does_not_report_a_filename_as_an_invented_relation() -> None:
+    """`county_01_2009.csv` is a filename, not a table, and the floor reported it as one.
+
+    Measured on the end-to-end run: `sequential_2_usaspending_irs_ng` failed `unmanifested_relation`
+    on `county_01_2009.csv`, which the model mentioned in reasoning while describing a census file.
+    Both relations it actually named - `usaspending.agency` and `irs_ng.census_demographics` - are
+    signed. A floor that reports a filename is a floor that cries wolf, which is how a real floor
+    gets ignored.
+    """
+    relations = {"usaspending.agency", "irs_ng.census_demographics"}
+    columns = {"id", "geoid", "county", "year"}
+    case_run = {
+        "answer": "usaspending.agency and irs_ng.census_demographics answered it.",
+        "turns": [
+            {
+                "turn": 1,
+                "reasoning": "The census rows came from county_01_2009.csv.",
+                "tool_results": [],
+            }
+        ],
+    }
+
+    result = grade.grade_case(case(capability="sequential_lookup"), case_run, relations, columns)
+    assert "unmanifested_relation" not in failing(result), failing(result)
+
+
+def test_the_floor_still_reports_a_relation_nobody_signed() -> None:
+    """The seam, so the filename rule did not arrive by disabling the floor."""
+    case_run = {
+        "answer": "I read usaspending.invented_table.",
+        "turns": [{"turn": 1, "reasoning": "", "tool_results": []}],
+    }
+
+    result = grade.grade_case(case(capability="sequential_lookup"), case_run, {"a.b"}, {"x"})
+    assert "unmanifested_relation" in failing(result), failing(result)

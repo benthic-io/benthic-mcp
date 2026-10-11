@@ -394,6 +394,9 @@ def _is_a_column_alias(spelling: str, column_names: set[str] | None) -> bool:
     return relation.lower() in column_names and dataset.lower() not in {p.split(".")[0] for p in column_names}
 
 
+_FILE_SUFFIXES = (".csv", ".json", ".tsv", ".parquet", ".txt", ".gz", ".zip", ".sql", ".md", ".yml", ".yaml")
+
+
 def _looks_like_a_relation(spelling: str) -> bool:
     """Whether a dotted spelling is a relation reference rather than prose or a fragment.
 
@@ -402,6 +405,12 @@ def _looks_like_a_relation(spelling: str) -> bool:
     """
     dataset, _, relation = spelling.partition(".")
     if dataset.lower() in _NOT_A_RELATION or relation.lower() in _NOT_A_RELATION:
+        return False
+    # A file name, not a table. Measured on the end-to-end run: `sequential_2_usaspending_irs_ng`
+    # failed this floor on `county_01_2009.csv`, which the model mentioned while describing a census
+    # file it had been given. Both relations it actually named were signed. The extension is tested
+    # on the whole spelling: partition would leave `csv` in the right half.
+    if spelling.lower().endswith(_FILE_SUFFIXES):
         return False
     # A relation is written in lowercase snake case and always names a relation on the right. A dot
     # inside a capitalised token is an acronym written in prose: `SAM.gov` is the dataset's human name,
