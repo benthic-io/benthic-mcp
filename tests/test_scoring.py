@@ -102,9 +102,15 @@ def test_the_report_separates_a_case_that_was_not_measured_from_one_that_failed(
                 "capability": "c",
                 "events": [],
                 "elapsed_ms": 10,
-                "score": {"passed": False, "errored": False, "unmanifested_relation": True},
+                "score": {"passed": False, "unmanifested_relation": True},
             },
-            {"id": "c", "capability": "c", "events": [], "elapsed_ms": 10, "score": {"passed": False, "errored": True}},
+            {
+                "id": "c",
+                "capability": "c",
+                "events": [],
+                "elapsed_ms": 10,
+                "score": {"passed": False, "errored": False},
+            },
         ],
         {},
         "run",
@@ -119,6 +125,29 @@ def test_the_report_separates_a_case_that_was_not_measured_from_one_that_failed(
     # And the unmeasured case is named as such rather than listed only under failures.
     failures = report.split("## Failures", 1)[1]
     assert "### c" in failures and "not measured" in failures.lower(), failures
+
+    # `truncated` is the other infrastructure verdict. A turn cut off by the token budget is not a
+    # wrong answer either, and on 2026-10-11 one case failed this way and was rendered in the failure
+    # table as though the model had got it wrong. `grade.summarise` already counts `truncated` as
+    # not-measured, so the two reporters disagreed about the same run. In the score dict the value
+    # is the check's verdict, so a failing infrastructure check is `False`, not `True`.
+    report = run_eval.render_report(
+        [
+            {
+                "id": "d",
+                "capability": "c",
+                "events": [],
+                "elapsed_ms": 10,
+                "score": {"passed": False, "errored": None, "truncated": False},
+            }
+        ],
+        {},
+        "run",
+    )
+
+    assert "Not measured (harness error): 1" in report, report
+    assert "Failed: 0" in report, report
+    assert "| d | c | not measured |" in report, report
 
 
 def test_a_slow_but_progressing_generation_is_not_a_timeout() -> None:

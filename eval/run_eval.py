@@ -181,8 +181,15 @@ def score_case(
 def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_id: str, mode: str = "") -> str:
     # A case the harness could not finish is not a wrong answer, and folding it into `Failed` makes
     # the summary a rate over cases that were never measured. Measured: two cases timed out on a box
-    # shared with other agents and the report said `Failed: 3`.
-    unmeasured = [result for result in results if result["score"].get("errored")]
+    # shared with other agents and the report said `Failed: 3`. `truncated` counts too - a turn cut off
+    # by the token budget is not a wrong answer, and `grade.summarise` already agrees; the two
+    # reporters were giving the same run two verdicts.
+    infrastructure = {"errored", "truncated"}
+    unmeasured = [
+        result
+        for result in results
+        if not result["score"]["passed"] and any(result["score"].get(name) is False for name in infrastructure)
+    ]
     passed = sum(result["score"]["passed"] for result in results)
     failed = len(results) - passed - len(unmeasured)
     tool_calls = sum(len(result["events"]) for result in results)
@@ -208,7 +215,11 @@ def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_i
         "|---|---|---|---:|---:|---:|",
     ]
     for result in results:
-        outcome = "not measured" if result["score"].get("errored") else str(result["score"]["passed"])
+        outcome = (
+            "not measured"
+            if any(result["score"].get(n) is False for n in infrastructure)
+            else str(result["score"]["passed"])
+        )
         lines.append(
             f"| {result['id']} | {result['capability']} | {outcome} | {len(result['events'])} | {sum(not event['ok'] for event in result['events'])} | {result['elapsed_ms']} |"
         )
@@ -217,7 +228,7 @@ def render_report(results: list[dict[str, Any]], metadata: dict[str, Any], run_i
         if result["score"]["passed"]:
             continue
         lines.append(f"### {result['id']}")
-        if result["score"].get("errored"):
+        if any(result["score"].get(n) is False for n in infrastructure):
             lines.append("not measured - the harness did not finish this case, so it says nothing about the answer")
         lines.append(json.dumps(result["score"], sort_keys=True))
         if result.get("error"):
