@@ -1911,3 +1911,36 @@ cores), and queueing (the request was admitted and processing immediately - `slo
 harness driving an LLM under contention needs streaming, or it will convert "slow" into "dead" and
 then correctly report the dead thing. Grep the server log for the task's `print_timing` lines before
 concluding a request hung - it is the fastest way to tell a stall from a crawl.
+
+## 2026-10-11: "Claude is a contributor" - investigated, not reproducible, trailers removed
+
+The operator reports the GitHub web UI for `benthic-io/benthic-mcp` lists **claude** as a second
+contributor, on a hard refresh, while the operator has never used Claude. **I could not reproduce it
+from this box**, and that is worth recording precisely so the next session does not redo it:
+
+- REST `contributors` API (`anon=0` and `anon=1`): one entry, `benthic-io`, 185.
+- `/graphs/contributors` page, unauthenticated AND authenticated: zero `claude`/`anthropic` matches.
+- `contributors_list` endpoint: returns an empty `<ul>`.
+- The repo page's Contributors sidebar is a **JS-loaded skeleton** (`prc-SkeletonText`), so the
+  contributor list is never present in fetched HTML at all - grepping the page cannot find it, and a
+  clean grep there proves nothing either way.
+- Remote refs: `main` + HEAD only, no tags. All 185 commits authored AND committed by
+  `brian <brian@benthic.io>`. No PRs, no comments, no `CLAUDE.md`, no AI vendor in description/topics.
+- Every object in the repo including the 16 dangling pre-rewrite commits: one author, ever.
+  No Claude trailer has ever existed in this repository.
+
+**What I did anyway.** 11 commits carried a literal `Co-Authored-By: none` line - the residue of the
+earlier rewrite, which replaced the trailer *value* instead of deleting the line. Stripped the trailer
+lines entirely via `filter-branch --msg-filter`, force-pushed with `--force-with-lease`, deleted the
+backup refs and gc'd. Verified before pushing: **tree hash identical** (`be6b5960...`), zero file
+diff, 185 commits, every subject preserved in order, 671 tests green, no message emptied. Old tip
+`476c510`, new tip `aa7ba44`.
+
+**Clones need `git fetch origin && git reset --hard origin/main`** - every clone now has 122
+divergent commits.
+
+**If the operator still sees it, the remaining hypothesis is GitHub's cached contributor graph.**
+This repo has been force-pushed before, and that graph is a separate, lazily-recomputed backend from
+the REST endpoint - it is the one surface here I cannot read. The remedy for that is GitHub Support,
+not a further rewrite. Do not rewrite history again on the same evidence; the second rewrite would
+change 122 SHAs and fix nothing that the first did not already change.
