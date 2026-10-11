@@ -737,3 +737,24 @@ def test_ordered_max_still_refuses_to_answer_with_a_null() -> None:
             return await gn.ordered_max(client, "http://x/rel", "amt", {})
 
     assert asyncio.run(go()) is None
+
+
+def test_derived_from_records_the_request_that_was_actually_sent() -> None:
+    """The audit trail must not lie about the one detail the fix exists for.
+
+    `generate_numeric.py` sends `order={column}.desc.nullslast` (the nullslast is what stops a
+    null-heavy column answering `null` instead of the maximum) but wrote
+    `derived_from: GET ...?order={column}.desc&limit=1` into every case. 15 of 27 committed cases
+    carry the wrong string, and a reader auditing "does the server do what the generator did?"
+    reads it and concludes the server does not. The string is the only cross-check between
+    generator and server that a human ever reads; it must record the real request.
+    """
+    import json
+    from pathlib import Path
+
+    cases = json.loads(Path(ROOT, "eval", "truth", "numeric_cases.json").read_text())["cases"]
+    ordered = [case for case in cases if case["expected"].get("kind") == "ordered_max"]
+    assert ordered, "the corpus must still have ordered_max cases for this contract to mean anything"
+    for case in ordered:
+        provenance = case["derived_from"]
+        assert ".nullslast" in provenance, f"{case['id']} records a request it never sent: {provenance}"

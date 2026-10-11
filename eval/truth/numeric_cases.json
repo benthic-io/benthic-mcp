@@ -83,7 +83,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc.nullslast&limit=1",
       "derived_at": "2026-10-09T21:53:00"
     },
     {
@@ -103,7 +103,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_from": "GET prime_awards?select=total_obligation&order=total_obligation.desc.nullslast&limit=1",
       "derived_at": "2026-10-09T21:53:00"
     },
     {
@@ -123,7 +123,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET all_entities?select=award_count&order=award_count.desc&limit=1",
+      "derived_from": "GET all_entities?select=award_count&order=award_count.desc.nullslast&limit=1",
       "derived_at": "2026-10-09T21:53:00"
     },
     {
@@ -143,7 +143,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET bmf_organizations?select=f990_total_assets_recent&order=f990_total_assets_recent.desc&limit=1",
+      "derived_from": "GET bmf_organizations?select=f990_total_assets_recent&order=f990_total_assets_recent.desc.nullslast&limit=1",
       "derived_at": "2026-10-09T21:53:00"
     },
     {
@@ -163,7 +163,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET census_demographics?select=total_population&order=total_population.desc&limit=1",
+      "derived_from": "GET census_demographics?select=total_population&order=total_population.desc.nullslast&limit=1",
       "derived_at": "2026-10-09T21:53:00"
     },
     {
@@ -183,7 +183,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET state_data?select=population&order=population.desc&limit=1",
+      "derived_from": "GET state_data?select=population&order=population.desc.nullslast&limit=1",
       "derived_at": "2026-10-09T21:53:00"
     },
     {
@@ -249,7 +249,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET subawards?select=subaward_amount&order=subaward_amount.desc&limit=1",
+      "derived_from": "GET subawards?select=subaward_amount&order=subaward_amount.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:10:41"
     },
     {
@@ -269,7 +269,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET mv_district_spending?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_from": "GET mv_district_spending?select=total_obligation&order=total_obligation.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:10:41"
     },
     {
@@ -289,7 +289,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET form990_details?select=total_assets&order=total_assets.desc&limit=1",
+      "derived_from": "GET form990_details?select=total_assets&order=total_assets.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:10:41"
     },
     {
@@ -329,7 +329,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET mv_entity_spending_summary?select=total_obligation&order=total_obligation.desc&limit=1",
+      "derived_from": "GET mv_entity_spending_summary?select=total_obligation&order=total_obligation.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:40:41"
     },
     {
@@ -349,7 +349,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET form990_soi?select=total_revenue&order=total_revenue.desc&limit=1",
+      "derived_from": "GET form990_soi?select=total_revenue&order=total_revenue.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:40:41"
     },
     {
@@ -369,7 +369,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET mv_nonprofit_profile?select=recent_revenue&order=recent_revenue.desc&limit=1",
+      "derived_from": "GET mv_nonprofit_profile?select=recent_revenue&order=recent_revenue.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:40:41"
     },
     {
@@ -389,7 +389,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET mv_org_financial_health?select=avg_revenue&order=avg_revenue.desc&limit=1",
+      "derived_from": "GET mv_org_financial_health?select=avg_revenue&order=avg_revenue.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:49:35"
     },
     {
@@ -409,7 +409,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET ref_population_cong_district?select=latest_population&order=latest_population.desc&limit=1",
+      "derived_from": "GET ref_population_cong_district?select=latest_population&order=latest_population.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:49:35"
     },
     {
@@ -429,7 +429,7 @@
       "required_tools": [
         "benthic_query"
       ],
-      "derived_from": "GET ref_population_county?select=latest_population&order=latest_population.desc&limit=1",
+      "derived_from": "GET ref_population_county?select=latest_population&order=latest_population.desc.nullslast&limit=1",
       "derived_at": "2026-10-10T08:49:35"
     },
     {

@@ -398,7 +398,7 @@ async def build(args: argparse.Namespace) -> list[dict[str, Any]]:
                     },
                     "forbidden_claims": [],
                     "required_tools": ["benthic_query"],
-                    "derived_from": f"GET {relation}?select={column}&order={column}.desc&limit=1",
+                    "derived_from": f"GET {relation}?select={column}&order={column}.desc.nullslast&limit=1",
                     "derived_at": derived_at,
                 }
             )
