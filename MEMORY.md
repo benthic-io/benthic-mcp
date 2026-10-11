@@ -1822,15 +1822,48 @@ indistinguishable from mine except that I know which tmux sessions I started.
 
 - Do NOT restart `llama-server`, kill its requests, or restart `deploy.sh` (which restarts both
   services). Someone else's inference would be abandoned mid-generation. `benthic-mcp` is mine.
-- `nvidia-smi` fails from this account, so GPU state is not observable here - another reason not to
-  guess at contention from the outside; ask or check tmux instead.
 - `systemctl is-active` (system scope) reports these services **inactive** while `systemctl --user
   is-active` reports them **active**. They are user-scope units. The system-scope reading is not
   evidence of a down server and should not be quoted as one.
 - A request the client abandoned keeps running server-side. Right after the retry I observed slot 0
-  still processing a 93,587-prompt-token task with no client alive to receive it. That work consumes
-  inference capacity that other agents then queue behind, so a client timeout can *cause* the
-  slowness the next case observes.
+still processing a 93,587-prompt-token task with no client alive to receive it. That work consumes
+inference capacity that other agents then queue behind, so a client timeout can *cause* the
+slowness the next case observes.
+
+### I repeated a documented mistake, and what the GPU actually says
+
+While attributing the two timeouts to contention I wrote that `nvidia-smi` failing meant GPU state
+was not observable here. MEMORY.md line 486 already records that exact error and why it matters:
+*"I called it 'no GPU present' and consequently claimed 'GPU idle' having never measured GPU
+utilisation at all."* The tools are `rocm-smi` and `amd-smi`, both in `/usr/bin`. They need the ROCm
+env the unit file already exports:
+
+    export LD_LIBRARY_PATH=$HOME/local/rocm-gfx906/lib:/opt/rocm/lib:/opt/rocm/lib/llvm/lib:$LD_LIBRARY_PATH
+    export GGML_CUDA_DISABLE_GRAPHS=1 HSA_OVERRIDE_GFX_VERSION=9.0.6
+
+`rocm-smi --showuse --showmeminfo vram --showpids --showpower` works. `amd-smi` loads but returns
+N/A for usage/power (POWER_MANAGEMENT: DISABLED) and its temperature reads differ slightly from
+rocm-smi's. `radeontop` is a live terminal view, wrong tool for a recorded measurement. Use rocm-smi.
+
+**Measured state, Radeon VII confirmed (device 0x66af, Vega 20, gfx906, 16 GB HBM2):**
+
+- One process on the GPU: `llama-server` PID 817610, **16.46 GB of 17.16 GB VRAM - 95.9% full**.
+- **CU occupancy 9%, 50 W socket power, and rocm-smi warns the GPU is in a low-power state** - while
+  serving a 35B MoE. That is memory-starved, not compute-saturated.
+- Process RSS is **23.76 GB against 16.46 GB of VRAM**, so roughly 7 GB - the KV cache - is living in
+  host RAM. The server logged `failed to fit params to free device memory: n_gpu_layers already set
+  by user to 99, abort` at startup. `--ctx-size 524288 -np 2` gives `n_ctx_slot = 262144`.
+- Measured throughput: **19.5 tok/s at a 155,469-token prompt**, task 12803.
+
+So the timeouts are not mainly "another agent is using the box". The box is configured with far more
+context than 16 GB of VRAM can hold, and the model runs partly in host RAM. **Contention is real but
+secondary; the configuration is the standing cause.** A client timeout here is expected, and the
+right response is a smaller `--ctx-size`, fewer slots, or a smaller quant - not a longer client
+timeout.
+
+Beware `llama-fit-params` while the server is running: it fits against *currently free* VRAM, so with
+706 MB free every configuration returns `-ngl 0`. That number said nothing about the real limit and
+nearly became a false finding.
 
 Note: the 13:57 deploy that ran the canary on `caa76cf` restarted llama-server under the old
 "restart both instances" rule, before this was known. It completed and canary passed; the cost, if
