@@ -1830,7 +1830,7 @@ still processing a 93,587-prompt-token task with no client alive to receive it. 
 inference capacity that other agents then queue behind, so a client timeout can *cause* the
 slowness the next case observes.
 
-### I repeated a documented mistake, and what the GPU actually says
+### I repeated a documented mistake, then built a wrong diagnosis on top of it
 
 While attributing the two timeouts to contention I wrote that `nvidia-smi` failing meant GPU state
 was not observable here. MEMORY.md line 486 already records that exact error and why it matters:
@@ -1845,25 +1845,33 @@ env the unit file already exports:
 N/A for usage/power (POWER_MANAGEMENT: DISABLED) and its temperature reads differ slightly from
 rocm-smi's. `radeontop` is a live terminal view, wrong tool for a recorded measurement. Use rocm-smi.
 
+**Then I diagnosed a problem that does not exist.** From one `rocm-smi` snapshot I concluded the box
+was VRAM-starved: "9% CU occupancy, 50 W, low-power state, memory-starved." Three separate errors.
+(1) `CU OCCUPANCY` in `--showpids` is a per-process counter that sits low during memory-bound decode;
+it is not `GPU use %`, and I read the two as the same thing. (2) It was one sample - repeated
+sampling shows **38-66% use, 43-93 W**. (3) The 23.76 GB RSS against 16.46 GB of VRAM is not a
+spilled KV cache: `-ncmoe 31` keeps 31 layers of MoE weights on CPU on purpose, and that is the
+operator's tuned fix for three earlier wedges. Preallocated VRAM at 95.9% is the designed steady
+state, not a fault.
+
+The shape of the mistake is the same both times: **a number taken without a baseline, read as a
+finding.** `nvidia-smi` failing became "no GPU". One 9% sample became "starved". Sample a metric
+several times, and check what the counter actually measures, before writing a conclusion into memory
+that the next session will inherit as fact.
+
 **Measured state, Radeon VII confirmed (device 0x66af, Vega 20, gfx906, 16 GB HBM2):**
 
 - One process on the GPU: `llama-server` PID 817610, **16.46 GB of 17.16 GB VRAM - 95.9% full**.
-- **CU occupancy 9%, 50 W socket power, and rocm-smi warns the GPU is in a low-power state** - while
-  serving a 35B MoE. That is memory-starved, not compute-saturated.
-- Process RSS is **23.76 GB against 16.46 GB of VRAM**, so roughly 7 GB - the KV cache - is living in
-  host RAM. The server logged `failed to fit params to free device memory: n_gpu_layers already set
-  by user to 99, abort` at startup. `--ctx-size 524288 -np 2` gives `n_ctx_slot = 262144`.
-- Measured throughput: **19.5 tok/s at a 155,469-token prompt**, task 12803.
+- **That 95.9% is preallocated KV cache, not a problem.** `--ctx-size 524288 -np 2` reserves
+  `n_ctx_slot = 262144` per slot up front, and each slot's cache is reserved whether or not that
+  many tokens are ever used. A sequential eval like mine touches one slot. The headroom that does
+  matter is the operator's `-ncmoe 31` (see the wedge section above), and that is already tuned.
+- GPU utilisation sampled repeatedly: **38-66% use, 43-93 W**. The GPU is busy, not starved.
+- Measured throughput: **19.5 tok/s at a 155,469-token prompt** (task 12803).
 
-So the timeouts are not mainly "another agent is using the box". The box is configured with far more
-context than 16 GB of VRAM can hold, and the model runs partly in host RAM. **Contention is real but
-secondary; the configuration is the standing cause.** A client timeout here is expected, and the
-right response is a smaller `--ctx-size`, fewer slots, or a smaller quant - not a longer client
-timeout.
-
-Beware `llama-fit-params` while the server is running: it fits against *currently free* VRAM, so with
-706 MB free every configuration returns `-ngl 0`. That number said nothing about the real limit and
-nearly became a false finding.
+Beware `llama-fit-params` while the server is running: it fits against *currently free* VRAM, so
+with ~700 MB free it returns `-ngl 0` for **every** configuration. That number measures the running
+server's occupancy, not the machine's capability, and nearly became a false finding.
 
 Note: the 13:57 deploy that ran the canary on `caa76cf` restarted llama-server under the old
 "restart both instances" rule, before this was known. It completed and canary passed; the cost, if
