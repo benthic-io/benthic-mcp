@@ -1713,3 +1713,14 @@ Session net: count(column) pushdown, exclude_none promoted after an honest A/B (
 payload bytes, ~a third of a query-light session, zero measured accuracy cost), fan-out warning +
 grader floor fix, answer-rate refreshed at 30/30 answered with 2.83 mean calls and zero repeated
 targets. Baselines: main 30/30 in 1509s (one case marginal at ~1/3, now ~2/3), numeric 21/21 in 480s.
+
+## 2026-10-11: fan-out collapse verified 3/3, corpus gains count-non-null
+
+The fan-out collapse (f4d69ef) verified live: the marginal join case passes 3/3 and the evidence
+case 3/3, against a 3/9 historical rate. The collapse - one representative row plus the exact
+row_count - removed the trigger (the wall of identical rows) that the warning alone did not.
+
+The corpus gained a fourth derivation kind, count_nonnull (a960714): "how many rows have a non-null
+X", via the raw not.is.null HEAD the count(column) pushdown sends. Six cases, all on relations over
+or near the scan limit, every value psql-cross-checked on thunkah before committing. 27 cases total;
+the numeric-suite run measures them now.
