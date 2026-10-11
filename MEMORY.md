@@ -1732,3 +1732,31 @@ exact psql-verified numbers (1,726,754 / 762,478 / 97,312 / 644,145 / 9,948,273 
 the count(column) pushdown is live-measured, not just unit-tested. The fan-out collapse made the
 one-in-three join case pass 3/3, and the evidence case 3/3, so the main suite's marginal case is
 gone rather than documented. Numeric capability: 27 cases / 15 relations / 4 kinds, 100% measured.
+
+## 2026-10-11: one grader; the canary runs through it end to end
+
+run_eval and the truth grader disagreed on four of thirty cases because run_eval carried its own
+legacy scorer. Retiring it outright would have dropped the canary's model-free server-bug gate: those
+checks read the tool RESULTS while the truth grader reads the model's prose, and that is a different
+detection property. So the result- and route-level checks were ported into grade.py as a second family
+beside the answer-level ones - server_right_count, server_right_keys, server_join_reliability,
+rpc_server_row_count, rpc_operation_matches, expected_relation_retrieved,
+historical_relation_queried, sequential_sources_queried, signed_hops_walked, first_hop_attempted,
+required_route_used. Twelve failing-first contracts.
+
+`_result_payload` reads structured or text and treats an EMPTY structured as "the harness stored
+nothing", not "the result says nothing" - without that the wrapper's `structured={}` erased every
+result and trend rescoring read silence.
+
+The port almost shipped a false positive: re-grading the stored main-suite run showed both
+relation_trap cases shifting to fail historical_relation_queried, because their question asks which
+relation the caller WOULD read and the model correctly never queried it. That is exactly the
+2-of-4 disagreement where the truth grader was right and the legacy scorer wrong. The check now fires
+only where the case asserts a result. Re-grade: 30/30, zero shifts.
+
+The canary passes 6/6 through the reconciled end-to-end path, which is the point: the model-free gate
+and the graded runs are now one instrument.
+
+Retired deliberately: strict-vs-legacy answered (two scorers, one answer), and generic
+`required_tools` beyond the trio the graders already enforce - the decline case in the numeric suite
+declines without calling anything, which a generic required-tools check would have failed.
