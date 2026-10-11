@@ -829,6 +829,39 @@ def test_the_floor_still_rejects_an_invented_relation_through_the_runner() -> No
     assert floor and not floor[0].ok, floor
 
 
+def test_the_floor_ignores_the_syntax_vocabulary_the_docs_advertise() -> None:
+    """`column=operator.value` and `order=column.desc.nullslast` are syntax templates, not relations.
+
+    A model quoting them in reasoning is not inventing a table, but the floor reported
+    `operator.value` as invented across every copy of the fan-out case - three transcripts failed
+    `unmanifested_relation` for a relation nobody named, which converts a real floor into noise.
+    """
+    run_suite = _floor_suite()
+    suite_case = {
+        "id": "m",
+        "capability": "multi_step_join",
+        "question": "q",
+        "expected": {"join_path": {"left": "a.b", "left_column": "uei", "right": "c.d", "right_column": "uei"}},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_join"],
+    }
+    recorded = {
+        "id": "m",
+        "answer": "the join returned 127 rows",
+        "turns": [
+            {
+                "reasoning": (
+                    'The format is "column=operator.value" for filters and "order=column.desc.nullslast" for order.'
+                ),
+                "tool_results": [{"name": "benthic_join", "args": {}, "ok": True, "text": "{}"}],
+            }
+        ],
+    }
+    results = run_suite.grade_runs([recorded], [suite_case], {"a.b", "c.d"}, {"state", "uei"})
+    floor = [c for r in results for c in r.checks if c.name == "unmanifested_relation"]
+    assert floor and floor[0].ok, f"the floor rejected syntax vocabulary: {[c.found for c in floor]}"
+
+
 # --------------------------------------------------------------------------------------------
 # A case must ask for what its check tests, or the measurement is unattainable.
 

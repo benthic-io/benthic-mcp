@@ -231,8 +231,31 @@ def check_manifested_relations(
 # Filter syntax and abbreviations all contain a dotted pair that is not a relation. The first version of
 # this check matched any dotted token and reported `eq.senate`, `not.is` and `u.s` as invented
 # relations - `u.s` is what falls out of matching inside `usp_cl.legislator_terms`. A floor that reports
-# relations nobody named is worse than no floor, because it converts real failures into noise.
-_NOT_A_RELATION = {"in", "is", "not", "eq", "neq", "gt", "gte", "lt", "lte", "like", "null", "u", "s"}
+# relations nobody named is worse than no floor, because it converts real failures into noise. The
+# second failure was the syntax vocabulary the docs advertise - a model quoting `column=operator.value`
+# or `order=column.desc.nullslast` in reasoning was reported as inventing `operator.value`.
+_NOT_A_RELATION = {
+    "in",
+    "is",
+    "not",
+    "eq",
+    "neq",
+    "gt",
+    "gte",
+    "lt",
+    "lte",
+    "like",
+    "null",
+    "u",
+    "s",
+    "operator",
+    "value",
+    "column",
+    "desc",
+    "asc",
+    "nullslast",
+    "nullsfirst",
+}
 
 
 def _relation_spellings(text: str) -> set[str]:
