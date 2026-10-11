@@ -12,6 +12,7 @@ that are known-good and known-bad.
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -29,9 +30,22 @@ _spec.loader.exec_module(grade)
 ToolCall = tuple[str, dict[str, Any], bool]
 
 
-def run(answer: str, reasoning: str = "", tools: list[ToolCall] | None = None) -> dict[str, Any]:
-    """Build a case_run in the shape sweep.py writes."""
-    results = [{"name": name, "args": args, "ok": ok, "text": "{}"} for name, args, ok in (tools or [])]
+def run(
+    answer: str,
+    reasoning: str = "",
+    tools: list[ToolCall] | None = None,
+    payload: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a case_run in the shape sweep.py writes. `payload` is the structured result of every tool."""
+    results = [
+        {
+            "name": name,
+            "args": args,
+            "ok": ok,
+            "text": json.dumps(payload, sort_keys=True) if payload is not None else "{}",
+        }
+        for name, args, ok in (tools or [])
+    ]
     return {
         "answer": answer,
         "turns": [{"turn": 1, "reasoning": reasoning, "tool_results": results}],
@@ -76,7 +90,7 @@ def test_a_wrong_relation_is_a_failure_not_a_pass() -> None:
 def test_a_missing_column_is_a_failure() -> None:
     result = grade.grade_case(
         case(capability="discovery", expected={"relation": "a.b", "columns": ["x", "y"]}),
-        run("a.b has x.", tools=[("benthic_discover", {}, True)]),
+        run("a.b has x.", tools=[("benthic_discover", {}, True)], payload={"relations": [{"source": "a.b"}]}),
     )
     assert not result.passed
     assert failing(result) == ["names_column:y"]
@@ -127,7 +141,7 @@ def test_the_summary_counts_a_capability_rate_over_measured_cases_only() -> None
         )
 
     def ok_run() -> dict[str, Any]:
-        return run("a.b holds it", tools=[("benthic_discover", {}, True)])
+        return run("a.b holds it", tools=[("benthic_discover", {}, True)], payload={"relations": [{"source": "a.b"}]})
 
     results = [
         grade.grade_case(graded("a"), ok_run()),
@@ -438,7 +452,11 @@ def test_a_box_the_question_states_is_compared_exactly() -> None:
     )
     exact = grade.grade_case(
         c,
-        run("1 row", tools=[("benthic_rpc", dict(BBOX, operation="districts_in_bbox"), True)]),
+        run(
+            "1 row",
+            tools=[("benthic_rpc", dict(BBOX, operation="districts_in_bbox"), True)],
+            payload={"row_count": 1, "rows": [{}]},
+        ),
     )
     assert exact.passed, [c_.name for c_ in exact.failures()]
 
@@ -501,7 +519,9 @@ def trap_case() -> dict[str, Any]:
 
 
 def trap_result(answer: str) -> Any:
-    return grade.grade_case(trap_case(), run(answer, tools=[("benthic_query", {}, True)]))
+    return grade.grade_case(
+        trap_case(), run(answer, tools=[("benthic_query", {"source": "usp_cl.legislator_terms"}, True)])
+    )
 
 
 def test_naming_the_trap_in_order_to_reject_it_is_not_relying_on_it() -> None:
@@ -600,7 +620,10 @@ def test_rpc_row_count_must_be_reported() -> None:
 
 def test_summary_reports_per_capability_and_no_overall_rate() -> None:
     results = [
-        grade.grade_case(case(id="a", capability="discovery", expected={"relation": "x.y"}), run("x.y")),
+        grade.grade_case(
+            case(id="a", capability="discovery", expected={"relation": "x.y"}),
+            run("x.y", tools=[("benthic_discover", {}, True)], payload={"relations": [{"source": "x.y"}]}),
+        ),
         grade.grade_case(case(id="b", capability="discovery", expected={"relation": "x.y"}), run("")),
         grade.grade_case(case(id="c", capability="find_district_rpc", expected={}), run("")),
     ]
@@ -614,7 +637,7 @@ def test_summary_reports_per_capability_and_no_overall_rate() -> None:
     assert discovery["cases"] == 2
     assert discovery["passed"] == 1
     assert discovery["rate"] == 0.5
-    assert discovery["failed_checks"] == {"names_expected_relation": 1}
+    assert discovery["failed_checks"] == {"names_expected_relation": 1, "expected_relation_retrieved": 1}
     assert discovery["failed"] == ["b"]
     assert discovery["measured"] == 2 and discovery["not_measured"] == 0
     assert summary["by_capability"]["find_district_rpc"]["passed"] == 0
@@ -625,7 +648,10 @@ def test_summary_names_which_check_failed_most() -> None:
     """A failure mode, not a case list. Which check is broken says where the work is."""
     results = [grade.grade_case(case(id=str(i), expected={"relation": "x.y"}), run("")) for i in range(3)]
     summary = grade.summarise(results)
-    assert summary["by_capability"]["discovery"]["failed_checks"] == {"names_expected_relation": 3}
+    assert summary["by_capability"]["discovery"]["failed_checks"] == {
+        "names_expected_relation": 3,
+        "expected_relation_retrieved": 3,
+    }
 
 
 # --------------------------------------------------------------------------------------------
@@ -915,7 +941,21 @@ def test_the_relation_trap_check_still_tests_rejection_rather_than_selection() -
             "answer": (
                 "usp_cl.legislator_terms is the source. usp_cl.mv_current_lawmakers holds only "
                 "present-day rows, so it cannot answer a question about the 117th Congress."
-            )
+            ),
+            "turns": [
+                {
+                    "turn": 1,
+                    "reasoning": "",
+                    "tool_results": [
+                        {
+                            "name": "benthic_query",
+                            "args": {"source": "usp_cl.legislator_terms"},
+                            "ok": True,
+                            "text": "{}",
+                        }
+                    ],
+                }
+            ],
         },
     )
     assert [c.name for c in rejects.checks if not c.ok] == [], [c.name for c in rejects.checks if not c.ok]
@@ -1052,3 +1092,404 @@ def test_an_unarmed_floor_stays_silent() -> None:
     """
     checks = grade.grade_case(_floor_case(), {"answer": "zero rows"}).checks
     assert [c.name for c in checks if c.name == "manifest_floor_coverage"] == []
+
+
+# --------------------------------------------------------------------------------------------
+# The tool-trace family. The canary's model-free server-bug detection reads the tool RESULTS,
+# not the model's prose: a server that returns the wrong row count must flip a check even when
+# the model faithfully reports what it was given. These checks were the legacy scorer's, ported
+# into the one grader so an end-to-end run and a direct run grade alike.
+
+
+def _result_run(answer: str, tools: list[tuple[str, dict[str, Any], bool, dict[str, Any]]]) -> dict[str, Any]:
+    return {
+        "answer": answer,
+        "turns": [
+            {
+                "turn": 1,
+                "reasoning": "",
+                "tool_results": [
+                    {"name": name, "args": args, "ok": ok, "text": json.dumps(payload, sort_keys=True)}
+                    for name, args, ok, payload in tools
+                ],
+            }
+        ],
+    }
+
+
+def _check(results: list[Any], name: str) -> Any:
+    return next((c for r in results for c in r.checks if c.name == name), None)
+
+
+JOIN_CASE = {
+    "id": "j",
+    "capability": "identifier_partial_join",
+    "question": "q",
+    "expected": {
+        "join_path": {
+            "left": "usaspending.all_entities",
+            "left_column": "congressional_district",
+            "right": "usp_cl.legislator_terms",
+            "right_column": "district",
+            "reliability": "partial",
+        },
+        "right_count": 127,
+    },
+    "forbidden_claims": [],
+    "required_tools": ["benthic_join"],
+}
+
+JOIN_ARGS = {
+    "left_source": "usaspending.all_entities",
+    "right_source": "usp_cl.legislator_terms",
+    "left_column": "congressional_district",
+    "right_column": "district",
+}
+
+
+def test_the_join_result_right_count_is_read_from_the_server_result() -> None:
+    """A server returning 127 rows must satisfy right_count: 127; one returning 0 must not."""
+    joined = _result_run(
+        "The join returned 127 rows.",
+        [
+            (
+                "benthic_join",
+                JOIN_ARGS,
+                True,
+                {"row_count": 127, "rows": [{"right.district": 3}] * 127, "truncated": False},
+            )
+        ],
+    )
+    empty = _result_run(
+        "The join returned nothing.",
+        [("benthic_join", JOIN_ARGS, True, {"row_count": 0, "rows": [], "truncated": False})],
+    )
+
+    ok = _check([grade.grade_case(JOIN_CASE, joined)], "server_right_count")
+    assert ok is not None and ok.ok, "the server's 127 rows must satisfy right_count: 127"
+    bad = _check([grade.grade_case(JOIN_CASE, empty)], "server_right_count")
+    assert bad is not None and not bad.ok, "the server's 0 rows must fail right_count: 127"
+
+
+def test_a_zero_right_count_requires_every_join_call_to_come_back_empty() -> None:
+    """A zero expectation guards a too-wide join, so one empty call must not launder a matched one."""
+    zero_case = {**JOIN_CASE, "expected": {**JOIN_CASE["expected"], "right_count": 0}}
+    clean = _result_run(
+        "Nothing joined.", [("benthic_join", JOIN_ARGS, True, {"row_count": 0, "rows": [], "truncated": False})]
+    )
+    leaked = _result_run(
+        "Nothing joined.",
+        [
+            ("benthic_join", JOIN_ARGS, True, {"row_count": 0, "rows": [], "truncated": False}),
+            (
+                "benthic_join",
+                JOIN_ARGS,
+                True,
+                {"row_count": 3, "rows": [{"right.district": 3}] * 3, "truncated": False},
+            ),
+        ],
+    )
+
+    ok = _check([grade.grade_case(zero_case, clean)], "server_right_count")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(zero_case, leaked)], "server_right_count")
+    assert bad is not None and not bad.ok, "one empty call must not carry a call that matched rows"
+
+
+def test_the_right_count_tolerates_a_filled_limit_when_the_result_is_truncated() -> None:
+    """A bounded query that fills its limit answered as far as it was asked to."""
+    case_127 = {**JOIN_CASE, "expected": {**JOIN_CASE["expected"], "right_count": 1000}}
+    filled = _result_run(
+        "The join returned 100 rows of more.",
+        [
+            (
+                "benthic_join",
+                {**JOIN_ARGS, "limit": 100},
+                True,
+                {"row_count": 100, "rows": [{}] * 100, "truncated": True},
+            )
+        ],
+    )
+    ok = _check([grade.grade_case(case_127, filled)], "server_right_count")
+    assert ok is not None and ok.ok, "a truncated result at the caller's own limit is not a server defect"
+
+
+def test_the_join_result_right_keys_are_compared_as_distinct_values() -> None:
+    """right_keys_distinct is a set of distinct right-hand values, not a per-row list."""
+    key_case = {
+        **JOIN_CASE,
+        "expected": {
+            **JOIN_CASE["expected"],
+            "join_path": {**JOIN_CASE["expected"]["join_path"], "right_column": "uei"},
+            "right_keys_distinct": ["A", "B"],
+        },
+    }
+    rows = [{"right.uei": "A"}, {"right.uei": "B"}, {"right.uei": "B"}]
+    good = _result_run(
+        "A and B joined.", [("benthic_join", JOIN_ARGS, True, {"row_count": 3, "rows": rows, "truncated": False})]
+    )
+    missing = _result_run(
+        "Only A joined.",
+        [("benthic_join", JOIN_ARGS, True, {"row_count": 1, "rows": [{"right.uei": "A"}], "truncated": False})],
+    )
+
+    ok = _check([grade.grade_case(key_case, good)], "server_right_keys")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(key_case, missing)], "server_right_keys")
+    assert bad is not None and not bad.ok, "a missing distinct key value is a wrong result"
+
+
+def test_the_join_reliability_is_read_from_the_server_result() -> None:
+    """The signed edge's reliability is a field on the result, not a phrase in the answer."""
+    true_result = _result_run(
+        "Partial join.",
+        [("benthic_join", JOIN_ARGS, True, {"row_count": 127, "joins": [{"reliability": "partial"}]})],
+    )
+    wrong_result = _result_run(
+        "Partial join.",
+        [("benthic_join", JOIN_ARGS, True, {"row_count": 127, "joins": [{"reliability": "reliable"}]})],
+    )
+
+    ok = _check([grade.grade_case(JOIN_CASE, true_result)], "server_join_reliability")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(JOIN_CASE, wrong_result)], "server_join_reliability")
+    assert bad is not None and not bad.ok, "a result reporting the wrong reliability is a wrong result"
+
+
+RPC_CASE = {
+    "id": "r",
+    "capability": "districts_in_bbox_rpc",
+    "question": "q",
+    "expected": {"operation": "districts_in_bbox", "arguments": {"min_lat": 38.9}, "row_count": 1},
+    "forbidden_claims": [],
+    "required_tools": ["benthic_rpc"],
+}
+
+
+def test_the_rpc_row_count_is_read_from_the_server_result() -> None:
+    """The RPC computes the answer server-side, so the result's row_count is the check."""
+    one = _result_run(
+        "One district.",
+        [
+            (
+                "benthic_rpc",
+                {"operation": "districts_in_bbox", "min_lat": 38.9},
+                True,
+                {"row_count": 1, "rows": [{"district": 3}]},
+            )
+        ],
+    )
+    none = _result_run(
+        "No districts.",
+        [("benthic_rpc", {"operation": "districts_in_bbox", "min_lat": 38.9}, True, {"row_count": 0, "rows": []})],
+    )
+
+    ok = _check([grade.grade_case(RPC_CASE, one)], "rpc_server_row_count")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(RPC_CASE, none)], "rpc_server_row_count")
+    assert bad is not None and not bad.ok, "the server's 0 rows must fail row_count: 1"
+
+
+def test_a_zero_rpc_expectation_asserts_no_call_invented_rows() -> None:
+    """A zero expectation guards an RPC that invents rows, so every answering call must be empty."""
+    zero_case = {**RPC_CASE, "expected": {**RPC_CASE["expected"], "row_count": 0}}
+    invented = _result_run(
+        "No districts.",
+        [
+            (
+                "benthic_rpc",
+                {"operation": "districts_in_bbox", "min_lat": 38.9},
+                True,
+                {"row_count": 2, "rows": [{"district": 3}, {"district": 4}]},
+            )
+        ],
+    )
+    bad = _check([grade.grade_case(zero_case, invented)], "rpc_server_row_count")
+    assert bad is not None and not bad.ok, "a call returning rows must fail a zero expectation"
+
+
+# --------------------------------------------------------------------------------------------
+# The rest of the tool-trace family: route checks the legacy scorer carried and the truth
+# grader did not.
+
+
+def test_the_discover_result_must_actually_carry_the_expected_relation() -> None:
+    """Naming the relation is not retrieving it; the discover result is the evidence."""
+    discovery_case = {
+        "id": "d",
+        "capability": "discovery",
+        "question": "q",
+        "expected": {"relation": "irs_ng.bmf_organizations", "columns": ["ein"]},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_discover"],
+    }
+    found = _result_run(
+        "The relation is irs_ng.bmf_organizations.",
+        [("benthic_discover", {"query": "x"}, True, {"relations": [{"source": "irs_ng.bmf_organizations"}]})],
+    )
+    not_found = _result_run(
+        "The relation is irs_ng.bmf_organizations.",
+        [("benthic_discover", {"query": "x"}, True, {"relations": [{"source": "samer.sam_registrations"}]})],
+    )
+
+    ok = _check([grade.grade_case(discovery_case, found)], "expected_relation_retrieved")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(discovery_case, not_found)], "expected_relation_retrieved")
+    assert bad is not None and not bad.ok, "an answer claiming a relation discovery never returned must fail"
+
+
+def test_the_trap_requires_the_historical_relation_to_have_been_queried() -> None:
+    """The answer can name the historical relation while the query went to the trap."""
+    trap_case_dict = {
+        "id": "t",
+        "capability": "relation_trap",
+        "question": "q",
+        "expected": {"relation": "usp_cl.legislator_terms", "trap": "usp_cl.mv_current_lawmakers"},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_query"],
+    }
+    historical = _result_run(
+        "The answer is in usp_cl.legislator_terms.",
+        [("benthic_query", {"source": "usp_cl.legislator_terms"}, True, {"row_count": 1})],
+    )
+    trapped = _result_run(
+        "The answer is in usp_cl.legislator_terms.",
+        [("benthic_query", {"source": "usp_cl.mv_current_lawmakers"}, True, {"row_count": 1})],
+    )
+
+    ok = _check([grade.grade_case(trap_case_dict, historical)], "historical_relation_queried")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(trap_case_dict, trapped)], "historical_relation_queried")
+    assert bad is not None and not bad.ok, "querying only the trap must fail, whatever the prose says"
+
+
+def test_sequential_lookup_requires_both_sources_to_have_been_queried() -> None:
+    sequential_case = {
+        "id": "s",
+        "capability": "sequential_lookup",
+        "question": "q",
+        "expected": {"left": "usaspending.all_entities", "right": "samer.sam_registrations"},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_query"],
+    }
+    both = _result_run(
+        "Both lookups done.",
+        [
+            ("benthic_query", {"source": "usaspending.all_entities"}, True, {"row_count": 1}),
+            ("benthic_query", {"source": "samer.sam_registrations"}, True, {"row_count": 1}),
+        ],
+    )
+    one = _result_run(
+        "One lookup done.",
+        [("benthic_query", {"source": "usaspending.all_entities"}, True, {"row_count": 1})],
+    )
+
+    ok = _check([grade.grade_case(sequential_case, both)], "sequential_sources_queried")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(sequential_case, one)], "sequential_sources_queried")
+    assert bad is not None and not bad.ok, "a sequential lookup that never ran the second source must fail"
+
+
+EDGE_ONE = {"left": "a.b", "left_column": "uei", "right": "c.d", "right_column": "uei"}
+EDGE_TWO = {"left": "c.d", "left_column": "duns", "right": "e.f", "right_column": "duns"}
+
+
+def _multi_step_case(unanswerable: bool) -> dict[str, Any]:
+    return {
+        "id": "m",
+        "capability": "multi_step_join",
+        "question": "q",
+        "expected": {"paths": [EDGE_ONE, EDGE_TWO]},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_join"],
+        **({"unanswerable": True} if unanswerable else {}),
+    }
+
+
+def _hop(edge: dict[str, Any], *, reverse: bool = False) -> tuple[str, dict[str, Any], bool, dict[str, Any]]:
+    args = (
+        {
+            "left_source": edge["right"],
+            "left_column": edge["right_column"],
+            "right_source": edge["left"],
+            "right_column": edge["left_column"],
+        }
+        if reverse
+        else {
+            "left_source": edge["left"],
+            "left_column": edge["left_column"],
+            "right_source": edge["right"],
+            "right_column": edge["right_column"],
+        }
+    )
+    return ("benthic_join", args, True, {"row_count": 1})
+
+
+def test_a_two_hop_chain_requires_both_hops_to_have_been_walked() -> None:
+    walked = _result_run("Both hops walked.", [_hop(EDGE_ONE), _hop(EDGE_TWO)])
+    reversed_hops = _result_run("Both hops walked.", [_hop(EDGE_TWO), _hop(EDGE_ONE, reverse=True)])
+    one_hop = _result_run("One hop walked.", [_hop(EDGE_ONE)])
+
+    ok = _check([grade.grade_case(_multi_step_case(False), walked)], "signed_hops_walked")
+    assert ok is not None and ok.ok
+    reversed_ok = _check([grade.grade_case(_multi_step_case(False), reversed_hops)], "signed_hops_walked")
+    assert reversed_ok is not None and reversed_ok.ok, "the direction of a hop is not the hop's identity"
+    bad = _check([grade.grade_case(_multi_step_case(False), one_hop)], "signed_hops_walked")
+    assert bad is not None and not bad.ok, "one hop of two must fail"
+
+
+def test_an_unanswerable_chain_requires_the_first_hop_to_have_been_attempted() -> None:
+    """The chain is provably empty, so the correct run attempts the first hop and stops."""
+    attempted = _result_run("The first hop was attempted and the chain stops there.", [_hop(EDGE_ONE)])
+    not_attempted = _result_run("The chain stops there.", [])
+
+    ok = _check([grade.grade_case(_multi_step_case(True), attempted)], "first_hop_attempted")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(_multi_step_case(True), not_attempted)], "first_hop_attempted")
+    assert bad is not None and not bad.ok, "an unanswerable chain still has to be probed at its first hop"
+
+
+def test_a_case_with_alternate_routes_requires_one_of_them_to_have_been_walked() -> None:
+    """`required_tools_any` accepts either route; walking neither must fail however confident the answer."""
+    routes_case = {
+        "id": "u",
+        "capability": "unsigned_join_rejection",
+        "question": "q",
+        "expected": {"left": "a.b", "right": "c.d"},
+        "forbidden_claims": [],
+        "required_tools": [],
+        "required_tools_any": [["benthic_discover"], ["benthic_playbook"]],
+    }
+    by_discover = _result_run("No signed path exists.", [("benthic_discover", {}, True, {"relations": []})])
+    by_playbook = _result_run("No signed path exists.", [("benthic_playbook", {}, True, {})])
+    by_neither = _result_run("No signed path exists.", [])
+
+    assert _check([grade.grade_case(routes_case, by_discover)], "required_route_used").ok
+    assert _check([grade.grade_case(routes_case, by_playbook)], "required_route_used").ok
+    bad = _check([grade.grade_case(routes_case, by_neither)], "required_route_used")
+    assert bad is not None and not bad.ok, "an assertion of absence with no lookup is a hallucination"
+
+
+def test_the_rpc_operation_is_read_from_the_call_not_from_the_row_count() -> None:
+    """A different RPC returning the same number of rows is not an answer."""
+    case_rpc = {
+        "id": "r",
+        "capability": "districts_in_bbox_rpc",
+        "question": "q",
+        "expected": {"operation": "districts_in_bbox", "arguments": {"min_lat": 38.9}, "row_count": 1},
+        "forbidden_claims": [],
+        "required_tools": ["benthic_rpc"],
+    }
+    right = _result_run(
+        "One district.",
+        [("benthic_rpc", {"operation": "districts_in_bbox", "min_lat": 38.9}, True, {"row_count": 1})],
+    )
+    wrong_op = _result_run(
+        "One district.",
+        [("benthic_rpc", {"operation": "find_district", "min_lat": 38.9}, True, {"row_count": 1})],
+    )
+
+    ok = _check([grade.grade_case(case_rpc, right)], "rpc_operation_matches")
+    assert ok is not None and ok.ok
+    bad = _check([grade.grade_case(case_rpc, wrong_op)], "rpc_operation_matches")
+    assert bad is not None and not bad.ok, "a different RPC with the right row count is a different answer"

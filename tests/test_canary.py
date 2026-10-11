@@ -9,11 +9,20 @@ Re-verified against the signed manifest rather than trusted, on the same reasoni
 regression, because the regression and the staleness are indistinguishable.
 """
 
+import importlib.util
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
-CANARY = Path(__file__).resolve().parents[1] / "eval" / "canary" / "questions.json"
+ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location("grade", ROOT / "eval" / "truth" / "grade.py")
+assert _spec is not None and _spec.loader is not None
+grade = importlib.util.module_from_spec(_spec)
+sys.modules["grade"] = grade
+_spec.loader.exec_module(grade)
+
+CANARY = ROOT / "eval" / "canary" / "questions.json"
 GENERATED = Path(__file__).resolve().parents[1] / "eval" / "generated" / "questions.json"
 
 
@@ -32,66 +41,40 @@ def test_every_canary_case_is_a_copy_of_a_generated_case() -> None:
 def test_every_canary_case_detects_a_server_bug_in_its_own_direction() -> None:
     """A case that only checks the route measures the model, and cannot detect a server defect.
 
-    27 of the 33 generated cases assert nothing about what the server returned: their `expected`
-    blocks carry no row count or key set, so `score_case` hard-codes `answer_ok` to True for them.
-    Those cases are worth running once and not worth gating on.
-
     Each case is fed the wrong answer for the direction it guards, because the directions are not
     interchangeable. A case expecting 0 rows is a guard against a join that is too WIDE and is
-    satisfied by a server that returns nothing; a case expecting 127 rows is a guard against one that
-    is too NARROW. Asserting that every case catches every wrong answer would be asserting something
+    satisfied by a server that returns nothing; a case expecting rows is a guard against one that is
+    too NARROW. Asserting that every case catches every wrong answer would be asserting something
     false, and the canary would be unsatisfiable.
-    """
-    from run_eval import score_case
 
+    The flip is read from the truth grader's server-result checks - the ported legacy checks - so a
+    synthetic run grades exactly the way a live one does.
+    """
     for case in _cases(CANARY):
         expected = case["expected"]
         wants_rows = expected.get("right_count") not in (None, 0) or expected.get("row_count") not in (None, 0)
         wrong_count = 0 if wants_rows else 7
-        event = {
-            "name": "benthic_join" if case["id"].startswith("join_") else "benthic_rpc",
-            "ok": True,
-            "arguments": _route_arguments(case),
-            "structured": {
-                "row_count": wrong_count,
-                "rows": [{"right.uei": "wrong"}] * wrong_count,
-                "truncated": False,
-                "joins": [{"reliability": "partial"}],
-            },
-        }
-        score = score_case(case, [event], "Done.", strict=True)
-        assert score["answer_check"] is False or score["row_count_check"] is False, (
+        server = _server_checks(case, wrong_count)
+        assert server and any(not ok for ok in server.values()), (
             f"{case['id']} passes with the server returning {wrong_count} rows, which is the "
             f"regression it is supposed to catch"
         )
 
 
 def test_the_canary_catches_a_server_that_returns_too_few_rows() -> None:
-    """The four zero-expecting cases all pass against a server that returns nothing.
+    """The zero-expecting cases all pass against a server that returns nothing.
 
     That is not a flaw in them, it is what a zero expectation means: it guards against a join that
-    invents matches. It does mean the canary as a whole is only falsifiable because two of its cases
+    invents matches. It does mean the canary as a whole is only falsifiable because some of its cases
     expect rows, so the set has to keep at least one. Without this, dropping the district pair would
     leave a canary that reports green against the exact bug it was built to catch.
     """
-    from run_eval import score_case
-
     catching = []
     for case in _cases(CANARY):
         if not case["id"].startswith("join_"):
             continue
-        event = {
-            "name": "benthic_join",
-            "ok": True,
-            "arguments": _route_arguments(case),
-            "structured": {
-                "row_count": 0,
-                "rows": [],
-                "truncated": False,
-                "joins": [{"reliability": "partial"}],
-            },
-        }
-        if score_case(case, [event], "Done.", strict=True)["answer_check"] is False:
+        server = _server_checks(case, 0)
+        if any(not ok for ok in server.values()):
             catching.append(case["id"])
 
     assert catching, (
@@ -111,6 +94,32 @@ def _route_arguments(case: dict[str, Any]) -> dict[str, Any]:
             "right_column": path["right_column"],
         }
     return {"operation": expected["operation"], **expected.get("arguments", {})}
+
+
+_SERVER_CHECKS = {"server_right_count", "rpc_server_row_count"}
+
+
+def _recorded(case: dict[str, Any], row_count: int) -> dict[str, Any]:
+    """A run whose one tool call returned `row_count` rows, whatever the case expects."""
+    event = {
+        "name": "benthic_join" if case["id"].startswith("join_") else "benthic_rpc",
+        "args": _route_arguments(case),
+        "ok": True,
+        "text": json.dumps(
+            {
+                "row_count": row_count,
+                "rows": [{"right.uei": "wrong"}] * row_count,
+                "truncated": False,
+                "joins": [{"reliability": "partial"}],
+            }
+        ),
+    }
+    return {"answer": "Done.", "turns": [{"turn": 1, "reasoning": "", "tool_results": [event]}]}
+
+
+def _server_checks(case: dict[str, Any], row_count: int) -> dict[str, bool]:
+    verdict = grade.grade_case(case, _recorded(case, row_count), None, None)
+    return {check.name: check.ok for check in verdict.checks if check.name in _SERVER_CHECKS}
 
 
 def test_the_canary_covers_the_signed_join_graph_rather_than_one_path() -> None:
@@ -151,20 +160,18 @@ def test_the_canary_is_a_strict_subset_so_the_full_suite_stays_available() -> No
 
 
 def test_every_canary_case_asserts_a_server_answer() -> None:
-    """`score_case` defaults every check to True, so a case that checks nothing still reports green.
+    """The canary exists to flip on a server defect, so every case must carry a server-result check.
 
-    The score dict now carries `asserted`: which checks this capability actually ran. Without it,
-    `row_count_check: true` on a discovery case reads as an assertion that was made and passed when
-    nothing was checked. 7 of the 33 generated cases assert no server answer at all; the canary
-    asserts none of them.
+    A case whose `expected` has no right_count or row_count emits no server check, so a server that
+    silently returns nothing could never flip it - it would measure the model's turn discipline
+    instead. The check is read from the grader's emitted checks, not from a score dict that defaults
+    every absent check to true.
     """
-    from run_eval import score_case
-
-    server_checks = {"answer_check", "evidence_check", "row_count_check"}
     for case in _cases(CANARY):
-        asserted = set(score_case(case, [], "", error="", strict=True)["asserted"])
-        assert server_checks & asserted, (
-            f"{case['id']} asserts no server answer, so it measures the model's turn discipline"
+        verdict = grade.grade_case(case, _recorded(case, 1), None, None)
+        names = {check.name for check in verdict.checks}
+        assert names & _SERVER_CHECKS, (
+            f"{case['id']} emits no server-result check, so it measures the model's turn discipline"
         )
 
 
@@ -176,23 +183,14 @@ def test_the_canary_distinguishes_a_server_that_answers_from_one_that_does_not()
     reported green both here and in `test_every_canary_case_detects_a_server_bug_in_its_own_direction`,
     the two together would be a contradiction, and the one that broke first would be the false one.
     """
-    from run_eval import score_case
-
     accepts_silence = []
     rejects_silence = []
     for case in _cases(CANARY):
-        event = {
-            "name": "benthic_join" if case["id"].startswith("join_") else "benthic_rpc",
-            "ok": True,
-            "arguments": _route_arguments(case),
-            "structured": {"row_count": 0, "rows": [], "truncated": False, "joins": [{"reliability": "partial"}]},
-        }
-        score = score_case(case, [event], "Done.", strict=True)
-        passed = score["answer_check"] and score["row_count_check"]
-        if passed:
-            accepts_silence.append(case["id"])
-        else:
+        server = _server_checks(case, 0)
+        if any(not ok for ok in server.values()):
             rejects_silence.append(case["id"])
+        else:
+            accepts_silence.append(case["id"])
     # The guards against a join that is too WIDE are satisfied by silence; the guards against a join
     # that is too NARROW are not. Both halves have to be present or the verdict cannot move.
     assert rejects_silence, "no case rejects a silent server, so a server that answers nothing goes green"

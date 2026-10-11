@@ -13,8 +13,20 @@ import pytest
 from trend import _cases, _passed, attach_rescored, rescore
 
 CASES = [
-    {"id": "tuning_a", "capability": "discovery", "question": "q", "required_tools": ["benthic_query"]},
-    {"id": "held", "capability": "discovery", "question": "q", "required_tools": ["benthic_query"]},
+    {
+        "id": "tuning_a",
+        "capability": "discovery",
+        "question": "q",
+        "required_tools": ["benthic_discover"],
+        "expected": {"relation": "a.b", "columns": ["x"]},
+    },
+    {
+        "id": "held",
+        "capability": "discovery",
+        "question": "q",
+        "required_tools": ["benthic_discover"],
+        "expected": {"relation": "a.b", "columns": ["x"]},
+    },
 ]
 
 
@@ -27,8 +39,15 @@ def write_run(runs: Path, name: str, records: list[dict]) -> None:
 def record(case_id: str, passed: bool) -> dict:
     return {
         "id": case_id,
-        "events": [{"name": "benthic_query", "ok": True, "arguments": {"source": "usaspending.all_entities"}}],
-        "final_text": "an answer",
+        "events": [
+            {
+                "name": "benthic_discover",
+                "ok": True,
+                "arguments": {"query": "x"},
+                "text": json.dumps({"relations": [{"source": "a.b"}]}),
+            }
+        ],
+        "final_text": "The relation a.b holds x.",
         "error": "",
         "score": {"passed": passed},
     }

@@ -111,7 +111,15 @@ def tool_calls(case_run: dict[str, Any]) -> list[dict[str, Any]]:
     calls: list[dict[str, Any]] = []
     for turn in case_run.get("turns") or []:
         for result in turn.get("tool_results") or []:
-            calls.append({"name": result.get("name") or "", "args": result.get("args") or {}, "ok": result.get("ok")})
+            calls.append(
+                {
+                    "name": result.get("name") or "",
+                    "args": result.get("args") or {},
+                    "ok": result.get("ok"),
+                    "text": result.get("text"),
+                    "structured": result.get("structured"),
+                }
+            )
     return calls
 
 
@@ -122,6 +130,113 @@ def tools_called(case_run: dict[str, Any]) -> list[str]:
         if name not in seen:
             seen.append(name)
     return seen
+
+
+def _result_payload(call: dict[str, Any]) -> dict[str, Any]:
+    """The structured result of one tool call, wherever the harness stored it.
+
+    run_eval stores the parsed payload under `structured`; run_suite stores the raw JSON under
+    `text`. An empty `structured` is the harness storing nothing, so the text is read instead: a
+    wrapper that always passes `structured={}` would otherwise erase every result.
+    """
+    structured = call.get("structured")
+    if isinstance(structured, dict) and structured:
+        return structured
+    text = call.get("text")
+    if isinstance(text, str) and text.strip():
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return {}
+
+
+# The server's default query limit. A bounded query that fills its limit answered as far as it was
+# asked to, so a truncated result at that size satisfies a larger expectation. Mirrors
+# BENTHIC_DEFAULT_QUERY_LIMIT; the grader is offline and cannot read the setting.
+_DEFAULT_QUERY_LIMIT = 100
+
+
+def _joined_rows(call: dict[str, Any], column: str | None) -> int:
+    """Rows that actually joined, not rows returned.
+
+    A left join keeps every left row and fills the right with null, so a correct answer to "the
+    right side is empty" comes back as one row, not zero. Counting those filler rows as matches
+    made a right_key join of 0 read as a wrong answer, which is what kept a must-pass case red.
+    """
+    payload = _result_payload(call)
+    if (call.get("args") or {}).get("mode") != "left":
+        return int(payload.get("row_count") or 0)
+    if not column:
+        return int(payload.get("row_count") or 0)
+    leaf = column.rsplit(".", 1)[-1]
+    rows = payload.get("rows") or []
+    if not rows:
+        return int(payload.get("row_count") or 0)
+    # A left join names the right key twice, once per side - left.uei and right.uei both end in
+    # "uei" - so matching on the bare column name alone counts the left row as a match and reads
+    # one returned row as one join.
+    aliases = {key.rsplit(".", 1)[0] for key in rows[0] if "." in key}
+    right = [alias for alias in aliases if alias != "left" and not alias.startswith("left.")]
+    if not right:
+        return int(payload.get("row_count") or 0)
+    return sum(1 for row in rows if any(row.get(f"{alias}.{leaf}") is not None for alias in right))
+
+
+def _count_answers(call: dict[str, Any], want: int, matched: int) -> bool:
+    """Whether a returned row count satisfies the expectation, allowing the caller's own limit."""
+    if matched == want:
+        return True
+    payload = _result_payload(call)
+    limit = (call.get("args") or {}).get("limit") or payload.get("limit") or _DEFAULT_QUERY_LIMIT
+    try:
+        limit = int(limit)
+    except (TypeError, ValueError):
+        limit = _DEFAULT_QUERY_LIMIT
+    return matched == limit and want > limit and bool(payload.get("truncated"))
+
+
+def _join_call_matches(call: dict[str, Any], edge: dict[str, Any]) -> bool:
+    """Whether one join call walked the signed edge, in either direction."""
+    arguments = call.get("args") or {}
+    forward = (
+        arguments.get("left_source") == edge.get("left")
+        and arguments.get("left_column") == edge.get("left_column")
+        and arguments.get("right_source") == edge.get("right")
+        and arguments.get("right_column") == edge.get("right_column")
+    )
+    reverse = (
+        arguments.get("left_source") == edge.get("right")
+        and arguments.get("left_column") == edge.get("right_column")
+        and arguments.get("right_source") == edge.get("left")
+        and arguments.get("right_column") == edge.get("left_column")
+    )
+    return forward or reverse
+
+
+def check_required_route(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
+    """A case with `required_tools_any` accepts several routes; at least one must have been walked.
+
+    The unsigned-join cases establish the absence either by searching discovery or by asking the
+    playbook route lookup. Without this, an answer that merely asserts "no signed path" would pass
+    without having looked, which is exactly the route the legacy scorer's `tool_requirement` pinned.
+    """
+    routes = case.get("required_tools_any") or []
+    if not routes:
+        return []
+    called = {name.replace("benthic_", "") for name in tools_called(case_run)}
+    satisfied = any({step.replace("benthic_", "") for step in route} <= called for route in routes)
+    return [
+        Check(
+            name="required_route_used",
+            ok=satisfied,
+            expected=routes,
+            found=sorted(called) or "no tools called",
+            detail="" if satisfied else "none of the acceptable routes was walked",
+        )
+    ]
 
 
 def _mentions(haystack: str, needle: str) -> bool:
@@ -335,6 +450,23 @@ def check_discovery(case: dict[str, Any], case_run: dict[str, Any]) -> list[Chec
                 detail="" if calls else "discovery is the required tool for this capability",
             )
         )
+    if relation:
+        retrieved = any(
+            entry.get("source") == relation or entry.get("relation") == relation.rsplit(".", 1)[-1]
+            for call in tool_calls(case_run)
+            if "discover" in call["name"]
+            for entry in (_result_payload(call).get("relations") or [])
+            if isinstance(entry, dict)
+        )
+        checks.append(
+            Check(
+                name="expected_relation_retrieved",
+                ok=retrieved,
+                expected=relation,
+                found="retrieved" if retrieved else "not in any discover result",
+                detail="" if retrieved else "the answer names a relation no discover call ever returned",
+            )
+        )
     return checks
 
 
@@ -388,6 +520,87 @@ def check_signed_path(case: dict[str, Any], case_run: dict[str, Any]) -> list[Ch
                 found=len(calls),
             )
         )
+    join_calls = [call for call in tool_calls(case_run) if "join" in call["name"] and call["ok"]]
+    right_count = expected.get("right_count")
+    if right_count is not None:
+        column = path.get("right_column")
+        server_ok = (
+            all(_joined_rows(call, column) == 0 for call in join_calls)
+            if right_count == 0
+            else any(_count_answers(call, right_count, _joined_rows(call, column)) for call in join_calls)
+        )
+        checks.append(
+            Check(
+                name="server_right_count",
+                ok=server_ok,
+                expected=right_count,
+                found=[_joined_rows(call, column) for call in join_calls] or "no successful join call",
+                detail="" if server_ok else "the server's join result does not carry the expected right_count",
+            )
+        )
+    right_keys = set(expected.get("right_keys_distinct") or expected.get("right_keys") or [])
+    if right_keys:
+        column = path.get("right_column")
+        got = {
+            value
+            for call in join_calls
+            for row in _result_payload(call).get("rows") or []
+            for key, value in row.items()
+            if key.rsplit(".", 1)[-1] == column
+        }
+        checks.append(
+            Check(
+                name="server_right_keys",
+                ok=right_keys <= got,
+                expected=sorted(right_keys),
+                found=sorted(got),
+                detail=""
+                if right_keys <= got
+                else "the server's join result is missing distinct right-key values the case expects",
+            )
+        )
+    reliability = path.get("reliability")
+    if reliability:
+        reported = [(_result_payload(call).get("joins") or [{}])[0].get("reliability") for call in join_calls]
+        checks.append(
+            Check(
+                name="server_join_reliability",
+                ok=any(value == reliability for value in reported),
+                expected=reliability,
+                found=reported or "no successful join call",
+                detail=""
+                if any(value == reliability for value in reported)
+                else "the server's join result reports a reliability the signed edge does not",
+            )
+        )
+    if case.get("capability") == "multi_step_join" and expected.get("paths"):
+        executed = [call for call in tool_calls(case_run) if "join" in call["name"] and call["ok"]]
+        if case.get("unanswerable"):
+            # The chain is provably empty, so the correct run probes the first hop and stops. Requiring
+            # the full traversal would demand the agent fabricate a hop.
+            first = expected["paths"][0]
+            attempted = any(_join_call_matches(call, first) for call in executed)
+            checks.append(
+                Check(
+                    name="first_hop_attempted",
+                    ok=attempted,
+                    expected="the first signed hop was attempted",
+                    found="attempted" if attempted else "no join call matched the first hop",
+                )
+            )
+        else:
+            walked = all(any(_join_call_matches(call, edge) for call in executed) for edge in expected["paths"])
+            checks.append(
+                Check(
+                    name="signed_hops_walked",
+                    ok=walked,
+                    expected=len(expected["paths"]),
+                    found=sum(
+                        1 for edge in expected["paths"] if any(_join_call_matches(call, edge) for call in executed)
+                    ),
+                    detail="" if walked else "a signed hop was never walked, whatever the answer says",
+                )
+            )
     return checks
 
 
@@ -540,6 +753,20 @@ def check_rpc(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
                 detail="" if not mismatched else f"argument mismatch: {sorted(mismatched)}",
             )
         )
+    operation = expected.get("operation")
+    if operation and calls:
+        sent_operations = [str(call["args"].get("operation") or "") for call in calls]
+        checks.append(
+            Check(
+                name="rpc_operation_matches",
+                ok=any(value == operation for value in sent_operations),
+                expected=operation,
+                found=sent_operations or "no operation sent",
+                detail=""
+                if any(value == operation for value in sent_operations)
+                else "a different RPC is not an answer to the question asked",
+            )
+        )
 
     row_count = expected.get("row_count")
     if row_count is not None:
@@ -553,6 +780,22 @@ def check_rpc(case: dict[str, Any], case_run: dict[str, Any]) -> list[Check]:
                 detail="" if stated else "the answer does not state the row count in any form",
             )
         )
+        answering = [call for call in calls if call["ok"]]
+        if answering:
+            server_ok = (
+                all(int(_result_payload(call).get("row_count") or 0) == 0 for call in answering)
+                if row_count == 0
+                else any(int(_result_payload(call).get("row_count") or 0) == row_count for call in answering)
+            )
+            checks.append(
+                Check(
+                    name="rpc_server_row_count",
+                    ok=server_ok,
+                    expected=row_count,
+                    found=[_result_payload(call).get("row_count") for call in answering],
+                    detail="" if server_ok else "the server's RPC result does not carry the expected row_count",
+                )
+            )
     return checks
 
 
@@ -591,6 +834,19 @@ def check_relation_trap(case: dict[str, Any], case_run: dict[str, Any]) -> list[
                 detail=""
                 if not used_trap
                 else f"{trap} cannot answer a historical question and nothing nearby sets it aside",
+            )
+        )
+    if relation:
+        queried = {
+            str(call["args"].get("source")) for call in tool_calls(case_run) if "query" in call["name"] and call["ok"]
+        }
+        checks.append(
+            Check(
+                name="historical_relation_queried",
+                ok=relation in queried,
+                expected=relation,
+                found=sorted(queried) or "no successful query",
+                detail="" if relation in queried else "the historical relation the answer names was never queried",
             )
         )
     return checks
@@ -690,6 +946,22 @@ def check_sequential(case: dict[str, Any], case_run: dict[str, Any]) -> list[Che
                 ok=present,
                 expected=value,
                 found="present" if present else "absent",
+            )
+        )
+    left, right = expected.get("left"), expected.get("right")
+    if left and right:
+        queried = {
+            str(call["args"].get("source")) for call in tool_calls(case_run) if "query" in call["name"] and call["ok"]
+        }
+        checks.append(
+            Check(
+                name="sequential_sources_queried",
+                ok={left, right}.issubset(queried),
+                expected=sorted({left, right}),
+                found=sorted(queried),
+                detail=""
+                if {left, right}.issubset(queried)
+                else "a sequential lookup that never ran the second source",
             )
         )
     return checks
@@ -1085,6 +1357,7 @@ def grade_case(
                 detail="an unknown capability cannot be graded, and is a hole rather than a pass",
             )
         )
+    checks.extend(check_required_route(case, case_run))
     checks.extend(check_forbidden_claims(case, case_run))
     checks.extend(check_nothing_was_verified(case, checks))
     if signed_relations is None:

@@ -59,7 +59,13 @@ def rescore(sandbox: Path) -> dict[str, dict[str, bool]] | None:
             if case is None:
                 continue
             outcomes[record["id"]] = score_case(
-                case, record.get("events", []), record.get("final_text", ""), record.get("error", ""), strict=True
+                case,
+                record.get("events", []),
+                record.get("final_text", ""),
+                record.get("error", ""),
+                record.get("finish_reason", ""),
+                None,
+                None,
             )["passed"]
         if outcomes:
             out[run_dir.name] = outcomes

@@ -4,6 +4,7 @@ import contextlib
 import json
 import logging
 import os
+import sys
 import time
 from collections import Counter
 from dataclasses import replace
@@ -17,6 +18,13 @@ from mcp import Client
 from mcp.client.streamable_http import streamable_http_client
 
 ROOT = Path(__file__).parents[1]
+
+# The truth grader beside run_suite is the correctness instrument. The legacy per-case scorer that
+# lived in this file disagreed with it on four of thirty cases because its checks encoded
+# pre-truth-grader expectations, so it was retired: this harness still drives the model through the
+# real MCP server end-to-end, and deciding whether the run was correct is the grader's job alone.
+sys.path.insert(0, str(ROOT / "eval" / "truth"))
+import grade as grader  # noqa: E402
 
 # The per-case progress line is the signal when watching a long run; the transport chatter is not.
 for noisy in ("httpx", "httpcore", "mcp", "mcp.server"):
@@ -103,317 +111,70 @@ def result_payload(result: Any) -> tuple[str, dict[str, Any] | None, bool]:
     return text, structured if isinstance(structured, dict) else None, bool(getattr(result, "is_error", False))
 
 
-def call_key(name: str, arguments: dict[str, Any]) -> str:
-    return name + ":" + json.dumps(arguments, sort_keys=True, separators=(",", ":"))
+async def manifest_names() -> tuple[set[str], set[str]]:
+    """Every relation and every column the signed manifest carries, for the anti-hallucination floor.
 
-
-def contains_any(text: str, values: list[str]) -> bool:
-    lowered = text.lower()
-    return any(value.lower() in lowered for value in values)
-
-
-def discovered_relations(events: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
-    """Qualified sources and bare relation names the agent actually retrieved."""
-    qualified: set[str] = set()
-    bare: set[str] = set()
-    for event in events:
-        structured = event.get("structured") or {}
-        for entry in structured.get("relations", []) or []:
-            if not isinstance(entry, dict):
-                continue
-            if entry.get("source"):
-                qualified.add(str(entry["source"]))
-            if entry.get("relation"):
-                bare.add(str(entry["relation"]))
-    return qualified, bare
-
-
-def relation_was_discovered(qualified: set[str], bare: set[str], expected: str) -> bool:
-    """Cases store a qualified name like `usaspending.agency`, while DiscoverResult reports the
-    bare name in `relation` and the qualified one in `source`. Comparing the qualified expectation
-    against bare names alone silently failed every discovery case."""
-    expected = str(expected)
-    if expected in qualified:
-        return True
-    return expected.rsplit(".", 1)[-1] in bare
-
-
-def _join_matches(event: dict[str, Any], path: dict[str, Any]) -> bool:
-    arguments = event.get("arguments", {})
-    forward = (
-        arguments.get("left_source") == path.get("left")
-        and arguments.get("left_column") == path.get("left_column")
-        and arguments.get("right_source") == path.get("right")
-        and arguments.get("right_column") == path.get("right_column")
-    )
-    reverse = (
-        arguments.get("left_source") == path.get("right")
-        and arguments.get("left_column") == path.get("right_column")
-        and arguments.get("right_source") == path.get("left")
-        and arguments.get("right_column") == path.get("left_column")
-    )
-    return forward or reverse
-
-
-# Mirrors BENTHIC_DEFAULT_QUERY_LIMIT. A caller who passes no limit gets this, so a
-# truncated result at this size has still answered as far as it was asked to.
-DEFAULT_QUERY_LIMIT = 100
-
-
-def _matched_row_count(event: dict[str, Any], structured: dict[str, Any], column: str | None) -> int:
-    """Rows that actually joined, not rows returned.
-
-    A left join keeps every left row and fills the right with null, so a correct answer to "the
-    right side is empty" comes back as one row, not zero. Counting those filler rows as matches made
-    a right_kei join of 0 read as a wrong answer, which is what kept a must-pass golden case red.
+    Mirrors run_suite's fetch so an end-to-end run grades against the same manifest the direct runs
+    do. A failed fetch returns empty sets, which disables the floor rather than failing the run -
+    grading is the grader's job only when it has the manifest to grade against.
     """
-    if (event.get("arguments") or {}).get("mode") != "left":
-        return int(structured.get("row_count") or 0)
-    if not column:
-        return int(structured.get("row_count") or 0)
-    leaf = column.rsplit(".", 1)[-1]
-    # Count distinct right-hand aliases that actually joined. A left join names the right key
-    # twice, once per side - left.uei and right.uei both end in "uei" - so matching on the bare
-    # column name alone counts the left row as a match and reads one returned row as one join.
-    aliases = {key.rsplit(".", 1)[0] for key in (structured.get("rows") or [{}])[0] if "." in key}
-    right = [alias for alias in aliases if alias not in ("left",) and not alias.startswith("left.")]
-    if not right:
-        return int(structured.get("row_count") or 0)
-    return sum(
-        1 for row in structured.get("rows") or [] if any(row.get(f"{alias}.{leaf}") is not None for alias in right)
-    )
+    sys.path.insert(0, str(ROOT / "src"))
+    from benthic_mcp.bdp import BdpRepository  # type: ignore[import-not-found]
+    from benthic_mcp.catalog import Catalog  # type: ignore[import-not-found]
+    from benthic_mcp.config import Settings  # type: ignore[import-not-found]
 
-
-def _count_matches(event: dict[str, Any], structured: dict[str, Any], want: int, matched: int | None = None) -> bool:
-    """Whether a returned row count answers the question, allowing for the query's own limit.
-
-    A bounded query that fills its limit has answered as far as it was asked to, and says so with
-    `truncated: true`. Insisting on the exact count would read a correct 100-row answer to a
-    127-row question as a wrong one. The default limit applies when the caller passed none, so the
-    argument is not always there to read.
-    """
-    got = structured.get("row_count") if matched is None else matched
-    if got == want:
-        return True
-    limit = (event.get("arguments") or {}).get("limit") or structured.get("limit") or DEFAULT_QUERY_LIMIT
-    return got == limit and want > limit and bool(structured.get("truncated"))
-
-
-def _join_answer_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) -> bool:
-    """Whether any join call actually returned what the case expects.
-
-    Checks the result, not the route. `right_count` and `right_keys` are read from the server's
-    structured output rather than from the model's prose, so a confidently wrong answer cannot pass
-    by sounding right.
-
-    Only enforced where the generator recorded a value. `right_count` is 0 on most join cases, which
-    is the hardest thing to distinguish from a broken tool and therefore the most worth asserting.
-    """
-    want_count = expected.get("right_count")
-    # Distinct right-hand key values, not one per row: a joined relation returns many rows sharing a
-    # key, so a per-row list describes a data shape that does not exist.
-    want_keys = expected.get("right_keys_distinct") or expected.get("right_keys")
-    want_keys = set(want_keys or [])
-    if want_count is None and not want_keys:
-        return True
-    if want_count == 0:
-        # A zero expectation asserts the join is not too wide, so it holds only if EVERY call on the
-        # signed path came back empty. Scored with `any` below, one empty call carried a session that
-        # had already matched rows it should not have.
-        column = (expected.get("join_path") or {}).get("right_column")
-        return all(_matched_row_count(event, event.get("structured") or {}, column) == 0 for event in matching)
-    for event in matching:
-        structured = event.get("structured") or {}
-        column = (expected.get("join_path") or {}).get("right_column")
-        if want_count is not None and not _count_matches(
-            event, structured, want_count, _matched_row_count(event, structured, column)
-        ):
-            continue
-        if want_keys:
-            # Rows are namespaced by source alias while the expectation names bare columns, so match
-            # on the column name after the last dot rather than reconstructing the server's alias.
-            got = {
-                value
-                for row in structured.get("rows") or []
-                for key, value in row.items()
-                if key.rsplit(".", 1)[-1] == column
-            }
-            if not want_keys <= got:
-                continue
-        return True
-    return False
-
-
-def _join_reliability_ok(expected: dict[str, Any], matching: list[dict[str, Any]]) -> bool:
-    """Whether the join was reported with the reliability the signed edge declares.
-
-    The previous check looked for the substring "unsigned" in the final text, which never fired once
-    in 695 case-runs and whose one live path would fail an agent for faithfully echoing the server's
-    own warning. The reliability is a field on the result, so it is read from there.
-    """
-    want = (expected.get("join_path") or {}).get("reliability")
-    if not want:
-        return True
-    return any((event.get("structured", {}).get("joins") or [{}])[0].get("reliability") == want for event in matching)
-
-
-def queried_sources(events: list[dict[str, Any]]) -> set[str]:
-    return {
-        str(event.get("arguments", {}).get("source"))
-        for event in events
-        if event.get("name") == "benthic_query" and event.get("ok")
-    }
+    settings = Settings.from_env()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        repository = BdpRepository(settings, client)
+        snapshot = await repository.load()
+    catalog = Catalog(snapshot)
+    relations = {f"{dataset}.{relation}" for dataset, relation in catalog.relations}
+    columns = {column for definition in catalog.relations.values() for column in definition.columns}
+    return relations, columns
 
 
 def score_case(
     case: dict[str, Any],
     events: list[dict[str, Any]],
     final_text: str,
-    error: str = "",
-    strict: bool = False,
+    error: str,
+    finish_reason: str,
+    relations: set[str] | None,
+    columns: set[str] | None,
 ) -> dict[str, Any]:
-    successful = [event for event in events if event["ok"]]
-    names = {event["name"] for event in successful}
-    required = set(case.get("required_tools", []))
-    # Some questions have more than one correct route to the answer. The server can establish that a
-    # signed path does not exist either by searching discovery or by asking the route lookup, and
-    # pinning one of them fails a correct answer for using the other. Each entry is one acceptable
-    # route; at least one has to be satisfied.
-    routes = [set(route) for route in case.get("required_tools_any", [])]
-    tool_requirement = required.issubset(names) and (not routes or any(route.issubset(names) for route in routes))
-    expected = case.get("expected", {})
-    capability = case.get("capability", "")
-    join_ok = True
-    row_count_ok = True
-    evidence_ok = True
-    answer_ok = True
-    answered = True
-    # Which checks this case's capability actually ran. Every check defaults to True, so a
-    # `row_count_check: true` on a discovery case reads as an assertion that was made and passed
-    # when nothing was checked at all. 27 of the 33 generated cases assert no server answer, and
-    # this is what says so.
-    asserted = {"tool_requirement", "answered"}
+    """Grade one case with the truth grader, the same instrument run_suite uses.
 
-    if strict:
-        # A run that exhausts its turns without producing an answer has delivered nothing, even
-        # if every required tool was called. The legacy scorer lets that count as a pass.
-        answered = bool(final_text.strip()) and error != "maximum turns reached"
-
-    if "join" in capability and capability != "unsigned_join_rejection":
-        matching = [event for event in successful if event["name"] == "benthic_join"]
-        join_ok = bool(matching)
-        asserted.add("join_check")
-        if join_ok and expected.get("join_path"):
-            path = expected["join_path"]
-            join_ok = any(
-                event.get("arguments", {}).get("left_source") == path.get("left")
-                and event.get("arguments", {}).get("right_source") == path.get("right")
-                and event.get("arguments", {}).get("left_column") == path.get("left_column")
-                and event.get("arguments", {}).get("right_column") == path.get("right_column")
-                for event in matching
-            )
-        # The route is not the answer. A join can take exactly the signed path and still return
-        # nothing, which is not something a route check can see: usaspending.all_entities.
-        # congressional_district is text and usp_cl.legislator_terms.district is an integer, so
-        # the equijoin never matched, every call returned 0 rows, and these two cases still scored
-        # as passes for 695 case-runs because nothing here read the result.
-        answer_ok = _join_answer_ok(expected, matching)
-        evidence_ok = _join_reliability_ok(expected, matching)
-        asserted |= {"join_check", "answer_check", "evidence_check"}
-
-    if (
-        capability.startswith("find_district")
-        or capability.startswith("districts_in_bbox")
-        or capability.startswith("nonprofits_nearby")
-    ):
-        rpc_events = [event for event in successful if event["name"] == "benthic_rpc"]
-        asserted.add("row_count_check")
-        # The operation and the arguments, not just the row count. `expected.arguments` was recorded
-        # and never read, so a districts_in_bbox case expecting one row for one bounding box was
-        # satisfied by any call returning one row - including a box the model invented, and including
-        # a different RPC entirely.
-        operation = expected.get("operation")
-        arguments = expected.get("arguments") or {}
-        answering = [
-            event
-            for event in rpc_events
-            if operation is None or (event.get("arguments") or {}).get("operation") == operation
-            if not arguments
-            or all((event.get("arguments") or {}).get(key) == value for key, value in arguments.items())
-        ]
-        if expected.get("row_count") == 0:
-            # Same asymmetry as the join: a zero expectation asserts the RPC did not invent rows.
-            row_count_ok = all(event.get("structured", {}).get("row_count") == 0 for event in answering)
-        else:
-            row_count_ok = any(
-                event.get("structured", {}).get("row_count") == expected.get("row_count") for event in answering
-            )
-
-    if capability == "sequential_lookup":
-        query_sources = {
-            event.get("arguments", {}).get("source") for event in successful if event["name"] == "benthic_query"
+    Driving the model through the real MCP server end-to-end is this harness's job; deciding
+    whether the run was correct is the grader's. The legacy scorer that lived here disagreed with
+    the truth grader on four of thirty cases because its checks encoded pre-truth-grader
+    expectations, and two instruments that disagree are worse than one that is maintained.
+    """
+    turns: list[dict[str, Any]] = [
+        {
+            "finish_reason": finish_reason,
+            "tool_results": [
+                {
+                    "name": event.get("name"),
+                    "args": event.get("arguments") or {},
+                    "ok": event.get("ok"),
+                    "text": event.get("text") or "",
+                    "structured": event.get("structured") or {},
+                }
+                for event in events
+            ],
         }
-        join_ok = {expected.get("left"), expected.get("right")}.issubset(query_sources)
-        asserted.add("join_check")
-
-    if capability == "unsigned_join_rejection":
-        invalid_join = any(event["name"] == "benthic_join" and event["ok"] for event in events)
-        join_ok = not invalid_join and contains_any(final_text, ["not signed", "no signed", "cannot", "unsigned"])
-        asserted.add("join_check")
-
-    if capability == "multi_step_join":
-        executed = [event for event in successful if event["name"] == "benthic_join"]
-        expected_paths = expected.get("paths") or []
-        if case.get("unanswerable"):
-            # The chain is provably empty, so requiring the traversal demands the agent fabricate a
-            # hop. Scored on the dead end instead: the first hop was attempted on the signed path,
-            # and the answer said the chain stops there rather than inventing a final identifier.
-            first = expected_paths[0] if expected_paths else {}
-            attempted = any(_join_matches(event, first) for event in executed)
-            terminated = any(
-                phrase in final_text.lower()
-                for phrase in ("terminates", "terminated", "no row", "no matching", "empty", "0 rows", "no further")
-            )
-            join_ok = attempted and terminated
-        else:
-            # Both signed hops have to be walked. One hop alone is the failure this family exists for.
-            join_ok = len(executed) >= len(expected_paths) and all(
-                any(_join_matches(event, path) for event in executed) for path in expected_paths
-            )
-        asserted.add("join_check")
-
-    if capability == "relation_trap":
-        # The present-day view returns a confident wrong answer, so the only reliable signal is
-        # whether the historical relation was the one actually queried.
-        row_count_ok = str(expected.get("relation")) in queried_sources(successful)
-        asserted.add("row_count_check")
-
-    if strict and capability == "discovery" and expected.get("relation"):
-        # The legacy scorer only checks that benthic_discover was called, so a playbook that
-        # merely nudges one extra tool call would look like progress.
-        qualified, bare = discovered_relations(successful)
-        row_count_ok = relation_was_discovered(qualified, bare, expected["relation"])
-        asserted.add("row_count_check")
-
-    forbidden_hits = [claim for claim in case.get("forbidden_claims", []) if contains_any(final_text, [claim])]
+    ]
+    recorded: dict[str, Any] = {"id": case.get("id"), "answer": final_text, "turns": turns}
+    if error and error != "maximum turns reached":
+        # A harness exception is not a model failure; a turn budget stop grades on what the model
+        # said, exactly as run_suite records it.
+        recorded["error"] = error
+    verdict = grader.grade_case(case, recorded, relations, columns)
     return {
-        "tool_requirement": tool_requirement,
-        "join_check": join_ok,
-        "row_count_check": row_count_ok,
-        "evidence_check": evidence_ok,
-        "answer_check": answer_ok,
-        "asserted": sorted(asserted),
-        "answered": answered,
-        "forbidden_claim_hits": forbidden_hits,
-        "passed": (
-            tool_requirement
-            and join_ok
-            and row_count_ok
-            and evidence_ok
-            and answer_ok
-            and answered
-            and not forbidden_hits
-        ),
+        "passed": verdict.passed,
+        **{check.name: check.ok for check in verdict.checks},
+        "asserted": sorted({check.name for check in verdict.checks}),
+        "answered": bool(final_text.strip()) and error != "maximum turns reached",
     }
 
 
@@ -463,6 +224,8 @@ async def run_case(
     model: str,
     tools: list[dict[str, Any]],
     settings: dict[str, Any],
+    relations: set[str],
+    columns: set[str],
     rep: int = 0,
 ) -> dict[str, Any]:
     started = time.perf_counter()
@@ -552,7 +315,7 @@ async def run_case(
         "transcript": transcript,
         "final_text": final_text,
         "rep": rep,
-        "score": score_case(case, events, final_text, error, strict=settings.get("strict", False)),
+        "score": score_case(case, events, final_text, error, finish_reason, relations, columns),
         "usage": dict(usage),
         "elapsed_ms": round((time.perf_counter() - started) * 1000),
         "error": error,
@@ -675,14 +438,20 @@ async def run_async(args: argparse.Namespace) -> None:
     async with stack, httpx.AsyncClient(timeout=args.request_timeout) as llm:
         model = await model_id(llm, settings["llm_url"], args.model)
         tools = tool_definitions((await mcp.list_tools()).tools)
+        try:
+            relations, columns = await manifest_names()
+        except Exception:
+            # The floor is disabled rather than the run failing: grading is the grader's job only
+            # when it has the manifest to grade against.
+            relations, columns = set(), set()
         results = []
         for index, case in enumerate(cases, 1):
             for rep in range(args.reps):
                 suffix = f" rep {rep + 1}/{args.reps}" if args.reps > 1 else ""
                 print(f"[{index}/{len(cases)}] {case['id']}{suffix}", flush=True)
-                results.append(await run_case(case, llm, mcp, model, tools, settings, rep=rep))
+                results.append(await run_case(case, llm, mcp, model, tools, settings, relations, columns, rep=rep))
 
-    mode = f"strict scoring | {args.reps} rep(s) | split={args.split} | playbook={args.playbook or 'http'}"
+    mode = f"truth-graded | {args.reps} rep(s) | split={args.split} | playbook={args.playbook or 'http'}"
     report = render_report(results, questions["metadata"], run_id, mode)
     (output_dir / "questions.json").write_text(
         json.dumps({**questions, "cases": cases}, indent=2, sort_keys=True) + "\n", encoding="utf-8"
