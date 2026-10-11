@@ -1715,3 +1715,58 @@ def test_a_join_that_omitted_its_columns_still_counts_as_walking_the_hop() -> No
     assert (
         _check([none_seen], "first_hop_attempted") is not None and not _check([none_seen], "first_hop_attempted").ok
     ), "a result that reports no columns is not evidence the hop was walked"
+
+
+def test_a_model_served_with_no_tools_is_not_healthy(tmp_path: Any) -> None:
+    """llama-server serves a perfectly healthy model with zero MCP tools, and says nothing.
+
+    Measured on the 2026-10-11 16:12 boot: both units started in the same second, llama-server's
+    MCP warmup found `benthic-mcp` before it could serve, logged `MCP warmup: 'benthic' discovered 0
+    tools`, and never retried. First time in 60 boots. `/health` returned 200 the whole time, the
+    model answered normally, and the only symptom was a model that could not call a single tool -
+    which is the entire product. The 30-case eval suite died on its first case.
+
+    `health-check.sh` watched liveness, VRAM, service staleness and the newest observer record, and
+    returned green through all of it. A check that cannot tell a working server from a toolless one
+    is not reporting the thing the server is for.
+
+    The check has to be behavioural: this runs the real script with a stubbed curl, because the
+    failure mode is precisely that the script looks correct and reports the wrong thing.
+    """
+    import os
+    import subprocess
+
+    def run_with_tool_count(count: int) -> int:
+        stub = tmp_path / f"bin{count}"
+        stub.mkdir()
+        curl = stub / "curl"
+        curl.write_text(
+            "#!/usr/bin/env bash\n"
+            'for arg in "$@"; do\n'
+            '  case "$arg" in\n'
+            '    */tools) cat "$BODY"; exit 0;;\n'
+            "  esac\n"
+            "done\n"
+            "printf '200'\n"
+        )
+        curl.chmod(0o755)
+        body = tmp_path / f"body{count}.json"
+        body.write_text("[" + ",".join(f'{{"name":"t{i}"}}' for i in range(count)) + "]")
+        env = {
+            **os.environ,
+            "PATH": f"{stub}:{os.environ['PATH']}",
+            "BENTHIC_HEALTH_LOG_DIR": str(tmp_path / f"log{count}"),
+            "BODY": str(body),
+        }
+        result = subprocess.run(
+            ["bash", str(ROOT / "scripts" / "health-check.sh")],
+            capture_output=True,
+            env=env,
+            timeout=120,
+        )
+        return result.returncode
+
+    assert run_with_tool_count(6) == 0, "six registered tools is the healthy state"
+    assert run_with_tool_count(0) == 1, (
+        "a model served with zero tools is the product failing, and the health check must say so"
+    )

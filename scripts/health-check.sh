@@ -37,7 +37,20 @@ status=0
     status=1
   fi
 
-  # 2. VRAM. The wedge signal.
+  # 2. Is the model actually able to do the job? On the 2026-10-11 16:12 boot llama-server's MCP
+  #    warmup found benthic-mcp before it could serve, logged "discovered 0 tools", and never
+  #    retried - first time in 60 boots. /health stayed 200 and the model kept answering, so every
+  #    other signal here was green while the product could not call a single tool. A toolless model
+  #    is the failure mode, and nothing else here can see it.
+  tools=$(curl -fsS -m 5 http://127.0.0.1:8081/tools 2>/dev/null | grep -o '"name"' | wc -l)
+  if (( tools > 0 )); then
+    echo "tools   $tools registered"
+  else
+    echo "tools   NONE - llama-server is serving a model that cannot call benthic-mcp"
+    status=1
+  fi
+
+  # 3. VRAM. The wedge signal.
   total=$(cat /sys/class/drm/card*/device/mem_info_vram_total 2>/dev/null | head -1)
   used=$(cat /sys/class/drm/card*/device/mem_info_vram_used 2>/dev/null | head -1)
   if [[ -n "${total:-}" && -n "${used:-}" && "$total" -gt 0 ]]; then
@@ -51,7 +64,7 @@ status=0
     echo "vram    unknown (no amdgpu sysfs)"
   fi
 
-  # 3. Are the running services actually running the current source? A measurement taken against a
+  # 4. Are the running services actually running the current source? A measurement taken against a
   #    service that predates the last commit is worse than no measurement, because it looks valid.
   src_mtime=$(find src -name '*.py' -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)
   for unit in llama-server.service benthic-mcp.service; do
@@ -77,7 +90,7 @@ status=0
     fi
   done
 
-  # 4. Newest observer record, and whether the server failed to answer any case in it. The sweep is
+  # 5. Newest observer record, and whether the server failed to answer any case in it. The sweep is
   #    on demand now, so this only changes when someone runs one - reported as unchanged rather than
   #    re-counted, so a stale count is never mistaken for a fresh one.
   newest=$(ls -1t eval/observer/records/*.jsonl 2>/dev/null | head -1)

@@ -2038,3 +2038,29 @@ Worth knowing because the failure looks like a corrupt repository and is not one
 The repo is also ready to be recreated to clear the phantom contributor - mirror at
 `/tmp/opencode/benthic-mcp-backup.git`, settings in `/tmp/opencode/repo-settings.json`, restore
 manifest in `/tmp/opencode/restore-settings.json`. Blocked on `delete_repo` scope.
+
+## 2026-10-11: a toolless model was reported as healthy
+
+The 16:12 boot logged `MCP warmup: 'benthic' discovered 0 tools` and never retried. llama-server then
+served a model that could not call benthic-mcp at all - the entire product - while `/health` returned
+200, VRAM was fine, both services were current, and `health-check.sh` returned **green**. The eval
+suite died on its first case, and nothing in the standing instrumentation noticed why.
+
+`After=benthic-mcp.service` fixes the startup race, but the deeper problem is that a toolless model
+and a working model were indistinguishable to every signal we had. `health-check.sh` now counts the
+registered tools and fails on zero. The header already said "/health answered 200 through every
+wedge while generation was dead", so the lesson was known and the check was still missing.
+
+**The general shape: a liveness signal is not a capability signal.** The server being up, the model
+answering, and the product working are three different things, and only the third is the job. Any
+health check that only asks "is it running?" will pass a server that cannot do its job. Contract:
+`test_a_model_served_with_no_tools_is_not_healthy` runs the real script with a stubbed curl - six
+tools must exit 0, zero must exit 1 - because the failure mode is precisely that the script looks
+correct and reports the wrong thing.
+
+**The fleet is not reachable from this host.** `fleet_board`, `fleet_sessions` and `dispatch` all
+return 403: "this host's credential cannot read the fleet; pair it with the fleet scope". The
+thunkah agent running "benthic.io PostgreSQL performance and ETL audit"
+(`ses_ede9ba3d2ffep0OxCe0cBmTQJR`) has to be tasked by the operator or by a paired host. Its
+sessions are readable over ssh (`ssh -i ~/.ssh/id_ed25519_thunkah thunkah`, same username and home
+path, separate machine-id and separate opencode.db), but reading them is not dispatching to them.
