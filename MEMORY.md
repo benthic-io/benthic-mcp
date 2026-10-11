@@ -1694,3 +1694,22 @@ candidate for the next cleanup, not a live defect signal.
 - seed.py guide, marginal refusal dead-ends, README/docs: all consistent as-is; recorded, not
   changed. The grind sweep of the main suite found zero max-turns hits; the slow cases are slow
   joins (usp_cl.legislator_terms), an upstream matter.
+
+## 2026-10-10 close: fan-out verification, grader floor fix, evidence insurance
+
+The fan-out fix verified live on the marginal case: 2/3 pass, re-graded with the fixed floor, against
+a 3/9 historical rate - direction positive, sample small. The residual failure is instructive: copy 3
+received the warning AND row_count: 127 AND truncated: false and still hallucinated truncation, so
+the trigger is the 127 identical rows themselves (23KB of repeated JSON), not missing information.
+The deeper fix is to collapse identical rows in a fan-out to one representative row and say so -
+the next candidate, its own contract and A/B, not a patch on this one.
+
+The verification exposed a grader defect: the anti-hallucination floor reported `operator.value` as
+an invented relation when the model quoted the filter syntax template in reasoning. Fixed (d832c1c)
+by adding the docs' syntax vocabulary to the excluded set. The evidence-case insurance run passes
+1/1 with the fan-out warning, so the warning did not disturb the only other case it fires on.
+
+Session net: count(column) pushdown, exclude_none promoted after an honest A/B (56.6% of discover
+payload bytes, ~a third of a query-light session, zero measured accuracy cost), fan-out warning +
+grader floor fix, answer-rate refreshed at 30/30 answered with 2.83 mean calls and zero repeated
+targets. Baselines: main 30/30 in 1509s (one case marginal at ~1/3, now ~2/3), numeric 21/21 in 480s.
