@@ -857,6 +857,16 @@ def _parse_filter(expression: str) -> FilterSpec:
                     expression,
                     f"{null_test.value!r} takes no value, so nothing may follow it.",
                 ) from exc
+        # `is.not.null` is `not.is.null` with the words reversed - measured live on the 618-case
+        # counts slice, where the model sent exactly that, was told "'is' is not an operator", and
+        # burned its last turn recovering with the right number already in hand. The words are all
+        # there, only the order is wrong, so the refusal names the order that works.
+        if {"is", "not", "null"} <= set(prefixed.replace(".", " ").split()):
+            raise _invalid_filter(
+                expression,
+                f"the null tests are spelled 'is.null' and 'not.is.null'; "
+                f"{prefixed!r} has the words in the wrong order.",
+            ) from exc
         raise _invalid_filter(
             expression,
             f"{operator_name!r} is not an operator.",

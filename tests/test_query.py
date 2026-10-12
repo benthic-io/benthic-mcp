@@ -1667,3 +1667,32 @@ async def test_a_refusal_makes_no_claim_when_grouping_or_a_non_count_is_asked_fo
     for message in (grouped, summed):
         assert "50284" in message
         assert "narrow the filters" in message.lower()
+
+
+def test_a_null_test_in_the_wrong_word_order_names_the_right_spelling() -> None:
+    """`is.not.null` is the server's own count(col) spelling read backwards, and the refusal must say so.
+
+    Measured on the 618-case counts slice of the coverage corpus, 2026-10-12: the model sent
+    `compensation_officers=is.not.null` and got back "'is' is not an operator; write
+    'column=operator.value' with a dot." Every word of that is true and none of it is the step: the
+    null tests are spelled `is.null` and `not.is.null`, and a caller who wrote the words in the wrong
+    order should be shown the order that works, not a lecture on dots. The case then spent its last
+    turn recovering and failed with the right number already in hand - which is what a message that
+    drops the step costs.
+    """
+    from benthic_mcp.query import _parse_filter
+
+    with pytest.raises(QueryValidationError) as excinfo:
+        _parse_filter("compensation_officers=is.not.null")
+    message = str(excinfo.value)
+    assert "not.is.null" in message, message
+    assert "wrong order" in message, message
+
+
+def test_the_two_null_test_spellings_themselves_still_parse() -> None:
+    """The seam: the fix must not arrive by rejecting the valid spellings."""
+    from benthic_mcp.query import _parse_filter
+
+    for spelling in ("compensation_officers=is.null", "compensation_officers=not.is.null"):
+        spec = _parse_filter(spelling)
+        assert spec.column == "compensation_officers"
