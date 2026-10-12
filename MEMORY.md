@@ -2100,3 +2100,39 @@ runs the actual shell script, so it inherits every signal the script reads. It s
 moment I edited `src/`, because the service-staleness check - correctly - reported both services
 stale. A contract that fails when someone edits a file is testing the box's mood. Stub `systemctl`
 and pin `BENTHIC_VRAM_FREE_WARN_MIB=0` so it measures the tool signal alone.
+
+## 2026-10-12: the counts slice measured, and it found what it was built to find
+
+The 618-case count slice (388 row_count + 230 count_nonnull) ran 9.5h overnight under heavy
+contention: **588 measured and all 588 passed; 17 not measured (ReadTimeout); 13 real failures in
+three clusters.**
+
+1. **Page-counting instead of count(col).** On large relations (form990_soi, truth 2,237,344) the
+   model fetched raw pages (limit ~1000, 990 non-null in the page) and answered 990 - the page's
+   count, not the table's. The count(col) HEAD pushdown exists precisely to prevent this, and the
+   model did not use it; one transcript shows it reaching the correct 2,237,344 on its final turn
+   with no turn left to state it. The corpus surfaced this on relations the 30-case suite never
+   touched - this is the coverage instrument working.
+2. **`is.not.null` - the null test with the words reversed.** The model wrote the server's own
+   count(col) spelling backwards; the refusal said "'is' is not an operator" (true, useless) and
+   cost the last turn. Fixed in 55b0b60: the refusal names the order that works. Contract pins the
+   valid spellings still parse.
+3. **Six `names_the_column` failures.** Correct single-question answers ("11 rows, complete,
+   non-truncated") failed for not repeating the column name. Whether a one-question case needs the
+   answer to restate the question is a grader design question - left for a decision with the
+   transcripts in hand rather than fixed on this evidence.
+
+**thunkah landed the index matrix.** entity_awards.total_obligation (191M rows, 68GB) now has
+DESC NULLS LAST + ASC NULLS LAST, global and entity-scoped, plus the same pair on all_entities.
+The load-bearing answer: an index only serves `ORDER BY col DESC NULLS LAST` if declared DESC
+NULLS LAST - a plain (col) index gives DESC NULLS FIRST and the planner sorts. My max/min call
+site sends exactly `.desc.nullslast` / `.asc.nullslast` (never the NULLS FIRST forms), so the four
+NULLS LAST indexes are load-bearing and the rest are insurance. Two cases added to the corpus
+(57bbd1b): max 39157943915794.00, min -3552647982.00, psql-verified, API-answered in 0.3s. The
+negative min forced the value floor to abs(value) >= 10 - a signed column's true minimum is not a
+coincidence-gradeable figure. The agent also killed a 42-hour runaway VACUUM (swap 43GB -> 5.2GB).
+Manifest re-signing (pin drift) is the operator's call.
+
+Cross-check contract (31bce46) caught real generator/server drift on first run and the server now
+emits explicit .asc - the wire form, provenance, and docs all agree, pinned by test for all 403
+ordered cases across both corpora.
