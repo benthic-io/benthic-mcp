@@ -128,7 +128,11 @@ async def drive(
             result = await call_tool(name, arguments, timeout)
             record["tool_results"].append({"name": name, "args": arguments, **result})
             messages.append(
-                {"role": "tool", "tool_call_id": call.get("id", ""), "content": str(result.get("text", ""))[:6000]}
+                {
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": trim_for_model(str(result.get("text", ""))),
+                }
             )
         turns.append(record)
 
@@ -141,6 +145,30 @@ async def drive(
         "elapsed_s": round(time.time() - started, 1),
         "answered": bool(answer),
     }
+
+
+def trim_for_model(text: str, limit: int = 6000) -> str:
+    """Shrink a tool result for the model while keeping the envelope at its end.
+
+    The result carries `row_count`, `truncated` and `warnings` AFTER the rows, and a head-only cut
+    feeds the model rows with no total and no warning. Measured on the 618-case counts slice: 228
+    cases held at least one result over the cap, and the two worst loops were exactly those cases -
+    `usaspending.frec_map` fetched the same first page eight times with its warning cut away, and
+    `form990_soi.compensation_officers` six times. The server had already said what to do; the
+    runner ate it. Keep the head for shape and the tail for the envelope.
+    """
+    if len(text) <= limit:
+        return text
+    marker = (
+        "\n... [the middle of this result was cut by the harness; the text resumes intact and "
+        "ends with row_count, truncated and warnings] ...\n"
+    )
+    if len(marker) >= limit:
+        return text[:limit]
+    remainder = limit - len(marker)
+    head = remainder * 2 // 3
+    tail = remainder - head
+    return text[:head] + marker + text[-tail:]
 
 
 async def tool_schemas() -> list[dict[str, Any]]:

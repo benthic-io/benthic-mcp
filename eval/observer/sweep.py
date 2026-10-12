@@ -14,11 +14,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 import traceback
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+# The trace keeps the same trimmed view the model sees; a head-only cut drops the envelope
+# (row_count, truncated, warnings) and later reads as page-counting that never happened.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "eval" / "truth"))
+from run_suite import trim_for_model  # noqa: E402
 
 BASE = os.environ.get("BENTHIC_LLAMA_URL", "http://192.168.10.222:8081")
 
@@ -155,7 +161,7 @@ def run_probe(probe: dict, max_turns: int, timeout: float, temperature: float) -
                     "name": function["name"],
                     "args": dict(list(arguments.items())[:12]),
                     "ok": result["ok"],
-                    "text": result["text"][:6000],
+                    "text": trim_for_model(result["text"]),
                 }
             )
             messages.append(
