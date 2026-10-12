@@ -1,7 +1,7 @@
 {
   "metadata": {
     "generated": "2026-10-11",
-    "cases": 1010,
+    "cases": 1012,
     "kinds": {
       "row_count": 388,
       "count_nonnull": 230,
@@ -24294,6 +24294,50 @@
       "derived_from": "GET mv_current_lawmakers?select=bioguide_id,state,district, paged by offset until 537 distinct bioguide_id values were read, summed in the generator as Decimal",
       "derived_at": "2026-10-11T19:53:59",
       "derivation_seconds": 0.227
+    },
+    {
+      "id": "cov_ordered_max_usaspending_entity_awards_total_obligation",
+      "capability": "numeric_aggregate",
+      "question": "What is the largest total_obligation in usaspending.entity_awards? Give the figure.",
+      "expected": {
+        "relation": "usaspending.entity_awards",
+        "kind": "ordered_max",
+        "column": "total_obligation",
+        "value": 39157943915794.0,
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01,
+        "manifest_hash": "a15081dee77c321432c94fe6663d33ca577aa523d1ae9bb54a4ce1aa882cb10b",
+        "scan_limit": 10000
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET entity_awards?select=total_obligation&order=total_obligation.desc.nullslast&limit=1",
+      "derived_at": "2026-10-12T05:01:03",
+      "derivation_seconds": 0.175
+    },
+    {
+      "id": "cov_ordered_min_usaspending_entity_awards_total_obligation",
+      "capability": "numeric_aggregate",
+      "question": "What is the smallest total_obligation in usaspending.entity_awards? Give the figure.",
+      "expected": {
+        "relation": "usaspending.entity_awards",
+        "kind": "ordered_min",
+        "column": "total_obligation",
+        "value": -3552647982.0,
+        "relative_tolerance": 0.001,
+        "absolute_tolerance": 0.01,
+        "manifest_hash": "a15081dee77c321432c94fe6663d33ca577aa523d1ae9bb54a4ce1aa882cb10b",
+        "scan_limit": 10000
+      },
+      "forbidden_claims": [],
+      "required_tools": [
+        "benthic_query"
+      ],
+      "derived_from": "GET entity_awards?select=total_obligation&order=total_obligation.asc.nullslast&limit=1",
+      "derived_at": "2026-10-12T05:01:03",
+      "derivation_seconds": 0.175
     }
   ]
 }

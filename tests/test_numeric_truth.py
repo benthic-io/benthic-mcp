@@ -715,7 +715,11 @@ def test_no_case_expects_zero_or_a_value_under_ten(path: Path) -> None:
         expected = case_.get("expected") or {}
         value = expected.get("value")
         assert value is not None, f"{case_['id']} has no derived value"
-        assert value >= 10, f"{case_['id']} expects {value}, below the value floor of 10"
+        # The floor exists because a small figure grades by coincidence: the grader reads every
+        # number in answer and reasoning, and a stray digit matches exact tolerance. Magnitude is
+        # what matters, not sign - a ten-digit negative like -3552647982.00 is as distinctive as a
+        # positive one, and entity_awards.total_obligation is signed, so its real minimum is that.
+        assert abs(value) >= 10, f"{case_['id']} expects {value}, below the value floor of 10"
 
 
 @pytest.mark.parametrize("path", _FLOOR_CONTRACT_PATHS)
