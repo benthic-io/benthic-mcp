@@ -33,19 +33,29 @@ tools. "Not measured" is a harness ReadTimeout, never a model failure.
 | row_count + count_nonnull | 618 | 588 | 13 | 17 |
 | filtered_ordered_max + grouped_max | 300 | (running) | | |
 
-Failure dispositions for the counts slice, from the transcripts and re-measurement, not inference:
+Failure dispositions for the counts slice, from the transcripts and reproduction, not inference:
 
-- **7 upstream degradation.** The upstream PostgREST answered PGRST003 504 "Timed out" for minutes
-  at a stretch (during multi-GB index builds on the same database), including for `limit=1` with no
-  filter. The same count query answers in 0.5s when calm, returning the exact expected value. The
-  model retried, reached the right number on its final turn, and had no turn left to state it.
-  These 30 failed cases are staged for a re-run under calm conditions; results land in this table.
-  The re-run covers all 30 (7 real, 17 not-measured, and the 6 hygiene cases, which are expected
-  to fail again - running them again is the point, not a formality).
+- **A harness defect produced the two worst loops.** `run_suite` fed the model the first 6000
+  characters of each tool result, and the result envelope (`row_count`, `truncated`, `warnings`)
+  sits after the rows. 228 of 618 cases held a result over the cap; `usaspending.frec_map` re-fetched
+  the same first page eight times with its "13464 rows; paging cannot produce an answer" warning cut
+  away at character 10,466, and `form990_soi.compensation_officers` six times likewise. The server
+  emitted exactly what stops the loop; the runner ate it. Fixed: `trim_for_model` keeps head and
+  tail, contracted; the remainder slice and the counts re-run both measure under the fix.
+- **One loop was the old filter refusal.** `form990t_details.total_ordinary_gain_loss` spent 8/8
+  turns re-sending `column:not.is.null`, refused with "'is' is not an operator" - true and useless.
+  The refusal now names the working spelling; the re-run measures whether the loop recovers.
+- **Some are upstream degradation.** PGRST003 504s during multi-GB index builds on the same
+  database, including for `limit=1` with no filter; the same count answers in 0.5s when calm.
+- **Some are model behaviour.** `mv_district_spending.unique_agencies` computed the null count and
+  repeated the same call seven times instead of subtracting from the total.
 - **6 answer hygiene.** The right number, but the answer does not restate the column
   ("The count is 11... **11** rows"). The check accepts the identifier or prose spelling, and the
   model satisfies it in ~98% of the hundreds of column-bearing cases, so the check discriminates;
   these are held as genuine failures rather than relaxed on six samples.
+
+All 30 failed cases are staged for a re-run under the calm upstream and the fixed harness; the
+results land in this table.
 
 ## Conventions
 
@@ -59,9 +69,11 @@ Failure dispositions for the counts slice, from the transcripts and re-measureme
   derived with `order={column}.desc.nullslast` and every minimum with
   `order={column}.asc.nullslast`, and every case's `derived_from` records the real request,
   including `.nullslast`.
-- **Value floor**: no case expects 0 or a value under 10. A count of 1 is a real answer but not a
-  hard question, and a zero expectation is satisfied by a server that returns nothing. Every skip
-  the floor forces is recorded with the value that tripped it.
+- **Value floor**: no case expects 0 or a value with magnitude under 10. A count of 1 is a real
+  answer but not a hard question, and a zero expectation is satisfied by a server that returns
+  nothing. The check is on magnitude, not sign - `entity_awards.total_obligation` is signed and its
+  true minimum is -3,552,647,982.00, which the grader reads like any other ten-digit number. Every
+  skip the floor forces is recorded with the value that tripped it.
 - **Tolerances**: counts are exact. Money figures carry `money()` only where the column name
   indicates currency - it contains one of amount, obligat, cost, value, total, balance, spend,
   loan. Every other figure is exact. There is no blanket money().

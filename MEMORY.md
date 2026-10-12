@@ -2164,3 +2164,33 @@ after the smoke test passed.
 
 **Jinja-style lesson from the model's transcript:** when the answer number is right but the answer
 is empty, the failure is turn exhaustion - count the turns before calling it a reasoning failure.
+
+## 2026-10-12: the counts loops were the harness, not the model - corrected triage
+
+The earlier note in this file ("7 upstream degradation") was itself a hypothesis that died on the
+next measurement. The final, transcript-and-reproduction-based triage of the 13 counts failures:
+
+1. **The two worst loops were a harness defect in run_suite.** usaspending.frec_map re-fetched the
+   same first page 8 times; form990_soi.compensation_officers, 6 times. run_suite fed the model
+   result[:6000] from the start, and the envelope (row_count, truncated, warnings) sits AFTER the
+   rows. frec_map's result was 10,753 chars with the warning at char 10,466 - the model saw 6000
+   chars of rows and no total, no warning, no truncation flag. The server had said "13464 rows;
+   paging cannot produce an answer" and the runner ate it. 228 of 618 cases held results over the
+   cap. Fixed in 0171774: trim_for_model keeps head + tail with a marker; contract test pins the
+   real warning text visible under the cap; sweep.py records the same view. Verified by reproducing
+   the raw model emission live (it emits exactly what it means; the full filter arrives intact
+   through MCP and llama-server /tools - no server-side stripping).
+2. **total_ordinary_gain_loss: 8/8 turns refused on the null-test spelling** (`column:not.is.null`
+   colon form, and once `:not.is.null` with the column dropped). The model repeated the identical
+   malformed filter 8 times under the OLD refusal ("'is' is not an operator"), which never named
+   the working form. The refusal fix (55b0b60) landed after this slice and is exactly for this
+   loop; the re-run measures whether it recovers.
+3. **employee_benefits: upstream PGRST003 504s** (4 in one transcript, even limit=1 unfiltered)
+   during the index builds. Count answers in 0.5s now with the exact value.
+4. **unique_agencies: model logic** - computed the null count, then repeated the same call 7 times
+   instead of subtracting from the total.
+5. **6 names_the_column: genuine answer hygiene** - right number, no column restated.
+
+The re-run slice (all 30 failed cases) now measures THREE fixes at once (trim, refusal wording,
+calm upstream). Run it only when the remainder slice is done - self-contention would re-create the
+not-measured results it exists to clear.
