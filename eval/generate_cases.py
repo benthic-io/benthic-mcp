@@ -632,15 +632,20 @@ def markdown(cases: list[dict[str, Any]], metadata: dict[str, Any]) -> str:
 
 
 GOLDEN_DIR = ROOT / "eval" / "golden"
+GENERATED_DIR = ROOT / "eval" / "generated"
 
 
 async def main_async(args: argparse.Namespace) -> None:
     output_dir = Path(args.output_dir)
     # Checked before any work: eval/golden is hand-verified and never regenerated, and a generator
     # run pointed at it would replace the suite that catches harness bugs with a derivative of the
-    # harness.
+    # harness. eval/generated is the canary's anchor: tests/test_canary.py asserts every canary case
+    # is byte-identical to its generated counterpart, so rewriting it in place rewrites the answer
+    # key the canary is checked against.
     if output_dir.resolve() == GOLDEN_DIR.resolve():
         raise SystemExit(f"refusing to write generated cases into {GOLDEN_DIR}: those are hand-verified")
+    if output_dir.resolve() == GENERATED_DIR.resolve():
+        raise SystemExit(f"refusing to write generated cases into {GENERATED_DIR}: the canary copies those verbatim")
     settings = Settings.from_env()
     cases, metadata = await generate(settings, args)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -13,6 +13,7 @@ eval/attrib*/
 eval/attrib-suite*/
 eval/combination/floor-recheck/
 eval/combination/run-*/
+eval/coverage/runs/
 eval/harness*/
 eval/noise*/
 eval/observer/.agent-session

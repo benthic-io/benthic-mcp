@@ -575,31 +575,39 @@ def test_a_numeric_case_with_no_value_is_reported_rather_than_passed() -> None:
 
 
 # --------------------------------------------------------------------------------------------
-# The suite file itself.
+# The suite files themselves. Both corpora are derived ground truth and are held to the same
+# contracts; the paths are explicit rather than a glob, because a glob that later matched a scratch
+# file or a run artifact would widen the contract onto files nobody reviewed.
+
+_TRUTH_CASES = ROOT / "eval" / "truth" / "numeric_cases.json"
+_COVERAGE_CASES = ROOT / "eval" / "coverage" / "cases.json"
+_SUITE_PATHS: tuple[Path, ...] = (_TRUTH_CASES, _COVERAGE_CASES)
+
+
+def cases_from(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        pytest.skip(f"{path.name} has not been generated yet")
+    return grade.load_cases(str(path))
 
 
 def test_every_numeric_case_declares_its_tolerances() -> None:
     """A case with no tolerance declared is an exact match, which is only right for counts."""
-    path = ROOT / "eval" / "truth" / "numeric_cases.json"
-    if not path.is_file():
-        pytest.skip("no numeric cases generated yet")
-    for case_ in grade.load_cases(str(path)):
-        expected = case_.get("expected") or {}
-        assert "value" in expected, f"{case_['id']} has no derived value"
-        assert (
-            "relative_tolerance" in expected or "absolute_tolerance" in expected or expected.get("kind") == "count"
-        ), f"{case_['id']} is not a count and declares no tolerance, so it demands an exact match"
+    for path in _SUITE_PATHS:
+        for case_ in cases_from(path):
+            expected = case_.get("expected") or {}
+            assert "value" in expected, f"{case_['id']} has no derived value"
+            assert (
+                "relative_tolerance" in expected or "absolute_tolerance" in expected or expected.get("kind") == "count"
+            ), f"{case_['id']} is not a count and declares no tolerance, so it demands an exact match"
 
 
 def test_every_numeric_case_derives_its_value_and_says_how() -> None:
     """A number in the file with no stated provenance is exactly the rubber stamp this avoids."""
-    path = ROOT / "eval" / "truth" / "numeric_cases.json"
-    if not path.is_file():
-        pytest.skip("no numeric cases generated yet")
-    for case_ in grade.load_cases(str(path)):
-        assert case_.get("capability") == "numeric_aggregate"
-        assert case_.get("derived_from"), f"{case_['id']} does not record where its value came from"
-        assert case_.get("derived_at"), f"{case_['id']} does not record when it was derived"
+    for path in _SUITE_PATHS:
+        for case_ in cases_from(path):
+            assert case_.get("capability") == "numeric_aggregate"
+            assert case_.get("derived_from"), f"{case_['id']} does not record where its value came from"
+            assert case_.get("derived_at"), f"{case_['id']} does not record when it was derived"
 
 
 # --------------------------------------------------------------------------------------------
@@ -622,26 +630,28 @@ def test_every_grouped_case_covered_the_whole_relation() -> None:
     """
     from decimal import Decimal
 
-    for case in numeric_cases():
-        expected = case.get("expected") or {}
-        if expected.get("kind") != "grouped_max":
-            continue
-        read, total = expected.get("rows_read"), expected.get("rows_total")
-        assert read is not None and total is not None, f"{case['id']} records no coverage"
-        assert read == total, (
-            f"{case['id']} covered {read} of {total} rows. A partial aggregate presented as ground "
-            "truth is the defect this file exists to prevent, and it produced a wrong winner"
-        )
-        # the exact decimal is the audit trail beside the float that is graded
-        assert Decimal(str(expected["value"])) == Decimal(str(expected.get("value_exact", expected["value"]))), case[
-            "id"
-        ]
+    for path in _SUITE_PATHS:
+        for case in cases_from(path):
+            expected = case.get("expected") or {}
+            if expected.get("kind") != "grouped_max":
+                continue
+            read, total = expected.get("rows_read"), expected.get("rows_total")
+            assert read is not None and total is not None, f"{case['id']} records no coverage"
+            assert read == total, (
+                f"{case['id']} covered {read} of {total} rows. A partial aggregate presented as ground "
+                "truth is the defect this file exists to prevent, and it produced a wrong winner"
+            )
+            # the exact decimal is the audit trail beside the float that is graded
+            assert Decimal(str(expected["value"])) == Decimal(str(expected.get("value_exact", expected["value"]))), (
+                case["id"]
+            )
 
 
 def test_every_numeric_case_records_where_its_value_came_from_and_when() -> None:
-    for case in numeric_cases():
-        assert case.get("derived_from"), f"{case['id']} does not record its derivation"
-        assert case.get("derived_at"), f"{case['id']} does not record when it was derived"
+    for path in _SUITE_PATHS:
+        for case in cases_from(path):
+            assert case.get("derived_from"), f"{case['id']} does not record its derivation"
+            assert case.get("derived_at"), f"{case['id']} does not record when it was derived"
 
 
 def test_a_committed_partial_aggregate_is_refused() -> None:
@@ -683,11 +693,42 @@ def grade_cases_from(path: str) -> None:
         ]
 
 
-def numeric_cases() -> list[dict[str, Any]]:
-    path = ROOT / "eval" / "truth" / "numeric_cases.json"
-    if not path.is_file():
-        pytest.skip("no numeric cases generated yet")
-    return grade.load_cases(str(path))
+# --------------------------------------------------------------------------------------------
+# The value floor and the manifest hash are properties of the coverage corpus. The truth corpus
+# predates both: its ein count of 1 is deliberate (a filter on the wrong column returning 0 is what
+# that case guards), and generate_numeric.py predates manifest_hash, so these contracts read the
+# coverage corpus explicitly. The path tuple is explicit rather than a glob: a glob that later
+# matched a scratch file would widen the contract onto a file nobody reviewed as ground truth.
+
+_FLOOR_CONTRACT_PATHS: tuple[Path, ...] = (_COVERAGE_CASES,)
+
+
+@pytest.mark.parametrize("path", _FLOOR_CONTRACT_PATHS)
+def test_no_case_expects_zero_or_a_value_under_ten(path: Path) -> None:
+    """A count of 1 is a real answer but it is not a hard question.
+
+    And a zero expectation is satisfied by a server that returns nothing, so it cannot catch a
+    server defect at all. The coverage generator refuses to emit either, and this contract makes
+    the committed file the proof that it did not.
+    """
+    for case_ in cases_from(path):
+        expected = case_.get("expected") or {}
+        value = expected.get("value")
+        assert value is not None, f"{case_['id']} has no derived value"
+        assert value >= 10, f"{case_['id']} expects {value}, below the value floor of 10"
+
+
+@pytest.mark.parametrize("path", _FLOOR_CONTRACT_PATHS)
+def test_every_case_records_the_manifest_hash_it_was_derived_against(path: Path) -> None:
+    """The manifest hash is what ties a derived value to the signed manifest it came from.
+
+    Without it, a catalog change can leave an expectation silently stale: the value is still a real
+    number, but the column it names may no longer exist, and nothing in the file says which signed
+    manifest the derivation was checked against.
+    """
+    for case_ in cases_from(path):
+        expected = case_.get("expected") or {}
+        assert expected.get("manifest_hash"), f"{case_['id']} does not record the manifest hash it was derived against"
 
 
 # --------------------------------------------------------------------------------------------

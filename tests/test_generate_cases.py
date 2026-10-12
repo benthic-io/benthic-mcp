@@ -115,3 +115,19 @@ def test_the_generator_refuses_to_overwrite_the_hand_verified_golden_suite() -> 
     args = argparse.Namespace(output_dir=str(GOLDEN_DIR))
     with pytest.raises(SystemExit, match="hand-verified"):
         anyio.run(main_async, args)
+
+
+def test_the_generator_refuses_to_overwrite_the_generated_suite() -> None:
+    # eval/generated is the canary's anchor: tests/test_canary.py asserts every canary case is
+    # byte-identical to its generated counterpart. Rewriting it in place would rewrite the answer
+    # key the canary is checked against, which is how a canary stops being a check and becomes a
+    # derivative of the harness - the same failure the golden refusal exists for.
+    import argparse
+
+    import anyio
+    import pytest
+    from generate_cases import GENERATED_DIR, main_async
+
+    args = argparse.Namespace(output_dir=str(GENERATED_DIR))
+    with pytest.raises(SystemExit, match="canary"):
+        anyio.run(main_async, args)

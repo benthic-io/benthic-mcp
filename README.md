@@ -247,7 +247,7 @@ uv run python eval/run_eval.py --questions eval/canary/questions.json --reps 3
 
 # Tier 2, report only: the full 30 cases. Measures turn discipline more than server correctness
 uv run python eval/run_eval.py                       # run it
-uv run python eval/generate_cases.py                 # rebuild it from the signed catalog
+uv run python eval/generate_cases.py --output-dir eval/generated-tmp  # rebuild elsewhere; eval/generated is pinned by the canary
 uv run python eval/run_eval.py --case-filter multi_step --reps 5
 ```
 
