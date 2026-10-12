@@ -273,7 +273,10 @@ class PostgrestTransport:
 
     @staticmethod
     def _format_order(order: SourceOrder) -> str:
-        value = f"{order.column}.desc" if order.descending else order.column
+        # Explicit in both directions: `order=col` and `order=col.asc` mean the same thing to
+        # PostgREST, but the corpus provenance and the docs both record the explicit form, and a
+        # cross-check between them can only be exact if the wire form is unambiguous.
+        value = f"{order.column}.desc" if order.descending else f"{order.column}.asc"
         if order.nulls_first is not None:
             nulls = "nullsfirst" if order.nulls_first else "nullslast"
             value += f".{nulls}"

@@ -38,7 +38,7 @@ async def test_fetch_builds_bounded_postgrest_request(settings: Any, catalog: Ca
     assert request.url.path == "/ngopen/usaspending/all_entities"
     assert request.url.params["select"] == "uei,name"
     assert request.url.params["uei"] == "in.(A,B)"
-    assert request.url.params["order"] == "name"
+    assert request.url.params["order"] == "name.asc"  # explicit in both directions; identical semantics
     assert request.url.params["limit"] == "3"
     assert result.rows == [{"uei": "A", "name": "One"}, {"uei": "B", "name": "Two"}]
     assert not result.truncated
