@@ -2194,3 +2194,37 @@ next measurement. The final, transcript-and-reproduction-based triage of the 13 
 The re-run slice (all 30 failed cases) now measures THREE fixes at once (trim, refusal wording,
 calm upstream). Run it only when the remainder slice is done - self-contention would re-create the
 not-measured results it exists to clear.
+
+## 2026-10-12 final: the corpus is measured - 1008 passed / 2 real failures / 2 not measured
+
+Whole-corpus ledger after every fix and re-run, unique cases only:
+
+  ordered_min                    92/92
+  row_count + count_nonnull     615/618   (2 real failures, 1 not measured)
+  filtered_ordered_max + grouped 299/300  (1 not measured)
+  entity_awards pair               2/2
+  whole corpus                  1008/1012
+
+The 2 real failures are names_the_column answer hygiene, kept deliberately: the check discriminates
+(the model satisfies it in ~98% of column-bearing cases), the same cases flip between runs, and
+relaxing a grader on noise rather than evidence is the weakening the corpus exists to prevent.
+
+The 2 not measured: up_cdmaps.congressional_districts (ReadTimeout, then an answer cut) and
+reporting_agency_overview (answer cut at the model's turn token cap). Both attempted twice; the
+mechanism is the model's own verbosity, not the MCP. Not failures.
+
+Fixes this stretch, all evidence-first:
+- grader e-notation: numbers_in read "1.0000000001534684e+18" as two numbers (mantissa and 18);
+  the pattern + direct float(raw) extraction fix it. all_entities.prime_subaward_amount was a
+  CORRECT answer failing; the remainder re-grade moved 298 -> 299.
+- naics NULL case: the sampled value is the literal text "NULL" (171 rows) while SQL nulls are 232.
+  The derivation was right; the unquoted question "exactly NULL?" was ambiguous. display() now
+  quotes a value that reads as SQL null, the committed question is corrected, and the case passes
+  under the quoted text.
+- entity_awards pair graded first time: max 39,157,943,915,794 (2 turns), min -3,552,647,982
+  (4 turns). Both pass with the index-served path.
+
+Standing lesson, now twice-confirmed: when a slice fails in bulk, suspect the instrument first.
+This stretch found four instrument defects (result trim, refusal wording, e-notation, question
+quoting) and no new server defects. The early "page-counting" hypothesis died on reproduction and
+is kept in RESULTS.md as part of the record.

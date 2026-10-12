@@ -1007,6 +1007,10 @@ _NUMERIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"-?\d+(?:\.\d+)?\s*(?:billion|million|thousand|bn|[bmk])\b", re.IGNORECASE),
     # grouped integer or decimal: 1,234.56
     re.compile(r"-?\d{1,3}(?:,\d{3})+(?:\.\d+)?"),
+    # scientific notation, as Python writes a float over 2^53: 1.0000000001534684e+18.
+    # Before the bare-number pattern, or the mantissa and the exponent read as two numbers and a
+    # correct answer to a 1e18-scale case fails. Measured live; see the contract.
+    re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+"),
     # bare number: 42 or 42.5
     re.compile(r"-?\d+(?:\.\d+)?"),
 )
@@ -1043,11 +1047,18 @@ def numbers_in(text: str) -> list[float]:
             break
         start, match = best
         raw = match.group(0)
-        digits = re.sub(r"[^\d.\-]", "", raw.replace("$", ""))
-        try:
-            value = float(digits)
-        except ValueError:
-            value = 0.0
+        # Scientific notation is already a Python float literal and must be read whole: the
+        # digits-only sanitisation below glues the mantissa to the exponent and would read
+        # "1.0000000001534684e+18" as 1.000000000153468418. Measured live: a correct answer to a
+        # 1e18-scale case failed on exactly that.
+        if re.fullmatch(r"-?\d+(?:\.\d+)?[eE][+-]?\d+", raw):
+            value = float(raw)
+        else:
+            digits = re.sub(r"[^\d.\-]", "", raw.replace("$", ""))
+            try:
+                value = float(digits)
+            except ValueError:
+                value = 0.0
         unit = re.search(r"(billion|million|thousand|bn|[bmk])\b", raw, re.IGNORECASE)
         if unit is not None:
             value *= _MULTIPLIERS[unit.group(1).lower()]

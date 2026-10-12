@@ -155,8 +155,17 @@ def tolerance_for(column: str, value: float) -> dict[str, Any]:
 
 
 def display(value: Any) -> str:
-    """The sample as it appears in a question: bare when identifier-safe, quoted otherwise."""
+    """The sample as it appears in a question: bare when identifier-safe, quoted otherwise.
+
+    A value that reads as SQL null is quoted even though it is identifier-safe: "have
+    long_description exactly NULL?" cannot say whether it means the empty cell or the text
+    N-U-L-L. Measured live, 2026-10-12: naics.long_description's smallest value is the literal
+    text "NULL", the literal count is 171, the SQL null count is 232, and a model answered 232
+    to the unquoted question - rightly, because that is what it said.
+    """
     text = str(value)
+    if isinstance(value, str) and text.lower() == "null":
+        return json.dumps(text, ensure_ascii=True)
     if re.fullmatch(r"[A-Za-z0-9_.:%/-]+", text):
         return text
     return json.dumps(text, ensure_ascii=True)

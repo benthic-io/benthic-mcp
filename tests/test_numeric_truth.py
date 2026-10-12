@@ -91,6 +91,26 @@ def test_word_forms_parse(text: str, expected: float) -> None:
     assert expected in grade.numbers_in(text)
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("the max is 1.0000000001534684e+18", 1.0000000001534684e18),
+        ("1.5e3 rows", 1500.0),
+        ("2.5E-4", 0.00025),
+    ],
+)
+def test_scientific_notation_parses_to_one_number(text: str, expected: float) -> None:
+    """Python writes a float over 2^53 as e-notation, and the server feeds the model such values.
+
+    Measured on the remainder slice, 2026-10-12: usaspending.all_entities.prime_subaward_amount has
+    a true maximum of 1.0000000001534684e+18, the model answered it exactly, and the check failed -
+    the parser read `1.0000000001534684e+18` as two numbers, 1.0000000001534683 and 18.0. An
+    instrument that cannot read the answer its own tool result taught the model to write fails
+    correct answers, which is the one failure a grader may not have.
+    """
+    assert grade.numbers_in(text) == [expected]
+
+
 def test_a_number_is_read_the_same_way_python_writes_it() -> None:
     """Round-trip, so the parser is checked against a formatter nobody here hand-tuned."""
     for value in (0, 1, 42, 1234, 999999, 1234567890, 373109113199, 2.5, 0.001):
@@ -720,6 +740,24 @@ def test_no_case_expects_zero_or_a_value_under_ten(path: Path) -> None:
         # what matters, not sign - a ten-digit negative like -3552647982.00 is as distinctive as a
         # positive one, and entity_awards.total_obligation is signed, so its real minimum is that.
         assert abs(value) >= 10, f"{case_['id']} expects {value}, below the value floor of 10"
+
+
+@pytest.mark.parametrize("path", _FLOOR_CONTRACT_PATHS)
+def test_a_sample_that_reads_as_sql_null_is_quoted_in_the_question(path: Path) -> None:
+    """`have column exactly NULL?` cannot say whether it means the empty cell or the text N-U-L-L.
+
+    Measured live, 2026-10-12: naics.long_description's smallest value is the literal text "NULL";
+    the literal count is 171, the SQL null count is 232 (psql-confirmed), and a model answered 232
+    to the unquoted question - rightly, because that is what it said. The value is real and the
+    derivation was real; only the question text was ambiguous.
+    """
+    for case_ in cases_from(path):
+        sample = str((case_.get("expected") or {}).get("sample", ""))
+        if sample.lower() == "null":
+            question = case_.get("question") or ""
+            assert '"NULL"' in question or "'NULL'" in question, (
+                f"{case_['id']}: sampled value reads as SQL null and is not quoted in {question!r}"
+            )
 
 
 @pytest.mark.parametrize("path", _FLOOR_CONTRACT_PATHS)

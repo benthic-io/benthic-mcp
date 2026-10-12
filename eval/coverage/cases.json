@@ -5273,7 +5273,7 @@
     {
       "id": "cov_row_count_usaspending_naics_long_description_NULL",
       "capability": "numeric_aggregate",
-      "question": "How many rows in usaspending.naics have long_description exactly NULL? Give the number.",
+      "question": "How many rows in usaspending.naics have long_description exactly \"NULL\"? Give the number.",
       "expected": {
         "relation": "usaspending.naics",
         "kind": "row_count",
