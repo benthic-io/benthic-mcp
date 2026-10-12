@@ -239,6 +239,15 @@ corpus passes **27/27**, and a query-light session costs about a third of its pr
 it did, because the discover payload now spells null as absence - 56.6% of its bytes were null
 spellings of `description`, `unit` and `srid`, which carry no information an omitted key does not.
 
+The truth corpus is hand-targeted; `eval/coverage/` is its broad counterpart. It holds **1012 cases
+over 87 of the 99 queryable relations**, generated from the signed manifest so a relation or column
+nobody thought to target still has a case. Five kinds of case: row counts, non-null counts, smallest
+ordered values, filtered maxima, and grouped maxima. Every value is derived through the signed
+PostgREST endpoint - never through the server under test, because a number fetched through the server
+inherits every defect the case exists to catch - and every case records the request it was derived
+from, the manifest hash it was signed under, and its tolerances. The corpus is measured by slice;
+results and the failures each slice produced are in `eval/coverage/RESULTS.md`.
+
 ## Evaluation
 
 ```sh

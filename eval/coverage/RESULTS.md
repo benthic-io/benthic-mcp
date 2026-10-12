@@ -17,6 +17,36 @@ relation or column nobody thought to target still has a case.
 }
 ```
 
+Two cases were added by hand on 2026-10-12, after the index work that made them answerable at all:
+`ordered_max` and `ordered_min` on `usaspending.entity_awards.total_obligation` (191M rows), derived
+through the live API and asserted against psql. The file is 1012 cases; the run block above records
+the derivation that produced the other 1010.
+
+## Measured
+
+Slices are run with `eval/truth/run_suite.py` against the live model; each case runs the real MCP
+tools. "Not measured" is a harness ReadTimeout, never a model failure.
+
+| slice | cases | passed | real failures | not measured |
+| --- | --- | --- | --- | --- |
+| ordered_min | 92 | 92 | 0 | 0 |
+| row_count + count_nonnull | 618 | 588 | 13 | 17 |
+| filtered_ordered_max + grouped_max | 300 | (running) | | |
+
+Failure dispositions for the counts slice, from the transcripts and re-measurement, not inference:
+
+- **7 upstream degradation.** The upstream PostgREST answered PGRST003 504 "Timed out" for minutes
+  at a stretch (during multi-GB index builds on the same database), including for `limit=1` with no
+  filter. The same count query answers in 0.5s when calm, returning the exact expected value. The
+  model retried, reached the right number on its final turn, and had no turn left to state it.
+  These 30 failed cases are staged for a re-run under calm conditions; results land in this table.
+  The re-run covers all 30 (7 real, 17 not-measured, and the 6 hygiene cases, which are expected
+  to fail again - running them again is the point, not a formality).
+- **6 answer hygiene.** The right number, but the answer does not restate the column
+  ("The count is 11... **11** rows"). The check accepts the identifier or prose spelling, and the
+  model satisfies it in ~98% of the hundreds of column-bearing cases, so the check discriminates;
+  these are held as genuine failures rather than relaxed on six samples.
+
 ## Conventions
 
 - **One grader**: `eval/truth/grade.py`. These are `numeric_aggregate` cases and grade through the

@@ -2136,3 +2136,31 @@ Manifest re-signing (pin drift) is the operator's call.
 Cross-check contract (31bce46) caught real generator/server drift on first run and the server now
 emits explicit .asc - the wire form, provenance, and docs all agree, pinned by test for all 403
 ordered cases across both corpora.
+
+## 2026-10-12 later: counts failures triaged by transcripts and re-measurement
+
+The counts slice, precise: 618 cases, 588 passed, 601 measured, 17 not measured (ReadTimeout under
+contention), 13 real failures. (An earlier note said "588 measured, all passed" - wrong; 588 is the
+pass count.)
+
+**The 7 number failures are upstream degradation, not model or server logic.** Transcripts show
+PGRST003 504 "Timed out" from the upstream PostgREST - repeatedly, even limit=1 with no filter -
+during thunkah's multi-GB index builds. The same count query succeeds in 0.5s now and returns the
+exact truth value (format990_soi.employee_benefits: 2237344). The model behaved reasonably: it
+fixed its own filter spelling from the refusal (the is.not.null message working as designed),
+retried, reached the right number on its last turn, and had no turn left to say it. Disposition:
+re-run when calm. All 30 failed counts cases are staged at /tmp/opencode/rerun-counts.json.
+
+**The 6 names_the_column failures are genuine answer-hygiene misses and stay failures.** The model
+answered the right number without restating the column ("The count is 11... **11** rows"). The
+check accepts identifier or prose form, the model satisfies it in ~98% of column-bearing cases, and
+the six are the corpus's longest column names. Relaxing the grader on six samples with no evidence
+it is wrong is the exact weakening the corpus exists to prevent. Recorded as failures.
+
+**llama-server crashed with SIGABRT at 10:03** - "Memory access fault by GPU node-1" - and systemd
+(Restart=on-failure) had it back by 10:05:39. NOT a restart by this session. The first remainder
+slice attempt (73s, all 300 errored RemoteProtocolError) hit exactly that dead window; relaunched
+after the smoke test passed.
+
+**Jinja-style lesson from the model's transcript:** when the answer number is right but the answer
+is empty, the failure is turn exhaustion - count the turns before calling it a reasoning failure.
