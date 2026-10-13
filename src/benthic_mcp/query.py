@@ -571,7 +571,9 @@ def build_single_query(
         selected = []
     selected = _unique_strings([*selected, *(item.column for item in filters), *metric_columns])
     if len(selected) > 128:
-        raise QueryValidationError("A single-source query can select at most 128 columns")
+        raise QueryValidationError(
+            f"A single-source query can select at most 128 columns, but {len(selected)} were selected"
+        )
 
     alias = "s"
     namespaced_group = [f"{alias}.{column}" for column in group_by or []]
@@ -1023,8 +1025,13 @@ def _parse_expression_value(value: str) -> Any:
 def _aggregate_rows(rows: list[dict[str, Any]], request: QueryRequest) -> list[dict[str, Any]]:
     if not request.aggregates:
         return rows
-    if rows and any(column not in rows[0] for column in request.group_by):
-        raise QueryValidationError("A group_by column is not present in the joined result")
+    if rows:
+        missing = [column for column in request.group_by if column not in rows[0]]
+        if missing:
+            names = ", ".join(f"`{name}`" for name in missing)
+            raise QueryValidationError(
+                f"Group_by {names} is not present in the joined result: group by a column the joined rows carry"
+            )
 
     groups: dict[tuple[Any, ...], list[dict[str, Any]]] = defaultdict(list)
     if not rows and not request.group_by:

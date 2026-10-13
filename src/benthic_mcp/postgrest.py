@@ -359,7 +359,9 @@ class PostgrestTransport:
             except ValueError:
                 valid = False
         if not valid:
-            raise QueryValidationError(f"Value {value!r} does not match column type {column.type}")
+            raise QueryValidationError(
+                f"Value {value!r} for column {column.name} does not match column type {column.type}"
+            )
 
     @staticmethod
     def _relation_url(definition: RelationDefinition) -> str:
