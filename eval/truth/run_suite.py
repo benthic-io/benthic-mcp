@@ -2,7 +2,8 @@
 
 Separated from `eval/truth/grade.py` so grading stays deterministic and free: this file spends model
 time, that one does not. Re-grading a stored run costs nothing and never changes its verdict, which is
-what makes it safe to re-check an old run against a corrected grader.
+what makes it safe to re-check an old run against a corrected grader. Pass --regrade <run.json> to
+re-grade a recorded run file in place instead of driving the model.
 
 Deliberately not `eval/combination/classify.py`. That one drives the ungraded 100-question suite and
 does not score, which is right for it: an `expected` written by whoever ran the tool last would
@@ -195,8 +196,8 @@ async def tool_schemas() -> list[dict[str, Any]]:
 def grade_runs(
     runs: list[dict[str, Any]],
     cases: list[dict[str, Any]],
-    relations: set[str],
-    columns: set[str],
+    relations: set[str] | None,
+    columns: set[str] | None,
 ) -> list[Any]:
     """Grade recorded runs against the manifest floor.
 
@@ -212,6 +213,43 @@ def grade_runs(
     return [
         grader.grade_case(by_id[str(run["id"])], run, relations, columns) for run in runs if str(run["id"]) in by_id
     ]
+
+
+def regrade_file(
+    run_path: Path,
+    cases: list[dict[str, Any]],
+    relations: set[str] | None,
+    columns: set[str] | None,
+) -> dict[str, Any]:
+    """Re-grade a recorded run file with the current grader, rewriting it in place.
+
+    The transcripts are the record; only the verdicts are recomputed, against the cases given -
+    pass the same questions file the run was driven with, or runs outside it drop out of the
+    rewritten results. Re-grading a file that is already current is byte-identical, so a verdict
+    that flips on regrade names a grader or corpus change, never the tool. A file without a runs
+    list is not regradable, and that is an error rather than an empty pass.
+    """
+    document = json.loads(run_path.read_text(encoding="utf-8"))
+    runs = document.get("runs") if isinstance(document, dict) else None
+    if not isinstance(runs, list):
+        keys = sorted(document) if isinstance(document, dict) else type(document).__name__
+        raise ValueError(f"{run_path} has no 'runs' list; keys are {keys}")
+    results = grade_runs(runs, cases, relations, columns)
+    document["results"] = [result.as_dict() for result in results]
+    run_path.write_text(json.dumps(document, indent=2), encoding="utf-8")
+    return grader.summarise(results)
+
+
+def print_summary(summary: dict[str, Any]) -> None:
+    """The per-capability table, shared by a fresh run and a regrade so the two read the same."""
+    print()
+    print("  per capability (no overall rate: RPCs are exact, joins are partly heuristic)")
+    print(f"  {'capability':<36}{'pass':>6}{'rate':>8}  worst failing check")
+    for capability, bucket in sorted(summary["by_capability"].items()):
+        worst = next(iter(bucket["failed_checks"]), "")
+        rate = "n/a" if bucket["rate"] is None else f"{bucket['rate']:.0%}"
+        print(f"  {capability:<36}{bucket['passed']:>3}/{bucket['cases']:<3}{rate:>8}  {worst}")
+    print()
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -259,17 +297,35 @@ async def run(args: argparse.Namespace) -> int:
 
     print()
     print(f"  suite: {len(cases)} cases in {time.time() - started:.0f}s -> {run_path.name}")
-    print()
-    print("  per capability (no overall rate: RPCs are exact, joins are partly heuristic)")
-    print(f"  {'capability':<36}{'pass':>6}{'rate':>8}  worst failing check")
-    for capability, bucket in sorted(summary["by_capability"].items()):
-        worst = next(iter(bucket["failed_checks"]), "")
-        rate = "n/a" if bucket["rate"] is None else f"{bucket['rate']:.0%}"
-        print(f"  {capability:<36}{bucket['passed']:>3}/{bucket['cases']:<3}{rate:>8}  {worst}")
-    print()
+    print_summary(summary)
     unanswered = [r for r in results if not r.tools_called]
     if unanswered:
         print(f"  {len(unanswered)} case(s) called no tool at all - those grade on prose alone")
+    return 0
+
+
+async def regrade(args: argparse.Namespace) -> int:
+    """Re-grade a recorded run file instead of driving the model.
+
+    --capability and --limit do not apply: the rewrite replaces the whole results section, and a
+    filtered regrade would silently drop verdicts for the runs outside the filter.
+    """
+    cases = grader.load_cases(str(args.questions))
+    relations: set[str] | None = None
+    columns: set[str] | None = None
+    if not args.no_manifest_floor:
+        try:
+            relations, columns = await manifest_names()
+        except Exception as exc:  # the floor is valuable but the regrade should still produce numbers
+            print(f"  anti-hallucination floor unavailable: {exc}", file=sys.stderr)
+    try:
+        summary = regrade_file(args.regrade, cases, relations, columns)
+    except ValueError as exc:
+        print(f"  cannot regrade: {exc}", file=sys.stderr)
+        return 2
+    print()
+    print(f"  regraded {args.regrade.name} against {args.questions.name}")
+    print_summary(summary)
     return 0
 
 
@@ -277,6 +333,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--questions", type=Path, default=DEFAULT_SUITE)
     parser.add_argument("--output", type=Path, default=ROOT / "eval" / "truth" / "runs")
+    parser.add_argument(
+        "--regrade",
+        type=Path,
+        default=None,
+        help=(
+            "re-grade a recorded run file in place instead of driving the model; "
+            "pass the same --questions file the run was driven with"
+        ),
+    )
     parser.add_argument("--capability", help="comma-separated capability names")
     parser.add_argument("--limit", type=int)
     parser.add_argument("--max-turns", type=int, default=8)
@@ -293,7 +358,10 @@ def main() -> None:
     # behind `not_measured`.
     parser.add_argument("--request-timeout", type=float, default=420.0)
     parser.add_argument("--no-manifest-floor", action="store_true")
-    raise SystemExit(asyncio.run(run(parser.parse_args())))
+    args = parser.parse_args()
+    if args.regrade is not None:
+        raise SystemExit(asyncio.run(regrade(args)))
+    raise SystemExit(asyncio.run(run(args)))
 
 
 if __name__ == "__main__":

@@ -111,6 +111,36 @@ def test_scientific_notation_parses_to_one_number(text: str, expected: float) ->
     assert grade.numbers_in(text) == [expected]
 
 
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("approximately 1.0 \u00d7 10\u00b9\u2078", 1.0e18),
+        ("1.0 x 10^18", 1.0e18),
+        ("2.5\u00d710\u2074", 25000.0),
+        ("1.5 x 10^-3", 0.0015),
+    ],
+)
+def test_power_of_ten_forms_parse_to_one_number(text: str, expected: float) -> None:
+    """The model writes large magnitudes the way people do, and the server never writes them that
+    way - which is exactly why the parser missed them.
+
+    Measured on the remainder slice, 2026-10-12: the prime_subaward max transcript reads
+    "approximately **1.0 x 10(superscript 18)** (reported as 1.0000000001534684e+18)". The
+    parenthesised e-notation saved that case; an answer carrying only the superscript form would
+    fail on fragments. One pattern, one number, same rule as every other form here.
+    """
+    assert grade.numbers_in(text) == [expected]
+
+
+def test_unit_superscripts_read_as_fragments() -> None:
+    """The power pattern must not fire where there is no power of ten: a superscript unit (m
+    squared, measured in the up_cdmaps transcripts) and a bare `x` between small numbers are
+    prose, not exponents. Both still read as their fragment numbers - this pins the non-goal,
+    not a collapse."""
+    assert grade.numbers_in("about 10,321 * 1,891 = ~19.5 million m\u00b2") == [10321.0, 1891.0, 19500000.0]
+    assert grade.numbers_in("a 3 x 5 grid") == [3.0, 5.0]
+
+
 def test_a_number_is_read_the_same_way_python_writes_it() -> None:
     """Round-trip, so the parser is checked against a formatter nobody here hand-tuned."""
     for value in (0, 1, 42, 1234, 999999, 1234567890, 373109113199, 2.5, 0.001):

@@ -1011,6 +1011,15 @@ _NUMERIC_PATTERNS: tuple[re.Pattern[str], ...] = (
     # Before the bare-number pattern, or the mantissa and the exponent read as two numbers and a
     # correct answer to a 1e18-scale case fails. Measured live; see the contract.
     re.compile(r"-?\d+(?:\.\d+)?[eE][+-]?\d+"),
+    # power of ten with an explicit multiplier, as the model writes a large magnitude: 1.0 x 10^18
+    # or 1.0 (multiplication sign) 10(superscript 18). Before the bare-number pattern, or the
+    # mantissa, the 10 and the exponent read as three numbers and a correct answer fails.
+    # Measured live; see the contract. A superscript unit (m squared) has no multiplier and no
+    # base ten, so this cannot fire on it.
+    re.compile(
+        r"(?P<mantissa>-?\d+(?:\.\d+)?)\s*[x\u00d7]\s*10"
+        r"(?:\^(?P<caret>[+-]?\d+)|(?P<sup>[\u2070\u00b9\u00b2\u00b3\u2074-\u2079\u207b]+))"
+    ),
     # bare number: 42 or 42.5
     re.compile(r"-?\d+(?:\.\d+)?"),
 )
@@ -1024,6 +1033,37 @@ _MULTIPLIERS = {
     "thousand": 1_000,
     "k": 1_000,
 }
+
+# A superscript exponent, as the model writes a large magnitude: 10(superscript 18) means 10^18.
+# U+2070 and U+00B9-U+00B3 are 0-3, U+2074-U+2079 are 4-9, U+207B is the sign. There is no
+# superscript plus in Unicode; the caret spelling carries an explicit + instead.
+_SUPERSCRIPT_DIGITS = {
+    "\u2070": "0",
+    "\u00b9": "1",
+    "\u00b2": "2",
+    "\u00b3": "3",
+    "\u2074": "4",
+    "\u2075": "5",
+    "\u2076": "6",
+    "\u2077": "7",
+    "\u2078": "8",
+    "\u2079": "9",
+    "\u207b": "-",
+}
+
+
+def _power_of_ten(mantissa: str, caret: str | None, sup: str | None) -> float:
+    """A mantissa times ten to the exponent, for the power-of-ten spelling.
+
+    The caret exponent reads as written; the superscript exponent is translated digit by digit.
+    Anything unparseable reads as zero, the same fallback the sanitiser below uses - a number the
+    parser cannot value cannot match an expected value, which is the safe direction.
+    """
+    try:
+        exponent = caret if caret is not None else "".join(_SUPERSCRIPT_DIGITS[char] for char in (sup or ""))
+        return float(mantissa) * (10.0 ** int(exponent))
+    except (KeyError, ValueError, OverflowError):
+        return 0.0
 
 
 def numbers_in(text: str) -> list[float]:
@@ -1047,21 +1087,28 @@ def numbers_in(text: str) -> list[float]:
             break
         start, match = best
         raw = match.group(0)
-        # Scientific notation is already a Python float literal and must be read whole: the
-        # digits-only sanitisation below glues the mantissa to the exponent and would read
-        # "1.0000000001534684e+18" as 1.000000000153468418. Measured live: a correct answer to a
-        # 1e18-scale case failed on exactly that.
-        if re.fullmatch(r"-?\d+(?:\.\d+)?[eE][+-]?\d+", raw):
-            value = float(raw)
+        groups = match.groupdict()
+        if groups.get("caret") is not None or groups.get("sup") is not None:
+            # A power of ten carries its magnitude in the exponent, so there is no unit word to
+            # apply and no sanitiser that could read it whole. Only the power pattern binds these
+            # group names, so every other pattern falls through to the branches below.
+            value = _power_of_ten(groups["mantissa"], groups.get("caret"), groups.get("sup"))
         else:
-            digits = re.sub(r"[^\d.\-]", "", raw.replace("$", ""))
-            try:
-                value = float(digits)
-            except ValueError:
-                value = 0.0
-        unit = re.search(r"(billion|million|thousand|bn|[bmk])\b", raw, re.IGNORECASE)
-        if unit is not None:
-            value *= _MULTIPLIERS[unit.group(1).lower()]
+            # Scientific notation is already a Python float literal and must be read whole: the
+            # digits-only sanitisation below glues the mantissa to the exponent and would read
+            # "1.0000000001534684e+18" as 1.000000000153468418. Measured live: a correct answer to a
+            # 1e18-scale case failed on exactly that.
+            if re.fullmatch(r"-?\d+(?:\.\d+)?[eE][+-]?\d+", raw):
+                value = float(raw)
+            else:
+                digits = re.sub(r"[^\d.\-]", "", raw.replace("$", ""))
+                try:
+                    value = float(digits)
+                except ValueError:
+                    value = 0.0
+            unit = re.search(r"(billion|million|thousand|bn|[bmk])\b", raw, re.IGNORECASE)
+            if unit is not None:
+                value *= _MULTIPLIERS[unit.group(1).lower()]
         found.append(value)
         position = match.end()
     return found
